@@ -1,0 +1,132 @@
+# IoT Health Monitoring System Configuration
+
+# Application Settings
+app:
+  name: "IoT Health Monitor"
+  version: "1.0.0"
+  debug: true
+  log_level: "INFO"
+
+# Patient Configuration
+patient:
+  id: "patient_001"
+  name: "Default Patient"
+  age: 65
+  gender: "M"
+
+# Sensor Configuration
+sensors:
+  max30102:
+    enabled: true
+    sample_rate: 50  # Hz
+    led_mode: 2  # RED and IR
+    pulse_amplitude_red: 0x24
+    pulse_amplitude_ir: 0x24
+    adc_range: 4096
+    sample_average: 8
+    
+  temperature:
+    enabled: true
+    sensor_type: "DS18B20"  # or "MLX90614"
+    gpio_pin: 17
+    sample_rate: 1  # Hz
+    
+  blood_pressure:
+    enabled: true
+    pressure_sensor: "MPX2050"
+    pump_gpio: 18
+    valve_gpio: 19
+    max_pressure: 180  # mmHg
+    safety_pressure: 200  # mmHg
+
+# Display Configuration
+display:
+  type: "SPI_LCD"
+  size: "3.5"
+  resolution: [480, 320]
+  framebuffer: "/dev/fb1"
+  rotation: 0
+
+# Alert Thresholds
+thresholds:
+  heart_rate:
+    min: 60
+    max: 100
+    critical_min: 40
+    critical_max: 150
+    
+  spo2:
+    min: 95
+    critical_min: 90
+    
+  temperature:
+    min: 36.0
+    max: 37.5
+    critical_min: 35.0
+    critical_max: 39.0
+    
+  blood_pressure:
+    systolic_max: 140
+    diastolic_max: 90
+    systolic_critical: 180
+    diastolic_critical: 110
+
+# Communication Settings
+communication:
+  mqtt:
+    broker_host: "localhost"
+    broker_port: 1883
+    username: ""
+    password: ""
+    use_tls: false
+    topic_prefix: "health"
+    qos: 1
+    
+  rest_api:
+    server_url: "http://localhost:8000"
+    api_version: "v1"
+    timeout: 5
+    use_https: false
+    
+  store_forward:
+    enabled: true
+    max_queue_size: 1000
+    retry_interval: 30  # seconds
+    max_retries: 5
+
+# Audio Settings
+audio:
+  enabled: true
+  volume: 80
+  alert_sound: "config/alert.wav"
+  voice_enabled: true
+
+# Logging Configuration
+logging:
+  level: "INFO"
+  file: "logs/health_monitor.log"
+  max_size: "10MB"
+  backup_count: 5
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Database Configuration
+database:
+  type: "sqlite"
+  path: "data/health_monitor.db"
+  backup_enabled: true
+  backup_interval: 3600  # seconds
+
+# AI/ML Configuration
+ai:
+  anomaly_detection:
+    enabled: true
+    algorithm: "IsolationForest"
+    sensitivity: 0.1
+    
+  trend_analysis:
+    enabled: true
+    window_size: 24  # hours
+    
+  chatbot:
+    enabled: false
+    model_path: "models/health_chatbot.tflite"
