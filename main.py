@@ -23,7 +23,7 @@ from src.gui.main_app import HealthMonitorApp
 from src.data.database import DatabaseManager
 from src.communication.mqtt_client import MQTTClient
 from src.sensors.max30102_sensor import MAX30102Sensor
-from src.sensors.temperature_sensor import TemperatureSensor
+from src.sensors.mlx90614_sensor import MLX90614Sensor
 from src.sensors.blood_pressure_sensor import BloodPressureSensor
 from src.ai.alert_system import AlertSystem
 
@@ -97,13 +97,13 @@ class HealthMonitorSystem:
             except Exception as e:
                 self.logger.error(f"Failed to initialize MAX30102: {e}")
         
-        # Initialize Temperature sensor
-        if sensor_config.get('temperature', {}).get('enabled', False):
+        # Initialize MLX90614 Temperature sensor
+        if sensor_config.get('mlx90614', {}).get('enabled', False):
             try:
-                self.sensors['temperature'] = TemperatureSensor(sensor_config['temperature'])
-                self.logger.info("Temperature sensor initialized")
+                self.sensors['mlx90614'] = MLX90614Sensor(sensor_config['mlx90614'])
+                self.logger.info("MLX90614 temperature sensor initialized")
             except Exception as e:
-                self.logger.error(f"Failed to initialize Temperature sensor: {e}")
+                self.logger.error(f"Failed to initialize MLX90614 sensor: {e}")
         
         # Initialize Blood Pressure sensor
         if sensor_config.get('blood_pressure', {}).get('enabled', False):

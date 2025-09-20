@@ -12,7 +12,7 @@ kivymd>=1.0.0
 # Sensor libraries
 adafruit-circuitpython-max30x>=3.2.0
 adafruit-circuitpython-ads1x15>=2.2.0
-w1thermsensor>=2.0.0
+smbus2>=0.4.0  # For MLX90614/GY-906 I2C communication
 
 # Communication
 paho-mqtt>=1.6.0

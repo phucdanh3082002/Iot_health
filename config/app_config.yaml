@@ -19,17 +19,25 @@ sensors:
   max30102:
     enabled: true
     sample_rate: 50  # Hz
-    led_mode: 2  # RED and IR
-    pulse_amplitude_red: 0x24
-    pulse_amplitude_ir: 0x24
+    led_mode: 3  # SpO2 mode (RED and IR LEDs active)
+    pulse_amplitude_red: 0x7F  # High brightness for LED visibility
+    pulse_amplitude_ir: 0x7F   # High brightness for LED visibility
     adc_range: 4096
     sample_average: 8
+    buffer_size: 100  # buffer size for calculations
+    ir_threshold: 50000  # threshold for finger detection
+    min_readings_for_calc: 50  # minimum readings before calculating HR/SpO2
     
-  temperature:
+  mlx90614:
     enabled: true
-    sensor_type: "DS18B20"  # or "MLX90614"
-    gpio_pin: 17
-    sample_rate: 1  # Hz
+    sensor_type: "MLX90614"  # GY-906 infrared temperature sensor
+    i2c_bus: 1
+    i2c_address: 0x5A
+    sample_rate: 0.5  # Hz - slower rate for stability
+    use_object_temp: true  # true for body temperature, false for ambient
+    temperature_offset: 0.0  # calibration offset
+    smooth_factor: 0.1  # smoothing filter factor
+    max_error_count: 5  # reduce from default 10
     
   blood_pressure:
     enabled: true

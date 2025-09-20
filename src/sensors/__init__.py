@@ -1,16 +1,15 @@
 """
 Sensors package for IoT Health Monitoring System
-Contains sensor drivers and data acquisition modules
 """
 
 from .base_sensor import BaseSensor
 from .max30102_sensor import MAX30102Sensor
-from .temperature_sensor import TemperatureSensor
+from .mlx90614_sensor import MLX90614Sensor
 from .blood_pressure_sensor import BloodPressureSensor
 
 __all__ = [
     'BaseSensor',
     'MAX30102Sensor', 
-    'TemperatureSensor',
+    'MLX90614Sensor',
     'BloodPressureSensor'
 ]
