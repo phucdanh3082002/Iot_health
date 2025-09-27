@@ -139,12 +139,12 @@ class MAX30102Reader(threading.Thread):
         self.out_q = out_queue
         self.stop_event = stop_event
         self.sample_period = sample_period
-        # giả lập nếu thiếu lib cảm biến
+        # Sử dụng tích hợp MAX30102 libraries
         try:
-            import max30102, hrcalc  # noqa
+            from src.sensors.max30102_sensor import MAX30102Hardware, HRCalculator
             self.has_real = True
-            self.m = max30102.MAX30102()
-            self.hrcalc = hrcalc
+            self.m = MAX30102Hardware()
+            self.hrcalc = HRCalculator
         except Exception:
             self.has_real = False
 
@@ -157,8 +157,8 @@ class MAX30102Reader(threading.Thread):
                     red, ir = self.m.read_sequential(BUFFER)
                     arr_ir = np.array(ir)
                     arr_red = np.array(red)
-                    import hrcalc
-                    hr, hr_valid, spo2, spo2_valid = hrcalc.calc_hr_and_spo2(arr_ir, arr_red)
+                    # Sử dụng tích hợp HRCalculator
+                    hr, hr_valid, spo2, spo2_valid = self.hrcalc.calc_hr_and_spo2(arr_ir, arr_red)
                     hr_val = float(hr) if hr_valid else None
                     spo2_val = float(spo2) if spo2_valid else None
                 else:

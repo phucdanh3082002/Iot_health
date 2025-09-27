@@ -9,10 +9,10 @@ pandas>=1.3.0
 kivy>=2.1.0
 kivymd>=1.0.0
 
-# Sensor libraries
-adafruit-circuitpython-max30x>=3.2.0
+# Sensor libraries  
+# MAX30102 và HRCalc libraries đã được tích hợp vào src/sensors/max30102_sensor.py
 adafruit-circuitpython-ads1x15>=2.2.0
-smbus2>=0.4.0  # For MLX90614/GY-906 I2C communication
+smbus2>=0.4.0  # For I2C communication (MAX30102, MLX90614/GY-906)
 
 # Communication
 paho-mqtt>=1.6.0

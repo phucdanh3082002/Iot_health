@@ -1,480 +1,646 @@
 #!/usr/bin/env python3
 """
-Test script for IoT Health Monitoring System Sensors
-Test cảm biến MAX30102 và MLX90614 (GY-906)
+Test Suite for IoT Health Monitoring Sensors
+Comprehensive testing program for MAX30102, MLX90614, and other sensors
 """
-
-import time
 import sys
 import os
-import json
+import time
+import threading
+import signal
+import yaml
 from pathlib import Path
+from typing import Dict, Any, Optional
+import logging
 
-# Try to import yaml, fallback to basic dict if not available
-try:
-    import yaml
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
-    print("⚠️  PyYAML không có, sẽ sử dụng config cơ bản")
-
-# Add project root to Python path
+# Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-# Load config directly from YAML file
-def load_config():
-    """Load configuration from app_config.yaml"""
-    config_file = project_root / "config" / "app_config.yaml"
+# Import sensor modules
+from src.sensors.max30102_sensor import MAX30102Sensor
+from src.sensors.mlx90614_sensor import MLX90614Sensor
+from src.sensors.blood_pressure_sensor import BloodPressureSensor
+from src.utils.logger import setup_logger
+
+class SensorTestSuite:
+    """
+    Comprehensive test suite for all IoT health monitoring sensors
+    """
     
-    if HAS_YAML:
+    def __init__(self):
+        """Initialize test suite"""
+        self.logger = logging.getLogger("TestSuite")
+        self.logger.setLevel(logging.INFO)
+        
+        # Create console handler if not exists
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+        
+        self.config = self.load_config()
+        self.sensors = {}
+        self.test_running = False
+        self.test_threads = []
+        
+        # Register signal handler for clean shutdown
+        signal.signal(signal.SIGINT, self.signal_handler)
+        signal.signal(signal.SIGTERM, self.signal_handler)
+        
+    def load_config(self) -> Dict[str, Any]:
+        """Load configuration from app_config.yaml"""
         try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return yaml.safe_load(f)
+            config_path = project_root / "config" / "app_config.yaml"
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            self.logger.info(f"Configuration loaded from {config_path}")
+            return config
         except Exception as e:
-            print(f"❌ Không thể load config từ YAML: {e}")
+            self.logger.error(f"Failed to load configuration: {e}")
+            return {}
     
-    # Fallback to hardcoded config if YAML not available
-    print("🔄 Sử dụng config mặc định...")
-    return {
-        'sensors': {
-            'max30102': {
-                'enabled': True,
-                'sample_rate': 50,
-                'led_mode': 3,  # SpO2 mode (RED + IR LEDs active)
-                'pulse_amplitude_red': 0x7F,  # High brightness for visibility
-                'pulse_amplitude_ir': 0x7F,   # High brightness for visibility
-                'adc_range': 4096,
-                'sample_average': 8,
-                'buffer_size': 100,
-                'ir_threshold': 50000,
-                'min_readings_for_calc': 50
-            },
-            'mlx90614': {
-                'enabled': True,
-                'sensor_type': 'MLX90614',
-                'i2c_bus': 1,
-                'i2c_address': 0x5A,
-                'sample_rate': 1,
-                'use_object_temp': True,
-                'temperature_offset': 0.0,
-                'smooth_factor': 0.1
-            }
-        }
-    }
-
-# Import our sensor classes
-try:
-    from src.sensors.max30102_sensor import MAX30102Sensor
-    from src.sensors.mlx90614_sensor import MLX90614Sensor
-except ImportError as e:
-    print(f"Không thể import sensor classes: {e}")
-    sys.exit(1)
-
-# Import thư viện phụ thuộc
-try:
-    import max30102
-    import hrcalc
-except ImportError:
-    print("Không tìm thấy max30102 hoặc hrcalc! Hãy chắc chắn đã copy vào lib hoặc PYTHONPATH.")
-    max30102 = None
-    hrcalc = None
-
-try:
-    from smbus2 import SMBus
-except ImportError:
-    print("Chưa cài đặt thư viện smbus2! Hãy chạy: pip install smbus2")
-    SMBus = None
-
-def test_max30102_led():
-    """Test MAX30102 LED visibility specifically"""
-    print("\n--- Test LED MAX30102 ---")
+    def signal_handler(self, signum, frame):
+        """Handle interrupt signals for clean shutdown"""
+        self.logger.info(f"Received signal {signum}, shutting down...")
+        self.stop_all_tests()
+        sys.exit(0)
     
-    if max30102 is None:
-        print("❌ Thiếu thư viện max30102")
-        return
-    
-    try:
-        print("🔧 Initializing MAX30102 with maximum LED brightness...")
-        sensor = max30102.MAX30102(channel=1, address=0x57)
+    def stop_all_tests(self):
+        """Stop all running tests and sensors"""
+        self.test_running = False
         
-        # Set maximum brightness
-        sensor.set_config(max30102.REG_LED1_PA, [0xFF])  # RED maximum
-        sensor.set_config(max30102.REG_LED2_PA, [0xFF])  # IR maximum
-        sensor.set_config(max30102.REG_MODE_CONFIG, [0x03])  # SpO2 mode
-        
-        print("💡 LEDs are now at MAXIMUM brightness!")
-        print("🔍 Look at your MAX30102 sensor - you should see:")
-        print("   • RED LED glowing (visible to naked eye)")
-        print("   • IR LED glowing (may need phone camera to see)")
-        print("\nReading data for 15 seconds to keep LEDs active...")
-        
-        led_active_count = 0
-        for i in range(30):
+        # Stop all sensors
+        for sensor_name, sensor in self.sensors.items():
             try:
-                available = sensor.get_data_present()
-                if available > 0:
-                    red, ir = sensor.read_fifo()
-                    led_active_count += 1
-                    if i % 5 == 0:  # Print every 5th reading
-                        print(f"[{i+1:2d}s] LEDs ACTIVE - RED: {red:6d}, IR: {ir:6d}")
-                else:
-                    if i % 5 == 0:
-                        print(f"[{i+1:2d}s] LEDs should be glowing...")
+                if sensor and hasattr(sensor, 'stop'):
+                    sensor.stop()
+                    self.logger.info(f"Stopped {sensor_name} sensor")
             except Exception as e:
-                print(f"[{i+1:2d}s] Error: {e}")
-            time.sleep(0.5)
+                self.logger.error(f"Error stopping {sensor_name}: {e}")
         
-        sensor.shutdown()
-        print(f"\n✅ Test completed. LED was active {led_active_count}/30 readings")
-        if led_active_count > 0:
-            print("💡 LEDs are working! If you can't see them, check:")
-            print("   • Sensor orientation (LEDs face up)")
-            print("   • Room lighting (dim room helps see LEDs)")
-            print("   • Use phone camera to see IR LED")
-        else:
-            print("❌ No LED activity detected - hardware issue?")
-            
-    except Exception as e:
-        print(f"❌ Error testing LEDs: {e}")
-
-def test_max30102():
-    """Test MAX30102 sensor using our sensor class"""
-    print("\n--- Test cảm biến MAX30102 với sensor class ---")
+        # Wait for test threads to complete
+        for thread in self.test_threads:
+            if thread.is_alive():
+                thread.join(timeout=2)
     
-    if max30102 is None or hrcalc is None:
-        print("❌ Thiếu thư viện max30102 hoặc hrcalc")
-        print("💡 Để test MAX30102, cần:")
-        print("   1. Thư viện max30102.py và hrcalc.py (✅ Đã có)")
-        print("   2. Kết nối hardware MAX30102 với I2C bus 1, address 0x57")
-        print("   3. Đảm bảo I2C được enable trên Raspberry Pi")
-        return
+    def print_menu(self):
+        """Print main test menu"""
+        print("\n" + "="*60)
+        print("🏥 IoT HEALTH MONITORING - SENSOR TEST SUITE")
+        print("="*60)
+        print("1. 🫀 Test MAX30102 (Heart Rate & SpO2)")
+        print("2. 🌡️  Test MLX90614 (Temperature)")
+        print("3. 🩸 Test Blood Pressure System")
+        print("4. 🔍 I2C Device Scan")
+        print("5. 📊 Real-time Monitoring Dashboard")
+        print("6. 🧪 Hardware Validation Tests")
+        print("7. 📈 Sensor Performance Analysis")
+        print("8. 🔧 Sensor Configuration Test")
+        print("9. 💾 Data Logging Test")
+        print("0. ❌ Exit")
+        print("="*60)
     
-    print("✅ Thư viện max30102 và hrcalc đã sẵn sàng")
-    
-    # First test LEDs
-    led_test = input("\n❓ Bạn có muốn test LED trước không? (y/n): ").strip().lower()
-    if led_test == 'y':
-        test_max30102_led()
-        input("\nNhấn Enter để tiếp tục với full sensor test...")
-    
-    try:
-        # Load config
-        config = load_config()
-        max30102_config = config.get('sensors', {}).get('max30102', {})
+    def test_max30102_comprehensive(self):
+        """Comprehensive MAX30102 sensor test"""
+        print("\n🫀 MAX30102 COMPREHENSIVE TEST")
+        print("-" * 40)
         
-        if not max30102_config.get('enabled', False):
-            print("❌ MAX30102 không được enable trong config")
-            return
+        try:
+            # Initialize sensor
+            max30102_config = self.config.get('sensors', {}).get('max30102', {})
+            sensor = MAX30102Sensor(max30102_config)
+            self.sensors['max30102'] = sensor
             
-        # Create sensor instance
-        sensor = MAX30102Sensor(max30102_config)
-        
-        def data_callback(sensor_name, data):
-            """Callback để hiển thị data mới"""
-            timestamp = data.get('timestamp', '')[-8:]  # Last 8 chars (time part)
-            print(f"\n📊 [{timestamp}] {sensor_name} Data:")
+            # Test 1: Hardware initialization
+            print("🔧 Testing hardware initialization...")
+            if not sensor.initialize():
+                print("❌ Hardware initialization failed!")
+                return False
+            print("✅ Hardware initialized successfully")
             
-            if data.get('finger_detected', False):
-                hr_status = "✅" if data.get('hr_valid', False) else "❌"
-                spo2_status = "✅" if data.get('spo2_valid', False) else "❌"
-                
-                print(f"  ❤️  Nhịp tim: {data.get('heart_rate', 0)} BPM {hr_status}")
-                print(f"  🫁 SpO2: {data.get('spo2', 0):.1f}% {spo2_status}")
-                print(f"  📈 Signal Quality IR: {data.get('signal_quality_ir', 0):.1f}%")
-                print(f"  📈 Signal Quality RED: {data.get('signal_quality_red', 0):.1f}%")
-                print(f"  📊 Buffer Fill: {data.get('buffer_fill', 0)}/{data.get('readings_count', 0)}")
-                print(f"  🔹 Status: {data.get('status', 'unknown')}")
+            # Test 2: Start sensor
+            print("🚀 Starting sensor...")
+            if not sensor.start():
+                print("❌ Sensor start failed!")
+                return False
+            print("✅ Sensor started successfully")
+            
+            # Test 3: LED configuration test
+            print("💡 Testing LED configuration...")
+            led_test_passed = self.test_max30102_leds(sensor)
+            
+            # Test 4: Real-time data collection
+            print("📊 Starting real-time data collection...")
+            print("📌 Place your finger on the sensor and keep it steady")
+            print("⏱️  Data collection will run for 30 seconds")
+            print("🛑 Press Ctrl+C to stop early")
+            
+            self.test_running = True
+            data_collection_thread = threading.Thread(
+                target=self.max30102_data_collection,
+                args=(sensor, 30)
+            )
+            data_collection_thread.start()
+            self.test_threads.append(data_collection_thread)
+            
+            # Wait for data collection to complete
+            data_collection_thread.join()
+            
+            # Test 5: Signal quality assessment
+            print("📈 Assessing signal quality...")
+            self.assess_max30102_signal_quality(sensor)
+            
+            # Test 6: Measurement validation
+            print("🔍 Validating measurements...")
+            self.validate_max30102_measurements(sensor)
+            
+            print("✅ MAX30102 comprehensive test completed")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"MAX30102 test failed: {e}")
+            print(f"❌ Test failed: {e}")
+            return False
+        finally:
+            if 'max30102' in self.sensors and self.sensors['max30102']:
+                self.sensors['max30102'].stop()
+    
+    def test_max30102_leds(self, sensor: MAX30102Sensor) -> bool:
+        """Test MAX30102 LED functionality"""
+        try:
+            print("  🔴 Testing RED LED...")
+            if sensor.set_led_amplitude(0x7F, 0x00):  # RED only
+                time.sleep(2)
+                print("  ✅ RED LED test passed")
             else:
-                ir_mean = data.get('ir_mean', 0)
-                print(f"  ⚠️  Không phát hiện ngón tay (IR mean: {ir_mean:.0f})")
-                print(f"  💡 Threshold cần: {50000} (hiện tại: {ir_mean:.0f})")
-        
-        # Set callback
-        sensor.set_data_callback(data_callback)
-        
-        # Start sensor
-        if not sensor.start():
-            print("❌ Không thể khởi động MAX30102 sensor")
-            return
+                print("  ❌ RED LED test failed")
+                return False
             
-        print("✅ MAX30102 sensor đã khởi động. Đặt ngón tay lên cảm biến...")
-        print("Nhấn Ctrl+C để dừng test")
+            print("  🔵 Testing IR LED...")
+            if sensor.set_led_amplitude(0x00, 0x7F):  # IR only
+                time.sleep(2)
+                print("  ✅ IR LED test passed")
+            else:
+                print("  ❌ IR LED test failed")
+                return False
+            
+            print("  🟣 Testing both LEDs...")
+            if sensor.set_led_amplitude(0x7F, 0x7F):  # Both LEDs
+                time.sleep(2)
+                print("  ✅ Both LEDs test passed")
+            else:
+                print("  ❌ Both LEDs test failed")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"  ❌ LED test failed: {e}")
+            return False
+    
+    def max30102_data_collection(self, sensor: MAX30102Sensor, duration: int):
+        """Collect and display MAX30102 data in real-time"""
+        start_time = time.time()
+        sample_count = 0
+        valid_readings = 0
         
-        try:
-            while True:
+        print(f"\n{'Time':<8} {'HR':<6} {'SpO2':<6} {'Finger':<8} {'Status':<15} {'Quality':<8}")
+        print("-" * 65)
+        
+        while self.test_running and (time.time() - start_time) < duration:
+            try:
+                # Get sensor data through callback mechanism
+                if hasattr(sensor, 'heart_rate') and hasattr(sensor, 'spo2'):
+                    elapsed = int(time.time() - start_time)
+                    hr = sensor.heart_rate
+                    spo2 = sensor.spo2
+                    finger = "YES" if sensor.finger_detected else "NO"
+                    status = getattr(sensor, 'status', 'Unknown')
+                    quality = f"{sensor.signal_quality_ir:.1f}" if hasattr(sensor, 'signal_quality_ir') else "N/A"
+                    
+                    print(f"{elapsed:>3}s     {hr:>5.1f} {spo2:>5.1f}  {finger:<8} {status:<15} {quality:<8}")
+                    
+                    sample_count += 1
+                    if sensor.hr_valid or sensor.spo2_valid:
+                        valid_readings += 1
+                
                 time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n🔄 Dừng test MAX30102...")
-            
-    except Exception as e:
-        print(f"❌ Lỗi test MAX30102: {e}")
-    finally:
+                
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                self.logger.error(f"Data collection error: {e}")
+                break
+        
+        self.test_running = False
+        print(f"\n📊 Data Collection Summary:")
+        print(f"   Total samples: {sample_count}")
+        print(f"   Valid readings: {valid_readings}")
+        print(f"   Success rate: {(valid_readings/max(sample_count,1)*100):.1f}%")
+    
+    def assess_max30102_signal_quality(self, sensor: MAX30102Sensor):
+        """Assess MAX30102 signal quality"""
         try:
-            sensor.stop()
-            print("✅ MAX30102 sensor đã dừng")
-        except:
-            pass
-
-def test_mlx90614():
-    """Test MLX90614 sensor using our sensor class"""
-    print("\n--- Test cảm biến MLX90614 (GY-906) với sensor class ---")
-    
-    if SMBus is None:
-        print("❌ Thiếu thư viện smbus2")
-        return
-    
-    try:
-        # Load config
-        config = load_config()
-        mlx90614_config = config.get('sensors', {}).get('mlx90614', {})
-        
-        if not mlx90614_config.get('enabled', False):
-            print("❌ MLX90614 không được enable trong config")
-            return
+            stability = sensor.get_measurement_stability()
             
-        # Create sensor instance
-        sensor = MLX90614Sensor(mlx90614_config)
-        
-        def data_callback(sensor_name, data):
-            """Callback để hiển thị data mới"""
-            print(f"\n🌡️  {sensor_name} Temperature:")
-            print(f"  🎯 Nhiệt độ cơ thể: {data['object_temperature']:.2f}°C")
-            print(f"  🌍 Nhiệt độ môi trường: {data['ambient_temperature']:.2f}°C")
-            print(f"  📊 Primary: {data['temperature']:.2f}°C ({data['measurement_type']})")
-            print(f"  ⚕️  Status: {data['status']}")
-        
-        # Set callback
-        sensor.set_data_callback(data_callback)
-        
-        # Start sensor
-        if not sensor.start():
-            print("❌ Không thể khởi động MLX90614 sensor")
-            return
+            print("  📈 Signal Quality Assessment:")
+            print(f"     HR Stability: {stability.get('hr_stability', 0):.2f}")
+            print(f"     SpO2 Stability: {stability.get('spo2_stability', 0):.2f}")
+            print(f"     IR Signal Quality: {sensor.signal_quality_ir:.1f}")
+            print(f"     RED Signal Quality: {sensor.signal_quality_red:.1f}")
             
-        print("✅ MLX90614 sensor đã khởi động. Đang đo nhiệt độ...")
-        print("Nhấn Ctrl+C để dừng test")
+            # Overall quality assessment
+            avg_quality = (sensor.signal_quality_ir + sensor.signal_quality_red) / 2
+            if avg_quality > 80:
+                print("  ✅ Excellent signal quality")
+            elif avg_quality > 60:
+                print("  ⚠️  Good signal quality")
+            elif avg_quality > 40:
+                print("  ⚠️  Fair signal quality - consider repositioning finger")
+            else:
+                print("  ❌ Poor signal quality - check sensor placement")
+                
+        except Exception as e:
+            print(f"  ❌ Signal quality assessment failed: {e}")
+    
+    def validate_max30102_measurements(self, sensor: MAX30102Sensor):
+        """Validate MAX30102 measurements"""
+        try:
+            hr = sensor.heart_rate
+            spo2 = sensor.spo2
+            
+            print("  🔍 Measurement Validation:")
+            
+            # Heart rate validation
+            hr_status = sensor.get_heart_rate_status()
+            hr_valid = sensor.validate_heart_rate(hr)
+            print(f"     Heart Rate: {hr:.1f} BPM - {hr_status} ({'Valid' if hr_valid else 'Invalid'})")
+            
+            # SpO2 validation  
+            spo2_status = sensor.get_spo2_status()
+            spo2_valid = sensor.validate_spo2(spo2)
+            print(f"     SpO2: {spo2:.1f}% - {spo2_status} ({'Valid' if spo2_valid else 'Invalid'})")
+            
+            # Overall assessment
+            if hr_valid and spo2_valid:
+                print("  ✅ All measurements are valid")
+            elif hr_valid or spo2_valid:
+                print("  ⚠️  Some measurements are valid")
+            else:
+                print("  ❌ Measurements need improvement")
+                
+        except Exception as e:
+            print(f"  ❌ Measurement validation failed: {e}")
+    
+    def test_mlx90614(self):
+        """Test MLX90614 temperature sensor"""
+        print("\n🌡️ MLX90614 TEMPERATURE SENSOR TEST")
+        print("-" * 40)
         
         try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("\n🔄 Dừng test MLX90614...")
+            # Initialize sensor
+            mlx_config = self.config.get('sensors', {}).get('mlx90614', {})
+            sensor = MLX90614Sensor(mlx_config)
+            self.sensors['mlx90614'] = sensor
             
-    except Exception as e:
-        print(f"❌ Lỗi test MLX90614: {e}")
-    finally:
-        try:
-            sensor.stop()
-            print("✅ MLX90614 sensor đã dừng")
-        except:
-            pass
-
-def test_gy906_raw():
-    """Test raw GY-906 communication (fallback method)"""
-    print("\n--- Test raw GY-906 (MLX90614) communication ---")
-    
-    if SMBus is None:
-        print("❌ Thiếu thư viện smbus2")
-        return
-        
-    address = 0x5A
-    temp_reg = 0x07
-    print("Bắt đầu test liên tục GY-906. Nhấn Ctrl+C để dừng.")
-    
-    try:
-        with SMBus(1) as bus:
-            while True:
+            # Test initialization
+            print("🔧 Testing sensor initialization...")
+            if not sensor.initialize():
+                print("❌ Sensor initialization failed!")
+                return False
+            print("✅ Sensor initialized successfully")
+            
+            # Start sensor
+            print("🚀 Starting sensor...")
+            if not sensor.start():
+                print("❌ Sensor start failed!")
+                return False
+            print("✅ Sensor started successfully")
+            
+            # Collect temperature data
+            print("📊 Collecting temperature data for 15 seconds...")
+            print("📌 Point sensor towards your forehead")
+            
+            self.test_running = True
+            start_time = time.time()
+            
+            print(f"\n{'Time':<8} {'Object':<8} {'Ambient':<8} {'Status':<15}")
+            print("-" * 45)
+            
+            while self.test_running and (time.time() - start_time) < 15:
                 try:
-                    data = bus.read_word_data(address, temp_reg)
-                    temp = (data * 0.02) - 273.15
-                    print(f"🌡️  Nhiệt độ = {temp:.2f}°C")
+                    elapsed = int(time.time() - start_time)
+                    obj_temp = getattr(sensor, 'object_temperature', 0)
+                    amb_temp = getattr(sensor, 'ambient_temperature', 0)
+                    status = getattr(sensor, 'status', 'Unknown')
+                    
+                    print(f"{elapsed:>3}s     {obj_temp:>6.2f}°C {amb_temp:>6.2f}°C {status:<15}")
+                    
+                    time.sleep(1)
+                    
+                except KeyboardInterrupt:
+                    break
                 except Exception as e:
-                    print(f"❌ Lỗi khi đọc GY-906: {e}")
-                time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n🔄 Dừng test GY-906.")
-    except Exception as e:
-        print(f"❌ Lỗi khi giao tiếp với GY-906: {e}")
-    print("✅ Hoàn thành test GY-906.")
-
-def test_i2c_devices():
-    """Test I2C device detection"""
-    print("\n--- Test I2C Device Detection ---")
-    
-    if SMBus is None:
-        print("❌ smbus2 không có")
-        return
-    
-    try:
-        with SMBus(1) as bus:
-            print("🔍 Scanning I2C bus 1...")
-            detected_devices = []
+                    self.logger.error(f"Temperature reading error: {e}")
+                    break
             
-            for addr in range(0x03, 0x78):  # Standard I2C address range
+            print("✅ MLX90614 test completed")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"MLX90614 test failed: {e}")
+            print(f"❌ Test failed: {e}")
+            return False
+        finally:
+            if 'mlx90614' in self.sensors and self.sensors['mlx90614']:
+                self.sensors['mlx90614'].stop()
+    
+    def scan_i2c_devices(self):
+        """Scan for I2C devices"""
+        print("\n🔍 I2C DEVICE SCAN")
+        print("-" * 30)
+        
+        try:
+            import smbus
+            bus = smbus.SMBus(1)  # I2C bus 1
+            
+            devices_found = []
+            expected_devices = {
+                0x57: "MAX30102 (Heart Rate/SpO2)",
+                0x5A: "MLX90614 (Temperature)"
+            }
+            
+            print("Scanning I2C addresses 0x03-0x77...")
+            
+            for addr in range(0x03, 0x78):
                 try:
                     bus.read_byte(addr)
-                    detected_devices.append(addr)
-                    print(f"  ✅ Device found at 0x{addr:02X}")
+                    devices_found.append(addr)
+                    device_name = expected_devices.get(addr, "Unknown device")
+                    print(f"✅ Found device at 0x{addr:02X}: {device_name}")
                 except:
                     pass
             
-            if not detected_devices:
-                print("  ❌ No I2C devices found")
+            if not devices_found:
+                print("❌ No I2C devices found!")
+                print("   Check connections and ensure I2C is enabled")
             else:
-                print(f"\n📋 Total devices found: {len(detected_devices)}")
+                print(f"\n📊 Scan complete: {len(devices_found)} device(s) found")
                 
-                # Check for known devices
-                if 0x5A in detected_devices:
-                    print("  🌡️  MLX90614 (0x5A) detected")
-                if 0x57 in detected_devices:
-                    print("  ❤️  MAX30102 (0x57) detected")
-                    
-    except Exception as e:
-        print(f"❌ I2C scan error: {e}")
-    
-    input("\nNhấn Enter để tiếp tục...")
-
-def test_config():
-    """Test configuration loading"""
-    print("\n--- Test Configuration Loading ---")
-    
-    config = load_config()
-    
-    print(f"📋 Config loaded: {'✅' if config else '❌'}")
-    
-    if config:
-        sensors = config.get('sensors', {})
-        print(f"\n🔧 Available sensors:")
-        
-        for sensor_name, sensor_config in sensors.items():
-            enabled = sensor_config.get('enabled', False)
-            status = "✅ Enabled" if enabled else "❌ Disabled"
-            print(f"  • {sensor_name}: {status}")
+                # Check for expected devices
+                missing_devices = []
+                for addr, name in expected_devices.items():
+                    if addr not in devices_found:
+                        missing_devices.append(f"0x{addr:02X} ({name})")
+                
+                if missing_devices:
+                    print("⚠️  Missing expected devices:")
+                    for device in missing_devices:
+                        print(f"   - {device}")
             
-        print(f"\n📊 MAX30102 Config:")
-        max30102_config = sensors.get('max30102', {})
-        for key, value in max30102_config.items():
-            print(f"  • {key}: {value}")
+            return len(devices_found) > 0
             
-        print(f"\n🌡️  MLX90614 Config:")
-        mlx90614_config = sensors.get('mlx90614', {})
-        for key, value in mlx90614_config.items():
-            print(f"  • {key}: {value}")
+        except ImportError:
+            print("❌ smbus library not available")
+            return False
+        except Exception as e:
+            print(f"❌ I2C scan failed: {e}")
+            return False
     
-    input("\nNhấn Enter để tiếp tục...")
-
-def main_menu():
-    """Main test menu"""
-    while True:
-        print("\n========== MENU TEST CẢM BIẾN ==========")
-        print("1. Test cảm biến MAX30102 (nhịp tim & SpO2)")
-        print("2. Test LED MAX30102 (kiểm tra LED có sáng)")
-        print("3. Test cảm biến MLX90614 (nhiệt độ hồng ngoại)")
-        print("4. Test raw GY-906 communication")
-        print("5. Test cả hai cảm biến")
-        print("6. Test system integration")
-        print("7. Test configuration loading")
-        print("8. Test I2C device detection")
-        print("0. Thoát")
-        print("=" * 40)
-        
-        choice = input("Chọn chức năng (0-8): ").strip()
-        
-        if choice == '1':
-            test_max30102()
-        elif choice == '2':
-            test_max30102_led()
-        elif choice == '3':
-            test_mlx90614()
-        elif choice == '4':
-            test_gy906_raw()
-        elif choice == '5':
-            print("🔄 Testing cả hai cảm biến...")
-            test_max30102()
-            test_mlx90614()
-        elif choice == '6':
-            test_system_integration()
-        elif choice == '7':
-            test_config()
-        elif choice == '8':
-            test_i2c_devices()
-        elif choice == '0':
-            print("👋 Thoát chương trình.")
-            break
-        else:
-            print("❌ Lựa chọn không hợp lệ. Vui lòng chọn lại.")
-
-def test_system_integration():
-    """Test both sensors running simultaneously"""
-    print("\n--- Test tích hợp hệ thống (cả 2 sensor) ---")
-    
-    try:
-        # Load config
-        config = load_config()
-        sensor_config = config.get('sensors', {})
-        
-        sensors = {}
-        
-        # Initialize MAX30102 if enabled
-        if sensor_config.get('max30102', {}).get('enabled', False) and max30102 and hrcalc:
-            sensors['max30102'] = MAX30102Sensor(sensor_config['max30102'])
-            
-        # Initialize MLX90614 if enabled  
-        if sensor_config.get('mlx90614', {}).get('enabled', False) and SMBus:
-            sensors['mlx90614'] = MLX90614Sensor(sensor_config['mlx90614'])
-        
-        if not sensors:
-            print("❌ Không có sensor nào được enable hoặc thiếu thư viện")
-            return
-            
-        def integrated_callback(sensor_name, data):
-            """Callback hiển thị data từ tất cả sensors"""
-            timestamp = data.get('timestamp', 'N/A')
-            print(f"\n📊 [{timestamp[-8:-3]}] {sensor_name}:")
-            
-            if sensor_name == 'MAX30102':
-                if data['finger_detected']:
-                    hr_status = "✅" if data['hr_valid'] else "❌"
-                    spo2_status = "✅" if data['spo2_valid'] else "❌"
-                    print(f"  ❤️  HR: {data['heart_rate']} BPM {hr_status}")
-                    print(f"  🫁 SpO2: {data['spo2']:.1f}% {spo2_status}")
-                    print(f"  📊 Status: {data['status']}")
-                else:
-                    print("  ⚠️  Đặt ngón tay lên cảm biến")
-                    
-            elif sensor_name == 'MLX90614':
-                print(f"  🌡️  Temp: {data['temperature']:.2f}°C ({data['status']})")
-                print(f"  🎯 Object: {data['object_temperature']:.2f}°C")
-                print(f"  🌍 Ambient: {data['ambient_temperature']:.2f}°C")
-        
-        # Set callbacks and start sensors
-        for name, sensor in sensors.items():
-            sensor.set_data_callback(integrated_callback)
-            if not sensor.start():
-                print(f"❌ Không thể khởi động {name}")
-                continue
-            print(f"✅ {name} đã khởi động")
-            
-        print(f"\n🚀 Đang chạy {len(sensors)} sensor(s). Nhấn Ctrl+C để dừng...")
+    def real_time_dashboard(self):
+        """Real-time monitoring dashboard"""
+        print("\n📊 REAL-TIME MONITORING DASHBOARD")
+        print("-" * 45)
+        print("🚀 Starting all sensors...")
         
         try:
-            while True:
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            print("\n🔄 Dừng test tích hợp...")
+            # Initialize all sensors
+            sensors_to_start = []
             
-    except Exception as e:
-        print(f"❌ Lỗi test tích hợp: {e}")
-    finally:
-        # Stop all sensors
-        for name, sensor in sensors.items():
+            # MAX30102
+            if self.config.get('sensors', {}).get('max30102', {}).get('enabled', False):
+                max30102 = MAX30102Sensor(self.config['sensors']['max30102'])
+                if max30102.initialize() and max30102.start():
+                    self.sensors['max30102'] = max30102
+                    sensors_to_start.append('MAX30102')
+                    print("✅ MAX30102 started")
+                else:
+                    print("❌ MAX30102 failed to start")
+            
+            # MLX90614
+            if self.config.get('sensors', {}).get('mlx90614', {}).get('enabled', False):
+                mlx90614 = MLX90614Sensor(self.config['sensors']['mlx90614'])
+                if mlx90614.initialize() and mlx90614.start():
+                    self.sensors['mlx90614'] = mlx90614
+                    sensors_to_start.append('MLX90614')
+                    print("✅ MLX90614 started")
+                else:
+                    print("❌ MLX90614 failed to start")
+            
+            if not sensors_to_start:
+                print("❌ No sensors available for monitoring")
+                return
+            
+            # Start monitoring
+            print(f"\n📈 Monitoring {len(sensors_to_start)} sensor(s)")
+            print("📌 Place finger on MAX30102 and point MLX90614 to forehead")
+            print("🛑 Press Ctrl+C to stop monitoring")
+            
+            self.test_running = True
+            start_time = time.time()
+            
+            # Print header
+            header = f"{'Time':<8}"
+            if 'MAX30102' in sensors_to_start:
+                header += f" {'HR':<6} {'SpO2':<6} {'Finger':<8}"
+            if 'MLX90614' in sensors_to_start:
+                header += f" {'Temp':<7}"
+            print(f"\n{header}")
+            print("-" * len(header))
+            
+            while self.test_running:
+                try:
+                    elapsed = int(time.time() - start_time)
+                    row = f"{elapsed:>3}s    "
+                    
+                    # MAX30102 data
+                    if 'max30102' in self.sensors:
+                        sensor = self.sensors['max30102']
+                        hr = getattr(sensor, 'heart_rate', 0)
+                        spo2 = getattr(sensor, 'spo2', 0)
+                        finger = "YES" if getattr(sensor, 'finger_detected', False) else "NO"
+                        row += f" {hr:>5.1f} {spo2:>5.1f}  {finger:<8}"
+                    
+                    # MLX90614 data
+                    if 'mlx90614' in self.sensors:
+                        sensor = self.sensors['mlx90614']
+                        temp = getattr(sensor, 'object_temperature', 0)
+                        row += f" {temp:>6.2f}°C"
+                    
+                    print(row)
+                    time.sleep(2)
+                    
+                except KeyboardInterrupt:
+                    break
+                except Exception as e:
+                    self.logger.error(f"Dashboard error: {e}")
+                    break
+            
+            print("\n📊 Real-time monitoring stopped")
+            
+        except Exception as e:
+            self.logger.error(f"Dashboard failed: {e}")
+            print(f"❌ Dashboard failed: {e}")
+        finally:
+            self.test_running = False
+    
+    def hardware_validation(self):
+        """Hardware validation tests"""
+        print("\n🧪 HARDWARE VALIDATION TESTS")
+        print("-" * 35)
+        
+        validation_results = {}
+        
+        # Test 1: I2C bus functionality
+        print("1️⃣ Testing I2C bus functionality...")
+        i2c_result = self.scan_i2c_devices()
+        validation_results['i2c'] = i2c_result
+        
+        # Test 2: GPIO availability (if needed for future sensors)
+        print("\n2️⃣ Testing GPIO availability...")
+        gpio_result = self.test_gpio_availability()
+        validation_results['gpio'] = gpio_result
+        
+        # Test 3: System resources
+        print("\n3️⃣ Testing system resources...")
+        resource_result = self.test_system_resources()
+        validation_results['resources'] = resource_result
+        
+        # Summary
+        print(f"\n📊 VALIDATION SUMMARY")
+        print("-" * 25)
+        passed = sum(1 for result in validation_results.values() if result)
+        total = len(validation_results)
+        
+        for test, result in validation_results.items():
+            status = "✅ PASS" if result else "❌ FAIL"
+            print(f"   {test.upper()}: {status}")
+        
+        print(f"\n🎯 Overall: {passed}/{total} tests passed")
+        
+        if passed == total:
+            print("✅ All hardware validation tests passed!")
+        else:
+            print("⚠️  Some hardware validation tests failed")
+            print("   Please check hardware connections and system configuration")
+    
+    def test_gpio_availability(self) -> bool:
+        """Test GPIO availability"""
+        try:
+            # Check if GPIO is available
+            import RPi.GPIO as GPIO
+            GPIO.setmode(GPIO.BCM)
+            print("   ✅ GPIO library available")
+            GPIO.cleanup()
+            return True
+        except ImportError:
+            print("   ❌ RPi.GPIO library not available")
+            return False
+        except Exception as e:
+            print(f"   ❌ GPIO test failed: {e}")
+            return False
+    
+    def test_system_resources(self) -> bool:
+        """Test system resources"""
+        try:
+            import psutil
+            
+            # Check CPU usage
+            cpu_percent = psutil.cpu_percent(interval=1)
+            print(f"   📊 CPU Usage: {cpu_percent:.1f}%")
+            
+            # Check memory usage
+            memory = psutil.virtual_memory()
+            print(f"   💾 Memory Usage: {memory.percent:.1f}%")
+            
+            # Check available space
+            disk = psutil.disk_usage('/')
+            print(f"   💿 Disk Usage: {disk.percent:.1f}%")
+            
+            # All good if CPU < 80%, Memory < 80%, Disk < 90%
+            if cpu_percent < 80 and memory.percent < 80 and disk.percent < 90:
+                print("   ✅ System resources OK")
+                return True
+            else:
+                print("   ⚠️  High system resource usage detected")
+                return False
+                
+        except ImportError:
+            print("   ⚠️  psutil not available, skipping resource check")
+            return True
+        except Exception as e:
+            print(f"   ❌ Resource test failed: {e}")
+            return False
+    
+    def run_tests(self):
+        """Main test runner"""
+        print("🏥 IoT Health Monitoring - Sensor Test Suite")
+        print("=" * 50)
+        
+        while True:
             try:
-                sensor.stop()
-                print(f"✅ {name} đã dừng")
-            except:
-                pass
+                self.print_menu()
+                choice = input("\n👉 Select test option (0-9): ").strip()
+                
+                if choice == '0':
+                    print("\n👋 Exiting test suite...")
+                    self.stop_all_tests()
+                    break
+                elif choice == '1':
+                    self.test_max30102_comprehensive()
+                elif choice == '2':
+                    self.test_mlx90614()
+                elif choice == '3':
+                    print("\n🩸 Blood pressure test not yet implemented")
+                elif choice == '4':
+                    self.scan_i2c_devices()
+                elif choice == '5':
+                    self.real_time_dashboard()
+                elif choice == '6':
+                    self.hardware_validation()
+                elif choice == '7':
+                    print("\n📈 Performance analysis not yet implemented")
+                elif choice == '8':
+                    print("\n🔧 Configuration test not yet implemented")
+                elif choice == '9':
+                    print("\n💾 Data logging test not yet implemented")
+                else:
+                    print("❌ Invalid option. Please select 0-9.")
+                
+                if choice != '0':
+                    input("\n📌 Press Enter to continue...")
+                    
+            except KeyboardInterrupt:
+                print("\n\n🛑 Test interrupted by user")
+                self.stop_all_tests()
+                break
+            except Exception as e:
+                self.logger.error(f"Test runner error: {e}")
+                print(f"❌ Error: {e}")
+                input("\n📌 Press Enter to continue...")
+
+
+def main():
+    """Main function"""
+    print("🚀 Starting IoT Health Sensor Test Suite...")
+    
+    test_suite = SensorTestSuite()
+    test_suite.run_tests()
+    
+    print("👋 Test suite finished. Goodbye!")
 
 
 if __name__ == "__main__":
-    main_menu()
+    main()

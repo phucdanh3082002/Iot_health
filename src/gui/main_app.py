@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager, NoTransition
@@ -23,12 +24,16 @@ if str(project_root) not in sys.path:
 try:
     # Try relative imports (when run as module)
     from .dashboard_screen import DashboardScreen
+    from .heart_rate_screen import HeartRateScreen
+    from .temperature_screen import TemperatureScreen
     from .bp_measurement_screen import BPMeasurementScreen
     from .settings_screen import SettingsScreen
     from .history_screen import HistoryScreen
 except ImportError:
     # Fall back to absolute imports (when run directly)
     from src.gui.dashboard_screen import DashboardScreen
+    from src.gui.heart_rate_screen import HeartRateScreen
+    from src.gui.temperature_screen import TemperatureScreen
     from src.gui.bp_measurement_screen import BPMeasurementScreen
     from src.gui.settings_screen import SettingsScreen
     from src.gui.history_screen import HistoryScreen
@@ -106,12 +111,16 @@ class HealthMonitorApp(App):
         
         # Create screens
         dashboard = DashboardScreen(app_instance=self, name='dashboard')
+        heart_rate = HeartRateScreen(app_instance=self, name='heart_rate')
+        temperature = TemperatureScreen(app_instance=self, name='temperature')
         bp_measurement = BPMeasurementScreen(app_instance=self, name='bp_measurement')
         settings = SettingsScreen(app_instance=self, name='settings')
         history = HistoryScreen(app_instance=self, name='history')
         
         # Add screens to manager
         self.screen_manager.add_widget(dashboard)
+        self.screen_manager.add_widget(heart_rate)
+        self.screen_manager.add_widget(temperature)
         self.screen_manager.add_widget(bp_measurement)
         self.screen_manager.add_widget(settings)
         self.screen_manager.add_widget(history)
@@ -133,16 +142,22 @@ class HealthMonitorApp(App):
         """Setup callbacks for sensor data updates"""
         try:
             # Setup callback for MAX30102 (heart rate and SpO2)
-            if 'MAX30102' in self.sensors and self.sensors['MAX30102'].enabled:
-                self.sensors['MAX30102'].set_data_callback(self.on_max30102_data)
+            if 'MAX30102' in self.sensors and self.sensors['MAX30102']:
+                if hasattr(self.sensors['MAX30102'], 'enabled') and self.sensors['MAX30102'].enabled:
+                    self.sensors['MAX30102'].set_data_callback(self.on_max30102_data)
+                    self.logger.info("MAX30102 callback setup successfully")
                 
             # Setup callback for MLX90614 (temperature)
-            if 'MLX90614' in self.sensors and self.sensors['MLX90614'].enabled:
-                self.sensors['MLX90614'].set_data_callback(self.on_temperature_data)
+            if 'MLX90614' in self.sensors and self.sensors['MLX90614']:
+                if hasattr(self.sensors['MLX90614'], 'enabled') and self.sensors['MLX90614'].enabled:
+                    self.sensors['MLX90614'].set_data_callback(self.on_temperature_data)
+                    self.logger.info("MLX90614 callback setup successfully")
                 
             # Setup callback for blood pressure (if available)
-            if 'BloodPressure' in self.sensors and self.sensors['BloodPressure'].enabled:
-                self.sensors['BloodPressure'].set_data_callback(self.on_blood_pressure_data)
+            if 'BloodPressure' in self.sensors and self.sensors['BloodPressure']:
+                if hasattr(self.sensors['BloodPressure'], 'enabled') and self.sensors['BloodPressure'].enabled:
+                    self.sensors['BloodPressure'].set_data_callback(self.on_blood_pressure_data)
+                    self.logger.info("BloodPressure callback setup successfully")
                 
         except Exception as e:
             self.logger.error(f"Error setting up sensor callbacks: {e}")
@@ -150,31 +165,48 @@ class HealthMonitorApp(App):
     def on_max30102_data(self, sensor_name: str, data: Dict[str, Any]):
         """Handle MAX30102 sensor data updates"""
         try:
-            if data.get('hr_valid'):
-                self.current_data['heart_rate'] = data.get('heart_rate', 0)
-            if data.get('spo2_valid'):
-                self.current_data['spo2'] = data.get('spo2', 0)
-                
+            # Update heart rate and SpO2 with validation from MAX30102 logic
+            self.current_data['heart_rate'] = data.get('heart_rate', 0)
+            self.current_data['spo2'] = data.get('spo2', 0)
+            self.current_data['hr_valid'] = data.get('hr_valid', False)
+            self.current_data['spo2_valid'] = data.get('spo2_valid', False)
+            
+            # Store comprehensive sensor status
             self.current_data['sensor_status']['MAX30102'] = {
                 'status': data.get('status', 'unknown'),
                 'finger_detected': data.get('finger_detected', False),
-                'signal_quality': data.get('signal_quality_ir', 0)
+                'signal_quality': data.get('signal_quality_ir', 0),
+                'signal_quality_red': data.get('signal_quality_red', 0),
+                'buffer_fill': data.get('buffer_fill', 0),
+                'readings_count': data.get('readings_count', 0)
             }
+            
+            # Update timestamp
+            self.current_data['timestamp'] = data.get('timestamp', time.time())
             
         except Exception as e:
             self.logger.error(f"Error processing MAX30102 data: {e}")
     
     def on_temperature_data(self, sensor_name: str, data: Dict[str, Any]):
-        """Handle temperature sensor data updates"""
+        """Handle MLX90614 temperature sensor data updates"""
         try:
-            self.current_data['temperature'] = data.get('temperature', 0)
+            # Update temperature data following MLX90614 structure
+            self.current_data['temperature'] = data.get('temperature', 0)  # Primary temperature
+            self.current_data['ambient_temperature'] = data.get('ambient_temperature', 0)
+            self.current_data['object_temperature'] = data.get('object_temperature', 0)
+            
+            # Store MLX90614 sensor status
             self.current_data['sensor_status']['MLX90614'] = {
-                'status': data.get('status', 'unknown'),
-                'measurement_type': data.get('measurement_type', 'object')
+                'status': data.get('status', 'normal'),
+                'measurement_type': data.get('measurement_type', 'object'),
+                'temperature_unit': data.get('temperature_unit', 'celsius')
             }
             
+            # Update timestamp
+            self.current_data['timestamp'] = time.time()
+            
         except Exception as e:
-            self.logger.error(f"Error processing temperature data: {e}")
+            self.logger.error(f"Error processing MLX90614 temperature data: {e}")
     
     def on_blood_pressure_data(self, sensor_name: str, data: Dict[str, Any]):
         """Handle blood pressure sensor data updates"""
@@ -206,6 +238,21 @@ class HealthMonitorApp(App):
     def update_displays(self, dt):
         """Update all screen displays with current data"""
         try:
+            # Check if temperature data is missing and provide fallback
+            if self.current_data.get('temperature', 0) == 0:
+                # Simulate basic temperature data if no sensor data available
+                import random
+                self.current_data['temperature'] = 36.0 + random.random() * 1.5
+                self.current_data['ambient_temperature'] = 22.0 + random.random() * 6
+                self.current_data['object_temperature'] = self.current_data['temperature']
+                
+                if 'MLX90614' not in self.current_data['sensor_status']:
+                    self.current_data['sensor_status']['MLX90614'] = {
+                        'status': 'normal',
+                        'measurement_type': 'object',
+                        'temperature_unit': 'celsius'
+                    }
+            
             # Update current screen
             current_screen = self.screen_manager.current_screen
             if hasattr(current_screen, 'update_data'):

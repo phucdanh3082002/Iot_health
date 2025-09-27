@@ -1,7 +1,13 @@
 # IoT Health Monitoring System
 
 ## Mô tả dự án
-Hệ thống IoT theo dõi sức khỏe cho người cao tuổi, đo nhịp tim, SpO2, nhiệt độ, huyết áp với giao diện hiển thị trên màn hình SPI 3.5", cảnh báo qua loa và giám sát từ xa qua Android/Web.
+Hệ thống IoT theo dõi sức khỏe cho người cao tuổi, đo nhịp tim, SpO2, nhiệt độ, huyết áp với giao diện cải tiến 480x320 trên màn hình SPI 3.5", cảnh báo qua loa và giám sát từ xa qua Android/Web.
+
+### Tính năng mới (v2.0)
+- **Giao diện cải tiến**: Dashboard với 3 khối cảm biến lớn, dễ sử dụng trên màn hình cảm ứng
+- **Màn hình đo chi tiết**: Giao diện riêng cho từng loại cảm biến với animation và gauge
+- **Tối ưu cho touchscreen**: Interface 480x320 với button lớn, text rõ ràng
+- **Hoàn toàn bằng tiếng Việt**: Toàn bộ giao diện và thông báo TTS
 
 ## Cấu trúc thư mục
 
@@ -18,7 +24,7 @@ IoT_health/
 │   ├── sensors/           # Module cảm biến
 │   │   ├── __init__.py
 │   │   ├── base_sensor.py          # Abstract base class cho sensors
-│   │   ├── max30102_sensor.py      # Driver cho MAX30102 (HR/SpO2)
+│   │   ├── max30102_sensor.py      # Driver cho MAX30102 (HR/SpO2) - với tích hợp thư viện
 │   │   ├── temperature_sensor.py   # Driver cho DS18B20/MLX90614
 │   │   └── blood_pressure_sensor.py # Driver cho huyết áp
 │   ├── gui/               # Giao diện người dùng (Kivy)
@@ -59,9 +65,14 @@ IoT_health/
 
 ### 1. Sensors Module
 - **BaseSensor**: Abstract base class với interface thống nhất
-- **MAX30102Sensor**: Đo nhịp tim và SpO2
+- **MAX30102Sensor**: Đo nhịp tim và SpO2 - **với tích hợp MAX30102 và HRCalc libraries**
 - **TemperatureSensor**: Đo nhiệt độ (DS18B20/MLX90614)
 - **BloodPressureSensor**: Đo huyết áp oscillometric
+
+#### MAX30102 Library Integration
+- **MAX30102Hardware**: Tích hợp trực tiếp từ max30102.py - I2C communication và hardware control
+- **HRCalculator**: Tích hợp trực tiếp từ hrcalc.py - Peak detection và SpO2 calculation algorithms
+- **Loại bỏ external dependencies**: Không cần cài đặt max30102.py và hrcalc.py riêng biệt
 
 ### 2. GUI Module (Kivy)
 - **HealthMonitorApp**: Main application controller
@@ -90,6 +101,25 @@ IoT_health/
 - **ConfigLoader**: YAML config management
 - **DataValidator**: Input validation
 - **Decorators**: Retry, timing utilities
+
+## Demo giao diện mới
+
+### Chạy demo GUI với logic cảm biến
+```bash
+# Demo cơ bản với mock sensors
+python demo_enhanced_gui.py
+
+# Test logic tích hợp cảm biến (RECOMMENDED)
+python test_sensor_logic.py
+```
+
+### Tính năng demo:
+- **Dashboard chính**: 3 khối cảm biến với logic thực từ MAX30102/MLX90614
+- **MAX30102 Logic**: Finger detection, HR/SpO2 validation, signal quality, buffer management - với tích hợp libraries
+- **MLX90614 Logic**: Object/ambient temperature, status codes, smoothing filters
+- **Realistic Simulation**: Dữ liệu theo đúng range và validation của sensor thật
+- **Status Color Coding**: Màu sắc theo trạng thái critical/warning/normal/partial
+- **Measurement Screens**: Logic đo chính xác với stability checking
 
 ## Cài đặt và chạy
 

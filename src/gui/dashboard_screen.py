@@ -1,6 +1,6 @@
 """
-Dashboard Screen
-Main dashboard screen hiển thị tất cả vital signs
+Dashboard Screen - Enhanced Version
+Main dashboard screen với 3 khối cảm biến lớn
 """
 
 from typing import Dict, Any, Optional
@@ -11,208 +11,109 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
 from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle, Line
+from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse, Line
 from kivy.uix.widget import Widget
+from kivy.animation import Animation
+import math
 
 
-class VitalSignCard(BoxLayout):
-    """Widget hiển thị một chỉ số sinh hiệu"""
+class SensorButton(Button):
+    """Button lớn cho từng loại cảm biến"""
     
-    def __init__(self, title: str, unit: str, normal_range: str = "", **kwargs):
-        super().__init__(orientation='vertical', spacing=5, **kwargs)
+    def __init__(self, sensor_name: str, icon: str, status_color=(0.3, 0.3, 0.3, 1), **kwargs):
+        super().__init__(**kwargs)
         
-        self.title = title
-        self.unit = unit
-        self.normal_range = normal_range
+        self.sensor_name = sensor_name
+        self.icon = icon
+        self.status_color = status_color
+        self.current_value = "--"
+        self.current_status = "Chưa đo"
         
-        # Background color
-        with self.canvas.before:
-            Color(0.2, 0.2, 0.2, 1)  # Dark gray background
-            self.rect = Rectangle(size=self.size, pos=self.pos)
-        self.bind(size=self._update_rect, pos=self._update_rect)
+        # Button appearance
+        self.font_size = '16sp'
+        self.background_color = status_color
+        self.update_button_text()
         
-        # Title label
-        self.title_label = Label(
-            text=self.title,
-            font_size='14sp',
-            size_hint_y=0.2,
-            color=(0.8, 0.8, 0.8, 1)
-        )
-        self.add_widget(self.title_label)
-        
-        # Value label (main display)
-        self.value_label = Label(
-            text='--',
-            font_size='28sp',
-            bold=True,
-            size_hint_y=0.5,
-            color=(1, 1, 1, 1)
-        )
-        self.add_widget(self.value_label)
-        
-        # Unit and range label
-        unit_text = f"{self.unit}"
-        if self.normal_range:
-            unit_text += f"\n({self.normal_range})"
-        
-        self.unit_label = Label(
-            text=unit_text,
-            font_size='10sp',
-            size_hint_y=0.2,
-            color=(0.6, 0.6, 0.6, 1)
-        )
-        self.add_widget(self.unit_label)
-        
-        # Status indicator
-        self.status_label = Label(
-            text='Chưa đo',
-            font_size='10sp',
-            size_hint_y=0.1,
-            color=(0.6, 0.6, 0.6, 1)
-        )
-        self.add_widget(self.status_label)
+        # Animation properties
+        self.pulse_animation = None
     
-    def _update_rect(self, instance, value):
-        self.rect.pos = instance.pos
-        self.rect.size = instance.size
+    def update_button_text(self):
+        """Cập nhật text hiển thị trên button"""
+        self.text = f"{self.icon}\n{self.sensor_name}\n{self.current_value}\n{self.current_status}"
     
-    def update_value(self, value: float, status: str = 'normal'):
-        """Update the displayed value and status"""
-        if value > 0:
-            if self.unit == 'bpm' or self.unit == '%' or self.unit == '°C':
-                self.value_label.text = f"{value:.1f}"
-            else:
-                self.value_label.text = f"{value:.0f}"
+    def update_sensor_data(self, value: str, status: str, color=(0.3, 0.3, 0.3, 1)):
+        """Cập nhật dữ liệu cảm biến"""
+        self.current_value = value
+        self.current_status = status
+        self.background_color = color
+        self.update_button_text()
+        
+        # Pulse animation cho heart rate
+        if self.sensor_name == "Nhịp tim" and status not in ["Chưa đo", "Không có ngón tay"]:
+            self.start_pulse_animation()
         else:
-            self.value_label.text = '--'
+            self.stop_pulse_animation()
+    
+    def start_pulse_animation(self):
+        """Bắt đầu animation pulse"""
+        if self.pulse_animation:
+            self.pulse_animation.cancel(self)
         
-        # Update color based on status
-        status_colors = {
-            'normal': (0.2, 0.8, 0.2, 1),      # Green
-            'low': (1, 0.8, 0, 1),             # Yellow
-            'high': (1, 0.6, 0, 1),            # Orange
-            'critical': (1, 0.2, 0.2, 1),     # Red
-            'poor_signal': (0.6, 0.6, 0.6, 1), # Gray
-            'no_finger': (0.4, 0.4, 0.4, 1)   # Dark gray
-        }
-        
-        self.value_label.color = status_colors.get(status, (1, 1, 1, 1))
-        
-        # Update status text
-        status_text = {
-            'normal': 'Bình thường',
-            'low': 'Thấp',
-            'high': 'Cao',
-            'critical': 'Nguy hiểm',
-            'poor_signal': 'Tín hiệu yếu',
-            'no_finger': 'Không phát hiện ngón tay',
-            'initializing': 'Đang đo...'
-        }
-        
-        self.status_label.text = status_text.get(status, 'Chưa rõ')
+        # Tạo pulse effect
+        pulse_anim = Animation(background_color=(1, 0.3, 0.3, 1), duration=0.5) + \
+                    Animation(background_color=self.status_color, duration=0.5)
+        pulse_anim.repeat = True
+        pulse_anim.start(self)
+        self.pulse_animation = pulse_anim
+    
+    def stop_pulse_animation(self):
+        """Dừng animation pulse"""
+        if self.pulse_animation:
+            self.pulse_animation.cancel(self)
+            self.pulse_animation = None
 
 
-class BloodPressureCard(BoxLayout):
-    """Widget đặc biệt cho huyết áp (hiển thị 2 giá trị)"""
+class StatusBar(BoxLayout):
+    """Thanh trạng thái hiển thị thời gian và thông tin hệ thống"""
     
     def __init__(self, **kwargs):
-        super().__init__(orientation='vertical', spacing=5, **kwargs)
+        super().__init__(orientation='horizontal', size_hint_y=0.12, **kwargs)
         
-        # Background
-        with self.canvas.before:
-            Color(0.2, 0.2, 0.2, 1)
-            self.rect = Rectangle(size=self.size, pos=self.pos)
-        self.bind(size=self._update_rect, pos=self._update_rect)
-        
-        # Title
-        self.title_label = Label(
-            text='Huyết áp',
+        # Thời gian
+        self.time_label = Label(
+            text=datetime.now().strftime('%H:%M:%S'),
             font_size='14sp',
-            size_hint_y=0.2,
-            color=(0.8, 0.8, 0.8, 1)
+            size_hint_x=0.4
         )
-        self.add_widget(self.title_label)
+        self.add_widget(self.time_label)
         
-        # BP values container
-        bp_container = BoxLayout(orientation='horizontal', size_hint_y=0.5)
-        
-        self.systolic_label = Label(
-            text='--',
-            font_size='24sp',
-            bold=True,
-            color=(1, 1, 1, 1)
+        # Thông tin bệnh nhân
+        self.patient_label = Label(
+            text='Bệnh nhân: Demo User',
+            font_size='12sp',
+            size_hint_x=0.4
         )
-        bp_container.add_widget(self.systolic_label)
+        self.add_widget(self.patient_label)
         
-        separator = Label(
-            text='/',
-            font_size='20sp',
+        # Nút cài đặt
+        settings_btn = Button(
+            text='⚙',
+            font_size='18sp',
             size_hint_x=0.2,
-            color=(0.8, 0.8, 0.8, 1)
+            background_color=(0.4, 0.4, 0.4, 1)
         )
-        bp_container.add_widget(separator)
+        self.add_widget(settings_btn)
         
-        self.diastolic_label = Label(
-            text='--',
-            font_size='24sp',
-            bold=True,
-            color=(1, 1, 1, 1)
-        )
-        bp_container.add_widget(self.diastolic_label)
-        
-        self.add_widget(bp_container)
-        
-        # Unit label
-        self.unit_label = Label(
-            text='mmHg\n(90-140 / 60-90)',
-            font_size='10sp',
-            size_hint_y=0.2,
-            color=(0.6, 0.6, 0.6, 1)
-        )
-        self.add_widget(self.unit_label)
-        
-        # Status
-        self.status_label = Label(
-            text='Chưa đo',
-            font_size='10sp',
-            size_hint_y=0.1,
-            color=(0.6, 0.6, 0.6, 1)
-        )
-        self.add_widget(self.status_label)
+        # Cập nhật thời gian định kỳ
+        Clock.schedule_interval(self.update_time, 1)
     
-    def _update_rect(self, instance, value):
-        self.rect.pos = instance.pos
-        self.rect.size = instance.size
-    
-    def update_values(self, systolic: float, diastolic: float, status: str = 'normal'):
-        """Update blood pressure values"""
-        if systolic > 0 and diastolic > 0:
-            self.systolic_label.text = f"{systolic:.0f}"
-            self.diastolic_label.text = f"{diastolic:.0f}"
-        else:
-            self.systolic_label.text = '--'
-            self.diastolic_label.text = '--'
-        
-        # Color coding
-        status_colors = {
-            'normal': (0.2, 0.8, 0.2, 1),
-            'high': (1, 0.6, 0, 1),
-            'critical': (1, 0.2, 0.2, 1)
-        }
-        
-        color = status_colors.get(status, (1, 1, 1, 1))
-        self.systolic_label.color = color
-        self.diastolic_label.color = color
-        
-        status_text = {
-            'normal': 'Bình thường',
-            'high': 'Cao',
-            'critical': 'Rất cao'
-        }
-        
-        self.status_label.text = status_text.get(status, 'Chưa đo')
+    def update_time(self, dt):
+        """Cập nhật thời gian"""
+        self.time_label.text = datetime.now().strftime('%H:%M:%S')
+
+
+
 
 
 class DashboardScreen(Screen):
@@ -291,45 +192,38 @@ class DashboardScreen(Screen):
         parent.add_widget(header)
     
     def _create_vital_signs_grid(self, parent):
-        """Create grid of vital signs cards"""
-        # Container for vital signs
-        vitals_container = BoxLayout(orientation='vertical', size_hint_y=0.7, spacing=5)
+        """Create 3 sensor buttons layout"""
+        # Container for sensor buttons
+        sensors_container = BoxLayout(orientation='vertical', size_hint_y=0.75, spacing=15, padding=[20, 10])
         
-        # Top row: Heart Rate and SpO2
-        top_row = BoxLayout(orientation='horizontal', spacing=10, size_hint_y=0.5)
-        
-        self.heart_rate_card = VitalSignCard(
-            title='Nhịp tim',
-            unit='bpm',
-            normal_range='60-100'
+        # Heart Rate button (MAX30102)
+        self.heart_rate_button = SensorButton(
+            sensor_name="Nhịp tim & SpO2",
+            icon="❤",
+            status_color=(0.3, 0.6, 0.3, 1)
         )
-        top_row.add_widget(self.heart_rate_card)
+        self.heart_rate_button.bind(on_press=self._on_heart_rate_pressed)
+        sensors_container.add_widget(self.heart_rate_button)
         
-        self.spo2_card = VitalSignCard(
-            title='SpO2',
-            unit='%',
-            normal_range='95-100'
+        # Temperature button (MLX90614)
+        self.temperature_button = SensorButton(
+            sensor_name="Nhiệt độ",
+            icon="🌡",
+            status_color=(0.6, 0.4, 0.2, 1)
         )
-        top_row.add_widget(self.spo2_card)
+        self.temperature_button.bind(on_press=self._on_temperature_pressed)
+        sensors_container.add_widget(self.temperature_button)
         
-        vitals_container.add_widget(top_row)
-        
-        # Bottom row: Temperature and Blood Pressure
-        bottom_row = BoxLayout(orientation='horizontal', spacing=10, size_hint_y=0.5)
-        
-        self.temperature_card = VitalSignCard(
-            title='Nhiệt độ',
-            unit='°C',
-            normal_range='36.0-37.5'
+        # Blood Pressure button
+        self.bp_button = SensorButton(
+            sensor_name="Huyết áp",
+            icon="🩺",
+            status_color=(0.6, 0.3, 0.3, 1)
         )
-        bottom_row.add_widget(self.temperature_card)
+        self.bp_button.bind(on_press=self._on_blood_pressure_pressed)
+        sensors_container.add_widget(self.bp_button)
         
-        self.bp_card = BloodPressureCard()
-        bottom_row.add_widget(self.bp_card)
-        
-        vitals_container.add_widget(bottom_row)
-        
-        parent.add_widget(vitals_container)
+        parent.add_widget(sensors_container)
     
     def _create_bottom_navigation(self, parent):
         """Create bottom navigation buttons"""
@@ -364,6 +258,18 @@ class DashboardScreen(Screen):
         
         parent.add_widget(nav_layout)
     
+    def _on_heart_rate_pressed(self, instance):
+        """Handle heart rate button press"""
+        self.app_instance.navigate_to_screen('heart_rate')
+    
+    def _on_temperature_pressed(self, instance):
+        """Handle temperature button press"""
+        self.app_instance.navigate_to_screen('temperature')
+    
+    def _on_blood_pressure_pressed(self, instance):
+        """Handle blood pressure button press"""
+        self.app_instance.navigate_to_screen('bp_measurement')
+    
     def _on_emergency_pressed(self, instance):
         """Handle emergency button press"""
         # TODO: Implement emergency alert
@@ -372,103 +278,179 @@ class DashboardScreen(Screen):
     def update_data(self, sensor_data: Dict[str, Any]):
         """Update display with new sensor data"""
         try:
-            # Update time
-            self.time_label.text = datetime.now().strftime('%H:%M:%S - %d/%m/%Y')
-            
-            # Update heart rate
+            # Update heart rate button based on MAX30102 sensor logic
             hr = sensor_data.get('heart_rate', 0)
-            hr_status = self._get_heart_rate_status(hr)
-            
-            # Check sensor status for heart rate
-            max30102_status = sensor_data.get('sensor_status', {}).get('MAX30102', {})
-            if not max30102_status.get('finger_detected', False):
-                hr_status = 'no_finger'
-            elif max30102_status.get('status') == 'poor_signal':
-                hr_status = 'poor_signal'
-            elif max30102_status.get('status') == 'initializing':
-                hr_status = 'initializing'
-            
-            self.heart_rate_card.update_value(hr, hr_status)
-            
-            # Update SpO2
             spo2 = sensor_data.get('spo2', 0)
-            spo2_status = self._get_spo2_status(spo2)
+            max30102_status = sensor_data.get('sensor_status', {}).get('MAX30102', {})
             
-            # Use same sensor status as heart rate
-            if not max30102_status.get('finger_detected', False):
-                spo2_status = 'no_finger'
-            elif max30102_status.get('status') == 'poor_signal':
-                spo2_status = 'poor_signal'
-            elif max30102_status.get('status') == 'initializing':
-                spo2_status = 'initializing'
+            # Use MAX30102 measurement status
+            measurement_status = max30102_status.get('status', 'no_finger')
+            hr_valid = sensor_data.get('hr_valid', False)
+            spo2_valid = sensor_data.get('spo2_valid', False)
+            signal_quality = max30102_status.get('signal_quality', 0)
             
-            self.spo2_card.update_value(spo2, spo2_status)
+            if measurement_status == 'no_finger':
+                hr_display = "Đặt ngón tay"
+                hr_status = "Chưa phát hiện"
+                color = (0.4, 0.4, 0.4, 1)
+            elif measurement_status == 'initializing':
+                hr_display = "Đang khởi tạo..."
+                hr_status = "Đang chuẩn bị"
+                color = (0.6, 0.6, 0.3, 1)
+            elif measurement_status == 'poor_signal':
+                hr_display = "Tín hiệu yếu"
+                hr_status = f"Chất lượng: {signal_quality:.0f}%"
+                color = (0.6, 0.4, 0.2, 1)
+            elif measurement_status in ['good', 'partial']:
+                # Show valid readings based on MAX30102 validation ranges
+                hr_text = f"{hr:.0f} bpm" if (hr_valid and 40 <= hr <= 200) else "--"
+                spo2_text = f"{spo2:.0f}%" if (spo2_valid and 70 <= spo2 <= 100) else "--"
+                hr_display = f"❤ {hr_text}\n🫁 {spo2_text}"
+                
+                # Status based on both HR and SpO2
+                hr_status = self._get_combined_hr_status(hr, spo2, hr_valid, spo2_valid)
+                color = self._get_status_color(hr_status)
+            else:
+                hr_display = "Lỗi cảm biến"
+                hr_status = "Kiểm tra kết nối"
+                color = (0.8, 0.2, 0.2, 1)
             
-            # Update temperature
-            temp = sensor_data.get('temperature', 0)
-            temp_status = self._get_temperature_status(temp)
-            self.temperature_card.update_value(temp, temp_status)
+            self.heart_rate_button.update_sensor_data(hr_display, hr_status, color)
             
-            # Update blood pressure
+            # Update temperature button based on MLX90614 sensor logic
+            object_temp = sensor_data.get('temperature', 0)
+            ambient_temp = sensor_data.get('ambient_temperature', 0)
+            mlx90614_status = sensor_data.get('sensor_status', {}).get('MLX90614', {})
+            temp_status_code = mlx90614_status.get('status', 'normal')
+            measurement_type = mlx90614_status.get('measurement_type', 'object')
+            
+            # Validate temperature using MLX90614 ranges
+            if object_temp > 0 and -70 <= object_temp <= 380:
+                temp_display = f"🌡 {object_temp:.1f}°C"
+                if ambient_temp > 0 and -40 <= ambient_temp <= 85:
+                    temp_display += f"\n🏠 {ambient_temp:.1f}°C"
+                
+                # Map MLX90614 status to display text
+                temp_status = self._get_mlx90614_status_text(temp_status_code, object_temp)
+                color = self._get_mlx90614_status_color(temp_status_code, object_temp)
+            else:
+                if object_temp <= 0:
+                    temp_display = "Không có tín hiệu"
+                    temp_status = "Kiểm tra cảm biến"
+                elif object_temp < -70:
+                    temp_display = "Quá thấp"
+                    temp_status = "< -70°C"
+                elif object_temp > 380:
+                    temp_display = "Quá cao"
+                    temp_status = "> 380°C"
+                else:
+                    temp_display = "Chưa đo"
+                    temp_status = "Sẵn sàng"
+                color = (0.6, 0.4, 0.2, 1)
+            
+            self.temperature_button.update_sensor_data(temp_display, temp_status, color)
+            
+            # Update blood pressure button
             systolic = sensor_data.get('blood_pressure_systolic', 0)
             diastolic = sensor_data.get('blood_pressure_diastolic', 0)
-            bp_status = self._get_bp_status(systolic, diastolic)
-            self.bp_card.update_values(systolic, diastolic, bp_status)
+            
+            if systolic > 0 and diastolic > 0:
+                bp_display = f"{systolic:.0f}/{diastolic:.0f} mmHg"
+                bp_status = self._get_bp_status_text(systolic, diastolic)
+                color = self._get_bp_status_color(systolic, diastolic)
+            else:
+                bp_display = "Chưa đo"
+                bp_status = "Nhấn để đo"
+                color = (0.6, 0.3, 0.3, 1)
+            
+            self.bp_button.update_sensor_data(bp_display, bp_status, color)
             
         except Exception as e:
             self.logger.error(f"Error updating dashboard data: {e}")
     
-    def _get_heart_rate_status(self, hr: float) -> str:
-        """Get heart rate status"""
-        if hr <= 0:
-            return 'poor_signal'
-        elif hr < 50:
+    def _get_combined_hr_status(self, hr: float, spo2: float, hr_valid: bool, spo2_valid: bool) -> str:
+        """Get combined HR and SpO2 status based on MAX30102 logic"""
+        if not hr_valid and not spo2_valid:
+            return 'invalid'
+        
+        # Check critical conditions first (following MAX30102 thresholds)
+        if hr_valid and (hr < 40 or hr > 200):
             return 'critical'
-        elif hr < 60:
-            return 'low'
-        elif hr <= 100:
+        if spo2_valid and spo2 < 70:
+            return 'critical'
+            
+        # Check warning conditions
+        if hr_valid and (hr < 60 or hr > 150):
+            return 'warning'
+        if spo2_valid and spo2 < 90:
+            return 'critical'  # SpO2 < 90 is critical
+        elif spo2_valid and spo2 < 95:
+            return 'warning'
+            
+        # Both values are in normal range
+        if hr_valid and spo2_valid:
             return 'normal'
-        elif hr <= 150:
-            return 'high'
+        elif hr_valid or spo2_valid:
+            return 'partial'  # Only one measurement valid
         else:
-            return 'critical'
+            return 'invalid'
     
-    def _get_spo2_status(self, spo2: float) -> str:
-        """Get SpO2 status"""
-        if spo2 <= 0:
-            return 'poor_signal'
-        elif spo2 < 90:
-            return 'critical'
-        elif spo2 < 95:
-            return 'low'
+    def _get_mlx90614_status_text(self, status_code: str, temp: float) -> str:
+        """Get temperature status text based on MLX90614 status codes"""
+        if status_code == 'critical_low':
+            return f'Rất thấp ({temp:.1f}°C)'
+        elif status_code == 'low':
+            return f'Thấp ({temp:.1f}°C)'
+        elif status_code == 'normal':
+            return f'Bình thường ({temp:.1f}°C)'
+        elif status_code == 'high':
+            return f'Hơi sốt ({temp:.1f}°C)'
+        elif status_code == 'critical_high':
+            return f'Sốt cao ({temp:.1f}°C)'
         else:
-            return 'normal'
+            return f'Đo được ({temp:.1f}°C)'
     
-    def _get_temperature_status(self, temp: float) -> str:
-        """Get temperature status"""
-        if temp <= 0:
-            return 'poor_signal'
-        elif temp < 35.0:
-            return 'critical'
-        elif temp < 36.0:
-            return 'low'
-        elif temp <= 37.5:
-            return 'normal'
-        elif temp <= 39.0:
-            return 'high'
-        else:
-            return 'critical'
-    
-    def _get_bp_status(self, systolic: float, diastolic: float) -> str:
-        """Get blood pressure status"""
-        if systolic <= 0 or diastolic <= 0:
-            return 'normal'  # Not measured yet
+    def _get_bp_status_text(self, systolic: float, diastolic: float) -> str:
+        """Get blood pressure status text"""
+        if systolic >= 180 or diastolic >= 110:
+            return 'Rất cao'
         elif systolic >= 140 or diastolic >= 90:
-            return 'high'
-        elif systolic >= 160 or diastolic >= 100:
-            return 'critical'
+            return 'Cao'
+        elif systolic < 90 or diastolic < 60:
+            return 'Thấp'
         else:
-            return 'normal'
+            return 'Bình thường'
+    
+    def _get_status_color(self, status: str) -> tuple:
+        """Get color for status"""
+        colors = {
+            'normal': (0.2, 0.8, 0.2, 1),      # Green
+            'partial': (0.2, 0.6, 0.8, 1),     # Blue  
+            'warning': (1, 0.8, 0, 1),         # Yellow
+            'critical': (1, 0.2, 0.2, 1),      # Red
+            'invalid': (0.5, 0.5, 0.5, 1),     # Gray
+        }
+        return colors.get(status, (0.5, 0.5, 0.5, 1))
+    
+    def _get_mlx90614_status_color(self, status_code: str, temp: float) -> tuple:
+        """Get color for MLX90614 temperature status"""
+        if status_code in ['critical_low', 'critical_high']:
+            return (1, 0.2, 0.2, 1)  # Red - Critical
+        elif status_code in ['low', 'high']:
+            return (1, 0.8, 0, 1)    # Yellow - Warning
+        elif status_code == 'normal':
+            return (0.2, 0.8, 0.2, 1)  # Green - Normal
+        else:
+            return (0.6, 0.4, 0.2, 1)  # Orange - Default
+    
+    def _get_bp_status_color(self, systolic: float, diastolic: float) -> tuple:
+        """Get color for BP status"""
+        if systolic >= 180 or diastolic >= 110 or systolic < 90 or diastolic < 60:
+            return (1, 0.2, 0.2, 1)  # Red
+        elif systolic >= 140 or diastolic >= 90:
+            return (1, 0.8, 0, 1)    # Yellow
+        else:
+            return (0.2, 0.8, 0.2, 1)  # Green
     
     def on_enter(self):
         """Called when screen is entered"""
@@ -477,92 +459,3 @@ class DashboardScreen(Screen):
     def on_leave(self):
         """Called when screen is left"""
         self.logger.info("Dashboard screen left")
-        """
-        Update heart rate and SpO2 display
-        
-        Args:
-            heart_rate: Heart rate value
-            spo2: SpO2 value
-        """
-        pass
-    
-    def update_temperature(self, temperature: float):
-        """
-        Update temperature display
-        
-        Args:
-            temperature: Temperature value
-        """
-        pass
-    
-    def update_blood_pressure(self, systolic: float, diastolic: float, map_value: float):
-        """
-        Update blood pressure display
-        
-        Args:
-            systolic: Systolic pressure
-            diastolic: Diastolic pressure
-            map_value: Mean arterial pressure
-        """
-        pass
-    
-    def update_sensor_status(self, sensor_name: str, status: str, color: str):
-        """
-        Update sensor status indicator
-        
-        Args:
-            sensor_name: Name of sensor
-            status: Status text
-            color: Color for status indicator
-        """
-        pass
-    
-    def _apply_threshold_colors(self, value: float, thresholds: Dict[str, float]) -> str:
-        """
-        Apply color based on threshold values
-        
-        Args:
-            value: Current value
-            thresholds: Dictionary of threshold values
-            
-        Returns:
-            Color string for display
-        """
-        pass
-    
-    def _update_sparklines(self, sensor_data: Dict[str, Any]):
-        """
-        Update sparkline charts with new data
-        
-        Args:
-            sensor_data: New sensor data
-        """
-        pass
-    
-    def on_measure_bp_button(self):
-        """
-        Handle blood pressure measurement button press
-        """
-        pass
-    
-    def on_settings_button(self):
-        """
-        Handle settings button press
-        """
-        pass
-    
-    def show_alert_banner(self, alert_message: str, alert_type: str):
-        """
-        Show alert banner on dashboard
-        
-        Args:
-            alert_message: Alert message text
-            alert_type: Type of alert
-        """
-        pass
-    
-    def hide_alert_banner(self):
-        """
-        Hide alert banner
-        """
-        pass
