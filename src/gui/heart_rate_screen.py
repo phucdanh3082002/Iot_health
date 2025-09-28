@@ -376,6 +376,11 @@ class HeartRateScreen(Screen):
     def _start_measurement(self):
         """Start measurement process"""
         try:
+            if not self.app_instance.ensure_sensor_started('MAX30102'):
+                self.status_label.text = 'Không thể khởi động cảm biến nhịp tim'
+                self.logger.error("Failed to start MAX30102 sensor on demand")
+                return
+
             self.measuring = True
             self.measurement_start_time = time.time()
             self.stable_readings = 0
@@ -453,6 +458,8 @@ class HeartRateScreen(Screen):
             
         except Exception as e:
             self.logger.error(f"Error stopping measurement: {e}")
+        finally:
+            self.app_instance.stop_sensor('MAX30102')
     
     def _update_measurement(self, dt):
         """Update measurement progress with 5-second timer and data filtering"""

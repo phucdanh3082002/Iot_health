@@ -394,6 +394,11 @@ class TemperatureScreen(Screen):
     def _start_measurement(self):
         """Start temperature measurement"""
         try:
+            if not self.app_instance.ensure_sensor_started('MLX90614'):
+                self.status_label.text = 'Không thể khởi động cảm biến nhiệt độ'
+                self.logger.error("Failed to start MLX90614 sensor on demand")
+                return
+
             self.measuring = True
             self.measurements.clear()
             self.stable_count = 0
@@ -433,6 +438,8 @@ class TemperatureScreen(Screen):
             
         except Exception as e:
             self.logger.error(f"Error stopping measurement: {e}")
+        finally:
+            self.app_instance.stop_sensor('MLX90614')
     
     def _update_measurement(self, dt):
         """Update measurement progress"""
