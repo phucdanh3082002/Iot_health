@@ -640,6 +640,9 @@ class HeartRateScreen(Screen):
         self.current_hr = 0
         self.current_spo2 = 0
         self.stable_readings = 0
+        
+        # Auto-start measurement when entering screen
+        self._start_measurement()
     
     def on_leave(self):
         """Called when screen is left"""

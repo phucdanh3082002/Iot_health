@@ -539,6 +539,9 @@ class TemperatureScreen(Screen):
         self.progress_bar.value = 0
         self.status_label.text = 'Sẵn sàng đo'
         self.temp_gauge.update_temperature(36.0)
+        
+        # Auto-start measurement when entering screen
+        self._start_measurement()
     
     def on_leave(self):
         """Called when screen is left"""

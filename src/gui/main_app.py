@@ -20,6 +20,20 @@ project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
+# Import sensor classes for direct integration
+try:
+    # Import sensor logic directly
+    from src.sensors.max30102_sensor import MAX30102Sensor
+    from src.sensors.mlx90614_sensor import MLX90614Sensor
+    from src.sensors.blood_pressure_sensor import BloodPressureSensor
+    from src.sensors.base_sensor import BaseSensor
+except ImportError as e:
+    logging.warning(f"Could not import sensor classes: {e}")
+    MAX30102Sensor = None
+    MLX90614Sensor = None
+    BloodPressureSensor = None
+    BaseSensor = None
+
 # Import screens - handle both relative and absolute imports
 try:
     # Try relative imports (when run as module)
@@ -61,14 +75,14 @@ class HealthMonitorApp(App):
         current_data (Dict): Latest sensor data
     """
     
-    def __init__(self, config: Dict[str, Any], sensors: Dict, database=None, 
+    def __init__(self, config: Dict[str, Any], sensors: Dict = None, database=None, 
                  mqtt_client=None, alert_system=None, **kwargs):
         """
         Initialize HealthMonitorApp
         
         Args:
             config: Application configuration
-            sensors: Dictionary of sensor instances
+            sensors: Dictionary of sensor instances (optional - will create from config)
             database: Database manager
             mqtt_client: MQTT client
             alert_system: Alert system
@@ -76,10 +90,15 @@ class HealthMonitorApp(App):
         super().__init__(**kwargs)
         
         self.config_data = config
-        self.sensors = sensors
         self.database = database
         self.mqtt_client = mqtt_client
         self.alert_system = alert_system
+        
+        # Initialize sensors from config or use provided ones
+        if sensors is None:
+            self.sensors = self._create_sensors_from_config()
+        else:
+            self.sensors = sensors
         
         # Current sensor data
         self.current_data = {
@@ -99,6 +118,62 @@ class HealthMonitorApp(App):
         # Setup logging
         self.logger = logging.getLogger(__name__)
     
+    def _create_sensors_from_config(self) -> Dict[str, Any]:
+        """
+        Create sensor instances from configuration
+        
+        Returns:
+            Dictionary of sensor instances
+        """
+        sensors = {}
+        
+        try:
+            sensor_configs = self.config_data.get('sensors', {})
+            
+            # Create MAX30102 sensor if enabled
+            if sensor_configs.get('max30102', {}).get('enabled', False) and MAX30102Sensor:
+                try:
+                    max30102_config = sensor_configs['max30102']
+                    sensor = MAX30102Sensor(max30102_config)
+                    if sensor.initialize():
+                        sensors['MAX30102'] = sensor
+                        logging.info("MAX30102 sensor created and initialized")
+                    else:
+                        logging.warning("MAX30102 sensor failed to initialize")
+                except Exception as e:
+                    logging.error(f"Error creating MAX30102 sensor: {e}")
+            
+            # Create MLX90614 sensor if enabled
+            if sensor_configs.get('mlx90614', {}).get('enabled', False) and MLX90614Sensor:
+                try:
+                    mlx90614_config = sensor_configs['mlx90614']
+                    sensor = MLX90614Sensor(mlx90614_config)
+                    if sensor.initialize():
+                        sensors['MLX90614'] = sensor
+                        logging.info("MLX90614 sensor created and initialized")
+                    else:
+                        logging.warning("MLX90614 sensor failed to initialize")
+                except Exception as e:
+                    logging.error(f"Error creating MLX90614 sensor: {e}")
+            
+            # Create Blood Pressure sensor if enabled
+            if sensor_configs.get('blood_pressure', {}).get('enabled', False) and BloodPressureSensor:
+                try:
+                    bp_config = sensor_configs['blood_pressure']
+                    sensor = BloodPressureSensor(bp_config)
+                    if sensor.initialize():
+                        sensors['BloodPressure'] = sensor
+                        logging.info("BloodPressure sensor created and initialized")
+                    else:
+                        logging.warning("BloodPressure sensor failed to initialize")
+                except Exception as e:
+                    logging.error(f"Error creating BloodPressure sensor: {e}")
+            
+        except Exception as e:
+            logging.error(f"Error creating sensors from config: {e}")
+        
+        return sensors
+    
     def build(self):
         """
         Build the main application
@@ -106,8 +181,9 @@ class HealthMonitorApp(App):
         Returns:
             Root widget (ScreenManager)
         """
-        # Create screen manager with no transition for performance
-        self.screen_manager = ScreenManager(transition=NoTransition())
+        # Create screen manager with transition for clear navigation
+        from kivy.uix.screenmanager import FadeTransition
+        self.screen_manager = ScreenManager(transition=FadeTransition(duration=0.3))
         
         # Create screens
         dashboard = DashboardScreen(app_instance=self, name='dashboard')
@@ -143,21 +219,45 @@ class HealthMonitorApp(App):
         try:
             # Setup callback for MAX30102 (heart rate and SpO2)
             if 'MAX30102' in self.sensors and self.sensors['MAX30102']:
-                if hasattr(self.sensors['MAX30102'], 'enabled') and self.sensors['MAX30102'].enabled:
-                    self.sensors['MAX30102'].set_data_callback(self.on_max30102_data)
+                sensor = self.sensors['MAX30102']
+                if hasattr(sensor, 'is_running') and sensor.is_running:
+                    sensor.set_data_callback(self.on_max30102_data)
                     self.logger.info("MAX30102 callback setup successfully")
+                elif hasattr(sensor, 'start'):
+                    # Try to start sensor if not running
+                    if sensor.initialize() and sensor.start():
+                        sensor.set_data_callback(self.on_max30102_data)
+                        self.logger.info("MAX30102 started and callback setup successfully")
+                    else:
+                        self.logger.warning("Failed to start MAX30102 sensor")
                 
             # Setup callback for MLX90614 (temperature)
             if 'MLX90614' in self.sensors and self.sensors['MLX90614']:
-                if hasattr(self.sensors['MLX90614'], 'enabled') and self.sensors['MLX90614'].enabled:
-                    self.sensors['MLX90614'].set_data_callback(self.on_temperature_data)
+                sensor = self.sensors['MLX90614']
+                if hasattr(sensor, 'is_running') and sensor.is_running:
+                    sensor.set_data_callback(self.on_temperature_data)
                     self.logger.info("MLX90614 callback setup successfully")
+                elif hasattr(sensor, 'start'):
+                    # Try to start sensor if not running
+                    if sensor.initialize() and sensor.start():
+                        sensor.set_data_callback(self.on_temperature_data)
+                        self.logger.info("MLX90614 started and callback setup successfully")
+                    else:
+                        self.logger.warning("Failed to start MLX90614 sensor")
                 
             # Setup callback for blood pressure (if available)
             if 'BloodPressure' in self.sensors and self.sensors['BloodPressure']:
-                if hasattr(self.sensors['BloodPressure'], 'enabled') and self.sensors['BloodPressure'].enabled:
-                    self.sensors['BloodPressure'].set_data_callback(self.on_blood_pressure_data)
+                sensor = self.sensors['BloodPressure']
+                if hasattr(sensor, 'is_running') and sensor.is_running:
+                    sensor.set_data_callback(self.on_blood_pressure_data)
                     self.logger.info("BloodPressure callback setup successfully")
+                elif hasattr(sensor, 'start'):
+                    # Try to start sensor if not running
+                    if sensor.initialize() and sensor.start():
+                        sensor.set_data_callback(self.on_blood_pressure_data)
+                        self.logger.info("BloodPressure started and callback setup successfully")
+                    else:
+                        self.logger.warning("Failed to start BloodPressure sensor")
                 
         except Exception as e:
             self.logger.error(f"Error setting up sensor callbacks: {e}")
@@ -165,24 +265,50 @@ class HealthMonitorApp(App):
     def on_max30102_data(self, sensor_name: str, data: Dict[str, Any]):
         """Handle MAX30102 sensor data updates"""
         try:
-            # Update heart rate and SpO2 with validation from MAX30102 logic
-            self.current_data['heart_rate'] = data.get('heart_rate', 0)
-            self.current_data['spo2'] = data.get('spo2', 0)
-            self.current_data['hr_valid'] = data.get('hr_valid', False)
-            self.current_data['spo2_valid'] = data.get('spo2_valid', False)
+            # Get sensor instance for direct access to properties
+            sensor = self.sensors.get('MAX30102')
             
-            # Store comprehensive sensor status
-            self.current_data['sensor_status']['MAX30102'] = {
-                'status': data.get('status', 'unknown'),
-                'finger_detected': data.get('finger_detected', False),
-                'signal_quality': data.get('signal_quality_ir', 0),
-                'signal_quality_red': data.get('signal_quality_red', 0),
-                'buffer_fill': data.get('buffer_fill', 0),
-                'readings_count': data.get('readings_count', 0)
-            }
+            # Update heart rate and SpO2 with validation from MAX30102 logic
+            if sensor:
+                # Use sensor's current values directly
+                self.current_data['heart_rate'] = getattr(sensor, 'heart_rate', 0)
+                self.current_data['spo2'] = getattr(sensor, 'spo2', 0)
+                self.current_data['hr_valid'] = getattr(sensor, 'hr_valid', False)
+                self.current_data['spo2_valid'] = getattr(sensor, 'spo2_valid', False)
+                self.current_data['finger_detected'] = getattr(sensor, 'finger_detected', False)
+                
+                # Get signal quality metrics
+                self.current_data['signal_quality_ir'] = getattr(sensor, 'signal_quality_ir', 0)
+                self.current_data['signal_quality_red'] = getattr(sensor, 'signal_quality_red', 0)
+                
+                # Get measurement status from sensor methods
+                hr_status = sensor.get_heart_rate_status() if hasattr(sensor, 'get_heart_rate_status') else 'unknown'
+                spo2_status = sensor.get_spo2_status() if hasattr(sensor, 'get_spo2_status') else 'unknown'
+                
+                # Store comprehensive sensor status
+                self.current_data['sensor_status']['MAX30102'] = {
+                    'hr_status': hr_status,
+                    'spo2_status': spo2_status,
+                    'finger_detected': self.current_data['finger_detected'],
+                    'signal_quality_ir': self.current_data['signal_quality_ir'],
+                    'signal_quality_red': self.current_data['signal_quality_red'],
+                    'buffer_fill': len(getattr(sensor, 'ir_buffer', [])),
+                    'readings_count': getattr(sensor, 'readings_count', 0),
+                    'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid']
+                }
+            else:
+                # Fallback to data from callback if sensor not available
+                self.current_data['heart_rate'] = data.get('heart_rate', 0)
+                self.current_data['spo2'] = data.get('spo2', 0)
+                self.current_data['hr_valid'] = data.get('hr_valid', False)
+                self.current_data['spo2_valid'] = data.get('spo2_valid', False)
+                self.current_data['finger_detected'] = data.get('finger_detected', False)
             
             # Update timestamp
             self.current_data['timestamp'] = data.get('timestamp', time.time())
+            
+            # Trigger immediate UI update
+            Clock.schedule_once(lambda dt: self.update_displays(dt), 0)
             
         except Exception as e:
             self.logger.error(f"Error processing MAX30102 data: {e}")
@@ -190,20 +316,48 @@ class HealthMonitorApp(App):
     def on_temperature_data(self, sensor_name: str, data: Dict[str, Any]):
         """Handle MLX90614 temperature sensor data updates"""
         try:
-            # Update temperature data following MLX90614 structure
-            self.current_data['temperature'] = data.get('temperature', 0)  # Primary temperature
-            self.current_data['ambient_temperature'] = data.get('ambient_temperature', 0)
-            self.current_data['object_temperature'] = data.get('object_temperature', 0)
+            # Get sensor instance for direct access to properties
+            sensor = self.sensors.get('MLX90614')
             
-            # Store MLX90614 sensor status
-            self.current_data['sensor_status']['MLX90614'] = {
-                'status': data.get('status', 'normal'),
-                'measurement_type': data.get('measurement_type', 'object'),
-                'temperature_unit': data.get('temperature_unit', 'celsius')
-            }
+            if sensor:
+                # Use sensor's current values directly from MLX90614 logic
+                self.current_data['temperature'] = getattr(sensor, 'object_temperature', 0)
+                self.current_data['ambient_temperature'] = getattr(sensor, 'ambient_temperature', 0)
+                self.current_data['object_temperature'] = getattr(sensor, 'object_temperature', 0)
+                
+                # Get temperature in both units
+                self.current_data['temperature_celsius'] = sensor.get_celsius() if hasattr(sensor, 'get_celsius') else self.current_data['temperature']
+                self.current_data['temperature_fahrenheit'] = sensor.get_fahrenheit() if hasattr(sensor, 'get_fahrenheit') else (self.current_data['temperature'] * 9/5) + 32
+                
+                # Store MLX90614 sensor status with actual sensor data
+                self.current_data['sensor_status']['MLX90614'] = {
+                    'status': 'normal',  # MLX90614 doesn't have complex status like MAX30102
+                    'measurement_type': 'object' if getattr(sensor, 'use_object_temp', True) else 'ambient',
+                    'temperature_unit': 'celsius',
+                    'temperature_offset': getattr(sensor, 'temperature_offset', 0),
+                    'smooth_factor': getattr(sensor, 'smooth_factor', 0.1),
+                    'ambient_temp': self.current_data['ambient_temperature'],
+                    'object_temp': self.current_data['object_temperature']
+                }
+            else:
+                # Fallback to data from callback if sensor not available
+                self.current_data['temperature'] = data.get('temperature', 0)
+                self.current_data['ambient_temperature'] = data.get('ambient_temperature', 0)
+                self.current_data['object_temperature'] = data.get('object_temperature', 0)
+                self.current_data['temperature_celsius'] = self.current_data['temperature']
+                self.current_data['temperature_fahrenheit'] = (self.current_data['temperature'] * 9/5) + 32
+                
+                self.current_data['sensor_status']['MLX90614'] = {
+                    'status': data.get('status', 'normal'),
+                    'measurement_type': data.get('measurement_type', 'object'),
+                    'temperature_unit': data.get('temperature_unit', 'celsius')
+                }
             
             # Update timestamp
             self.current_data['timestamp'] = time.time()
+            
+            # Trigger immediate UI update
+            Clock.schedule_once(lambda dt: self.update_displays(dt), 0)
             
         except Exception as e:
             self.logger.error(f"Error processing MLX90614 temperature data: {e}")
@@ -238,37 +392,110 @@ class HealthMonitorApp(App):
     def update_displays(self, dt):
         """Update all screen displays with current data"""
         try:
-            # Check if temperature data is missing and provide fallback
-            if self.current_data.get('temperature', 0) == 0:
-                # Simulate basic temperature data if no sensor data available
-                import random
-                self.current_data['temperature'] = 36.0 + random.random() * 1.5
-                self.current_data['ambient_temperature'] = 22.0 + random.random() * 6
-                self.current_data['object_temperature'] = self.current_data['temperature']
-                
-                if 'MLX90614' not in self.current_data['sensor_status']:
-                    self.current_data['sensor_status']['MLX90614'] = {
-                        'status': 'normal',
-                        'measurement_type': 'object',
-                        'temperature_unit': 'celsius'
-                    }
+            # Get real-time data from sensors if available
+            self._update_sensor_data_direct()
             
             # Update current screen
             current_screen = self.screen_manager.current_screen
             if hasattr(current_screen, 'update_data'):
-                current_screen.update_data(self.current_data)
-                
+                # Only update dashboard with real-time data when on dashboard
+                if current_screen.name == 'dashboard':
+                    current_screen.update_data(self.current_data)
+                else:
+                    # For measurement screens, only update if they request it
+                    # This prevents dashboard data from interfering with measurement screens
+                    pass
+                    
         except Exception as e:
             self.logger.error(f"Error updating displays: {e}")
+    
+    def _update_sensor_data_direct(self):
+        """Update sensor data directly from sensor instances"""
+        try:
+            # Update MAX30102 data directly
+            if 'MAX30102' in self.sensors and self.sensors['MAX30102']:
+                sensor = self.sensors['MAX30102']
+                if hasattr(sensor, 'is_running') and sensor.is_running:
+                    self.current_data['heart_rate'] = getattr(sensor, 'heart_rate', 0)
+                    self.current_data['spo2'] = getattr(sensor, 'spo2', 0)
+                    self.current_data['hr_valid'] = getattr(sensor, 'hr_valid', False)
+                    self.current_data['spo2_valid'] = getattr(sensor, 'spo2_valid', False)
+                    self.current_data['finger_detected'] = getattr(sensor, 'finger_detected', False)
+                    
+                    # Update status
+                    if not self.current_data['finger_detected']:
+                        hr_status = 'no_finger'
+                        spo2_status = 'no_finger'
+                    else:
+                        hr_status = sensor.get_heart_rate_status() if hasattr(sensor, 'get_heart_rate_status') else 'unknown'
+                        spo2_status = sensor.get_spo2_status() if hasattr(sensor, 'get_spo2_status') else 'unknown'
+                    
+                    self.current_data['sensor_status']['MAX30102'] = {
+                        'hr_status': hr_status,
+                        'spo2_status': spo2_status,
+                        'finger_detected': self.current_data['finger_detected'],
+                        'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid']
+                    }
+            
+            # Update MLX90614 data directly
+            if 'MLX90614' in self.sensors and self.sensors['MLX90614']:
+                sensor = self.sensors['MLX90614']
+                if hasattr(sensor, 'is_running') and sensor.is_running:
+                    self.current_data['temperature'] = getattr(sensor, 'object_temperature', 0)
+                    self.current_data['ambient_temperature'] = getattr(sensor, 'ambient_temperature', 0)
+                    self.current_data['object_temperature'] = getattr(sensor, 'object_temperature', 0)
+                    
+                    # Determine temperature status
+                    temp = self.current_data['temperature']
+                    if temp < 35.0:
+                        temp_status = 'critical_low'
+                    elif temp < 36.0:
+                        temp_status = 'low'
+                    elif temp <= 37.5:
+                        temp_status = 'normal'
+                    elif temp <= 39.0:
+                        temp_status = 'high'
+                    else:
+                        temp_status = 'critical_high'
+                    
+                    self.current_data['sensor_status']['MLX90614'] = {
+                        'status': temp_status,
+                        'measurement_type': 'object' if getattr(sensor, 'use_object_temp', True) else 'ambient',
+                        'temperature_unit': 'celsius'
+                    }
+            
+            # Set default values if no sensor data available
+            if self.current_data.get('temperature', 0) == 0:
+                # Only use fallback if absolutely no sensor data
+                if 'MLX90614' not in self.current_data['sensor_status']:
+                    self.current_data['temperature'] = 36.5  # Normal body temperature
+                    self.current_data['ambient_temperature'] = 25.0
+                    self.current_data['object_temperature'] = 36.5
+                    self.current_data['sensor_status']['MLX90614'] = {
+                        'status': 'disconnected',
+                        'measurement_type': 'object',
+                        'temperature_unit': 'celsius'
+                    }
+            
+        except Exception as e:
+            self.logger.error(f"Error updating sensor data directly: {e}")
     
     def navigate_to_screen(self, screen_name: str):
         """Navigate to specified screen"""
         try:
-            if screen_name in [screen.name for screen in self.screen_manager.screens]:
+            available_screens = [screen.name for screen in self.screen_manager.screens]
+            self.logger.info(f"Available screens: {available_screens}")
+            self.logger.info(f"Attempting to navigate to: {screen_name}")
+            
+            if screen_name in available_screens:
                 self.screen_manager.current = screen_name
-                self.logger.info(f"Navigated to {screen_name} screen")
+                self.logger.info(f"Successfully navigated to {screen_name} screen")
+                # Force update current screen
+                current_screen = self.screen_manager.current_screen
+                if hasattr(current_screen, 'on_enter'):
+                    current_screen.on_enter()
             else:
-                self.logger.warning(f"Screen {screen_name} not found")
+                self.logger.warning(f"Screen {screen_name} not found in available screens: {available_screens}")
                 
         except Exception as e:
             self.logger.error(f"Error navigating to screen {screen_name}: {e}")
@@ -398,45 +625,42 @@ def main():
     """Main function for running the app directly"""
     import sys
     import logging
+    import yaml
     
     # Setup basic logging
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     
-    # Create mock components for standalone testing
-    class MockSensor:
-        def __init__(self, name):
-            self.name = name
-            self.enabled = True
-            self.data_callback = None
-        
-        def set_data_callback(self, callback):
-            self.data_callback = callback
-        
-        def start(self):
-            return True
-        
-        def stop(self):
-            return True
+    # Load configuration from app_config.yaml
+    config = {}
+    try:
+        config_path = project_root / "config" / "app_config.yaml"
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            logger.info(f"Configuration loaded from {config_path}")
+        else:
+            logger.warning(f"Config file not found at {config_path}, using defaults")
+    except Exception as e:
+        logger.error(f"Error loading configuration: {e}")
     
-    # Mock configuration
-    config = {
-        'app': {'name': 'IoT Health Monitor', 'debug': True},
-        'patient': {'name': 'Test Patient', 'age': 65}
-    }
-    
-    # Mock sensors
-    sensors = {
-        'MAX30102': MockSensor('MAX30102'),
-        'MLX90614': MockSensor('MLX90614'),
-        'BloodPressure': MockSensor('BloodPressure')
-    }
+    # Set default config if empty
+    if not config:
+        config = {
+            'app': {'name': 'IoT Health Monitor', 'debug': True},
+            'patient': {'name': 'Test Patient', 'age': 65},
+            'sensors': {
+                'max30102': {'enabled': True},
+                'mlx90614': {'enabled': True},
+                'blood_pressure': {'enabled': False}
+            }
+        }
     
     try:
-        # Create and run app
+        # Create and run app with real sensor integration
         app = HealthMonitorApp(
             config=config,
-            sensors=sensors,
+            sensors=None,  # Will create from config
             database=None,
             mqtt_client=None,
             alert_system=None
@@ -444,6 +668,8 @@ def main():
         app.run()
     except Exception as e:
         logger.error(f"Error running app: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
