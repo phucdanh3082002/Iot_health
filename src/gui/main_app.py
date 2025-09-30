@@ -25,13 +25,19 @@ try:
     from src.sensors.mlx90614_sensor import MLX90614Sensor
     from src.sensors.blood_pressure_sensor import BloodPressureSensor
     from src.sensors.base_sensor import BaseSensor
-    from src.utils.tts_manager import PiperTTS
 except ImportError as e:
     logging.warning(f"Could not import sensor classes: {e}")
     MAX30102Sensor = None
     MLX90614Sensor = None
     BloodPressureSensor = None
     BaseSensor = None
+
+from src.utils.tts_manager import (
+    DEFAULT_PIPER_CONFIG,
+    DEFAULT_PIPER_MODEL,
+    ScenarioID,
+    TTSManager,
+)
 
 # Import screens - handle both relative and absolute imports
 try:
@@ -95,6 +101,7 @@ class HealthMonitorApp(App):
         self.database = database
         self.mqtt_client = mqtt_client
         self.alert_system = alert_system
+        self.audio_config = self.config_data.get('audio', {}) or {}
         
         # Initialize sensors from config or use provided ones
         if sensors is None:
@@ -102,7 +109,10 @@ class HealthMonitorApp(App):
         else:
             self.sensors = sensors
 
-        self.tts_manager = self._create_tts_manager()
+        self.tts_manager = self._init_tts_manager()
+        self._hr_finger_present: Optional[bool] = None
+        self._hr_last_announced: Optional[tuple[int, int]] = None
+        self._temp_last_status: Optional[str] = None
 
         # Default sensor status map aligns with available sensors
         default_status = {name: {'status': 'idle'} for name in self.sensors.keys()}
@@ -185,53 +195,63 @@ class HealthMonitorApp(App):
         
         return sensors
 
-    def _create_tts_manager(self) -> Optional[PiperTTS]:
-        """Initialize Piper TTS according to configuration."""
-        audio_cfg = self.config_data.get('audio', {}) or {}
-
-        if not audio_cfg.get('voice_enabled', True):
-            self.logger.info("Voice alerts disabled in configuration")
-            return None
-
-        if audio_cfg.get('tts_engine') != 'piper':
-            self.logger.info("Configured TTS engine is not Piper; skipping Piper initialization")
-            return None
-
-        piper_cfg = audio_cfg.get('piper', {}) or {}
-        model_path = piper_cfg.get('model_path')
-        if not model_path:
-            self.logger.warning("Piper model path missing in configuration")
-            return None
-
-        config_path = piper_cfg.get('config_path') or None
-        speaker = piper_cfg.get('speaker') or None
-
+    def _init_tts_manager(self) -> Optional[TTSManager]:
+        """Khởi tạo bộ quản lý TTS dựa theo cấu hình."""
         try:
-            tts = PiperTTS(Path(model_path), Path(config_path) if config_path else None, speaker)
-            self.logger.info("Piper TTS initialized successfully")
+            if not self.audio_config.get('enabled', True):
+                return None
+            if not self.audio_config.get('voice_enabled', True):
+                self.logger.info("Voice alerts disabled in configuration")
+                return None
+
+            engine_name = (self.audio_config.get('tts_engine') or 'piper').lower()
+            if engine_name != 'piper':
+                self.logger.warning("TTS engine '%s' chưa được hỗ trợ, tạm thời bỏ qua.", engine_name)
+                return None
+
+            piper_cfg = self.audio_config.get('piper', {}) or {}
+            model_path_value = piper_cfg.get('model_path')
+            config_path_value = piper_cfg.get('config_path')
+
+            model_path = Path(model_path_value) if model_path_value else DEFAULT_PIPER_MODEL
+            config_path = (
+                Path(config_path_value)
+                if config_path_value
+                else DEFAULT_PIPER_CONFIG if DEFAULT_PIPER_CONFIG.exists() else None
+            )
+            speaker = piper_cfg.get('speaker') or None
+
+            default_locale = self.audio_config.get('locale', 'vi')
+            default_volume = int(self.audio_config.get('volume', 100))
+
+            tts = TTSManager.create_default(
+                model_path=model_path,
+                config_path=config_path,
+                speaker=speaker,
+                default_locale=default_locale,
+                default_volume=default_volume,
+            )
+            self.logger.info("TTSManager khởi tạo thành công")
             return tts
-        except Exception as exc:
-            self.logger.error(f"Failed to initialize Piper TTS: {exc}")
+        except Exception as exc:  # pragma: no cover
+            self.logger.error(f"Không khởi tạo được TTSManager: {exc}")
             return None
 
-    def speak(self, message: str, volume: Optional[int] = None) -> None:
-        """Speak a message using the configured TTS engine."""
-        if not message:
-            return
+    def _speak_scenario(self, scenario: ScenarioID, **kwargs) -> bool:
+        if not self.tts_manager:
+            return False
+        return self.tts_manager.speak_scenario(scenario, **kwargs)
 
-        audio_cfg = self.config_data.get('audio', {}) or {}
-        if not audio_cfg.get('voice_enabled', True):
-            self.logger.debug("Voice alerts disabled; skipping speech: %s", message)
-            return
-
-        if self.tts_manager is None:
-            self.logger.warning("TTS manager unavailable; cannot speak: %s", message)
-            return
-
-        try:
-            self.tts_manager.speak(message, volume)
-        except Exception as exc:
-            self.logger.error(f"Failed to play TTS message: {exc}")
+    def _handle_navigation_tts(self, screen_name: str):
+        mapping = {
+            'dashboard': ScenarioID.NAVIGATE_DASHBOARD,
+            'heart_rate': ScenarioID.HR_PROMPT_FINGER,
+            'temperature': ScenarioID.TEMP_PREP,
+            'history': ScenarioID.HISTORY_OPEN,
+        }
+        scenario = mapping.get(screen_name)
+        if scenario:
+            self._speak_scenario(scenario)
     
     def build(self):
         """
@@ -388,6 +408,38 @@ class HealthMonitorApp(App):
                 self.current_data['hr_valid'] = data.get('hr_valid', False)
                 self.current_data['spo2_valid'] = data.get('spo2_valid', False)
                 self.current_data['finger_detected'] = data.get('finger_detected', False)
+
+            finger_detected = bool(self.current_data.get('finger_detected'))
+            previous_finger = self._hr_finger_present
+            self._hr_finger_present = finger_detected
+
+            if finger_detected:
+                if previous_finger is False or previous_finger is None:
+                    self._speak_scenario(ScenarioID.HR_MEASURING)
+            else:
+                if previous_finger:
+                    self._speak_scenario(ScenarioID.HR_NO_FINGER)
+                self._hr_last_announced = None
+
+            hr_valid = bool(self.current_data.get('hr_valid'))
+            spo2_valid = bool(self.current_data.get('spo2_valid'))
+            heart_rate_value = self.current_data.get('heart_rate')
+            spo2_value = self.current_data.get('spo2')
+
+            if hr_valid and spo2_valid and finger_detected:
+                if heart_rate_value is not None and spo2_value is not None:
+                    hr_int = int(round(heart_rate_value))
+                    spo2_int = int(round(spo2_value))
+                    if self._hr_last_announced != (hr_int, spo2_int):
+                        self._speak_scenario(ScenarioID.HR_RESULT, bpm=hr_int, spo2=spo2_int)
+                        self._hr_last_announced = (hr_int, spo2_int)
+            else:
+                if finger_detected and not hr_valid:
+                    signal_quality = self.current_data.get('signal_quality_ir')
+                    if isinstance(signal_quality, (int, float)) and signal_quality < 40:
+                        self._speak_scenario(ScenarioID.HR_SIGNAL_WEAK)
+                if not hr_valid or not spo2_valid:
+                    self._hr_last_announced = None
             
             # Update timestamp
             self.current_data['timestamp'] = data.get('timestamp', time.time())
@@ -437,6 +489,20 @@ class HealthMonitorApp(App):
                     'measurement_type': data.get('measurement_type', 'object'),
                     'temperature_unit': data.get('temperature_unit', 'celsius')
                 }
+
+            temp_status = data.get('status', 'normal')
+            temp_value = self.current_data.get('temperature_celsius')
+
+            if temp_status in ('normal',) and temp_value is not None:
+                if self._temp_last_status != 'normal':
+                    self._speak_scenario(ScenarioID.TEMP_NORMAL, temp=temp_value)
+                    self._temp_last_status = 'normal'
+            elif temp_status in ('high', 'critical_high'):
+                if self._temp_last_status != 'high':
+                    self._speak_scenario(ScenarioID.TEMP_HIGH_ALERT)
+                    self._temp_last_status = 'high'
+            else:
+                self._temp_last_status = temp_status
             
             # Update timestamp
             self.current_data['timestamp'] = time.time()
@@ -561,6 +627,7 @@ class HealthMonitorApp(App):
             if screen_name in available_screens:
                 self.screen_manager.current = screen_name
                 self.logger.info(f"Successfully navigated to {screen_name} screen")
+                self._handle_navigation_tts(screen_name)
                 # Force update current screen
                 current_screen = self.screen_manager.current_screen
                 if hasattr(current_screen, 'on_enter'):
@@ -594,6 +661,12 @@ class HealthMonitorApp(App):
         # Stop data updates
         self.stop_data_updates()
         
+        if self.tts_manager:
+            try:
+                self.tts_manager.shutdown()
+            except Exception as exc:
+                self.logger.error(f"Error shutting down TTS manager: {exc}")
+
         # Stop sensors
         for sensor_name, sensor in self.sensors.items():
             try:
@@ -613,7 +686,7 @@ class HealthMonitorApp(App):
         """
         Called when application starts
         """
-        pass
+        self._speak_scenario(ScenarioID.SYSTEM_START)
     
 
 
