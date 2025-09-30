@@ -5,7 +5,6 @@ Screen cho cài đặt hệ thống và preferences
 
 from typing import Dict, Any, Optional
 import logging
-import subprocess
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
@@ -418,10 +417,12 @@ class SettingsScreen(Screen):
             if volume is None:
                 volume = int(self.setting_widgets['voice_volume'].value)
             
-            # Use espeak-ng for Vietnamese TTS
-            subprocess.Popen([
-                'espeak-ng', '-v', 'vi', '-s', '150', '-a', str(volume), message
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            speak_fn = getattr(self.app_instance, 'speak', None)
+            if speak_fn is None:
+                self.logger.warning("TTS engine not available on app instance")
+                return
+
+            speak_fn(message, volume)
             
         except Exception as e:
             self.logger.error(f"Error playing voice feedback: {e}")

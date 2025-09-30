@@ -108,6 +108,11 @@ audio:
   volume: 80
   alert_sound: "config/alert.wav"
   voice_enabled: true
+  tts_engine: "piper"
+  piper:
+    model_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx"
+    config_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx.json"
+    speaker: ""
 
 # Logging Configuration
 logging:

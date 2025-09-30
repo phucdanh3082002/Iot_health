@@ -3,7 +3,7 @@ Main Kivy Application
 Main application class cho IoT Health Monitoring GUI
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 import sys
 import time
@@ -25,6 +25,7 @@ try:
     from src.sensors.mlx90614_sensor import MLX90614Sensor
     from src.sensors.blood_pressure_sensor import BloodPressureSensor
     from src.sensors.base_sensor import BaseSensor
+    from src.utils.tts_manager import PiperTTS
 except ImportError as e:
     logging.warning(f"Could not import sensor classes: {e}")
     MAX30102Sensor = None
@@ -100,6 +101,8 @@ class HealthMonitorApp(App):
             self.sensors = self._create_sensors_from_config()
         else:
             self.sensors = sensors
+
+        self.tts_manager = self._create_tts_manager()
 
         # Default sensor status map aligns with available sensors
         default_status = {name: {'status': 'idle'} for name in self.sensors.keys()}
@@ -181,6 +184,54 @@ class HealthMonitorApp(App):
             self.logger.error(f"Error creating sensors from config: {e}")
         
         return sensors
+
+    def _create_tts_manager(self) -> Optional[PiperTTS]:
+        """Initialize Piper TTS according to configuration."""
+        audio_cfg = self.config_data.get('audio', {}) or {}
+
+        if not audio_cfg.get('voice_enabled', True):
+            self.logger.info("Voice alerts disabled in configuration")
+            return None
+
+        if audio_cfg.get('tts_engine') != 'piper':
+            self.logger.info("Configured TTS engine is not Piper; skipping Piper initialization")
+            return None
+
+        piper_cfg = audio_cfg.get('piper', {}) or {}
+        model_path = piper_cfg.get('model_path')
+        if not model_path:
+            self.logger.warning("Piper model path missing in configuration")
+            return None
+
+        config_path = piper_cfg.get('config_path') or None
+        speaker = piper_cfg.get('speaker') or None
+
+        try:
+            tts = PiperTTS(Path(model_path), Path(config_path) if config_path else None, speaker)
+            self.logger.info("Piper TTS initialized successfully")
+            return tts
+        except Exception as exc:
+            self.logger.error(f"Failed to initialize Piper TTS: {exc}")
+            return None
+
+    def speak(self, message: str, volume: Optional[int] = None) -> None:
+        """Speak a message using the configured TTS engine."""
+        if not message:
+            return
+
+        audio_cfg = self.config_data.get('audio', {}) or {}
+        if not audio_cfg.get('voice_enabled', True):
+            self.logger.debug("Voice alerts disabled; skipping speech: %s", message)
+            return
+
+        if self.tts_manager is None:
+            self.logger.warning("TTS manager unavailable; cannot speak: %s", message)
+            return
+
+        try:
+            self.tts_manager.speak(message, volume)
+        except Exception as exc:
+            self.logger.error(f"Failed to play TTS message: {exc}")
     
     def build(self):
         """

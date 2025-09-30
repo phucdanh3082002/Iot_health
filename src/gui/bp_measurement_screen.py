@@ -6,7 +6,6 @@ Screen cho quá trình đo huyết áp
 from typing import Dict, Any, Optional
 import logging
 import time
-import subprocess
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -541,10 +540,12 @@ class BPMeasurementScreen(Screen):
     def _play_measurement_audio(self, message: str):
         """Play audio instruction/feedback"""
         try:
-            # Use espeak-ng for Vietnamese TTS
-            subprocess.Popen([
-                'espeak-ng', '-v', 'vi', '-s', '150', '-a', '80', message
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            speak_fn = getattr(self.app_instance, 'speak', None)
+            if speak_fn is None:
+                self.logger.warning("TTS engine not available for BP screen")
+                return
+
+            speak_fn(message)
         except Exception as e:
             self.logger.error(f"Error playing audio: {e}")
     

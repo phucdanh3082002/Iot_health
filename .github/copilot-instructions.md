@@ -9,7 +9,8 @@ Xây dựng hệ thống IoT theo dõi sức khỏe: HR/SpO₂ (**MAX30102**), N
 ## QUY TẮC BẮT BUỘC
 
 * **KHÔNG** tạo **dummy files**, **sample/mocked data**, asset giả (.wav/.jpg/.json) **khi chưa có yêu cầu**.
-* **KHÔNG** tự ý sinh thêm thư mục; giữ nguyên cấu trúc dự án.
+**KHÔNG** tạo các file , script để test các diel đã sửa
+* **KHÔNG** tự ý sinh thêm thư mục hoặc file mới khi yêu cầu sửa; giữ nguyên cấu trúc dự án.
 * **KHÔNG** thay đổi API/public schema (MQTT topics, REST endpoints, DB schema) nếu không có yêu cầu rõ.
 * **KHÔNG** commit secrets (token, mật khẩu). Dùng biến môi trường / file cấu hình hiện có.
 * Tuân thủ **OOP, module hóa**, Python 3.11+, PEP8, logging chuẩn của dự án.
@@ -34,13 +35,12 @@ tests/                # chỉ thêm test khi có yêu cầu; không tạo dữ l
 main.py
 README.md
 requirements.txt
-```
 
 ---
 
 ## Phần cứng đã chốt
 
-* **Raspberry Pi 4B/5**, **Waveshare 3.5" SPI** (fbcp mirror).
+* **Raspberry Pi 4B sử dụng pi os wormbook 64 bit**, **Waveshare 3.5" SPI** (fbcp mirror).
 * **Âm thanh**: **MAX98357A I²S** (BCLK=GPIO18, LRCLK=GPIO19, DIN=GPIO21) → loa 3–5 W / 4–8 Ω (BTL OUT+ / OUT−; không nối loa xuống GND).
 * **Cảm biến**:
   * **MAX30102 (I²C 0x57)**: HR/SpO₂.
@@ -95,37 +95,7 @@ requirements.txt
 
 ---
 
-## Kiến trúc sensor hiện tại (tuân thủ)
 
-### BaseSensor Pattern
-```python
-# Tất cả sensor kế thừa từ BaseSensor trong src/sensors/base_sensor.py
-class HX710BSensor(BaseSensor):
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__("HX710B", config)
-        # GPIO setup cho DOUT/SCK
-    
-    def start(self) -> bool:
-        # Khởi động thread đọc bit-bang
-        
-    def read_raw_data(self) -> Optional[Dict[str, Any]]:
-        # Đọc 24-bit từ HX710B
-        
-    def process_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # Chuyển đổi counts → mmHg
-```
-
-### Callback Pattern
-```python
-# Standard callback cho tất cả sensors
-def sensor_callback(sensor_name: str, data: Dict[str, Any]):
-    timestamp = data.get('timestamp')
-    if sensor_name == 'HX710B':
-        pressure_mmhg = data.get('pressure_mmhg')
-        counts = data.get('raw_counts')
-```
-
----
 
 ## Yêu cầu phần mềm (Copilot phải tuân thủ)
 
@@ -160,7 +130,6 @@ python tests/test_sensors.py  # Menu option cho HX710B
 ## Không được làm
 
 * Không sinh **file giả**, **mẫu dữ liệu**, **test asset**.
-* Không tự tạo thư mục `samples/`, `fixtures/`, `assets/`…
 * Không đổi sơ đồ chân I²S/SPI/I²C/HX710B.
 * Không tự ý chuyển sang ADC khác (ADS1115/ADS1220…) nếu chưa có yêu cầu.
 * Không thay đổi BaseSensor interface hoặc callback pattern hiện có.
@@ -233,7 +202,6 @@ from src.utils.logger import setup_logger
 
 ## Kiểm thử thủ công (không sinh dữ liệu giả)
 
-* Chạy GUI trên HDMI/VNC 480×320; **không** tạo ảnh/video test.
 * Dùng phần cứng thật: bơm/van/hx710b/cuff; xác nhận inflate/deflate, an toàn (soft-limit, NO, relief).
 * Test với `tests/test_sensors.py` menu system.
 * Xem log: driver HX710B không timeout quá lâu; tốc độ đọc phù hợp SPS thực.
@@ -249,8 +217,3 @@ from src.utils.logger import setup_logger
 * MQTT/REST/SQLite đúng schema hiện có; log rõ ràng; không lộ secrets.
 * Tuân thủ BaseSensor pattern và callback architecture.
 * Tích hợp với existing testing framework.
-
----
-
-**Tóm tắt cho Copilot:**
-Hoàn thiện **đo huyết áp với HX710B** theo kiến trúc hiện tại: driver bit-bang non-blocking kế thừa BaseSensor, thu pha xả đúng tốc độ, xử lý oscillometric để ước lượng MAP → SYS/DIA từ calibration, UI Kivy 480×320, TTS qua MAX98357A, MQTT/REST, SQLite. **Không** tạo file/dữ liệu giả và **không** tự ý thay đổi kiến trúc. Tuân thủ patterns: BaseSensor inheritance, callback system, config loading, testing framework, Vietnamese TTS integration.
