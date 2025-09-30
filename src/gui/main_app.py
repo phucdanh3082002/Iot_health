@@ -232,6 +232,21 @@ class HealthMonitorApp(App):
                 default_volume=default_volume,
             )
             self.logger.info("TTSManager khởi tạo thành công")
+
+            try:
+                preload_ids = (
+                    ScenarioID.NAVIGATE_DASHBOARD,
+                    ScenarioID.HR_PROMPT_FINGER,
+                    ScenarioID.HR_NO_FINGER,
+                    ScenarioID.HR_MEASURING,
+                    ScenarioID.HR_SIGNAL_WEAK,
+                    ScenarioID.TEMP_PREP,
+                    ScenarioID.TEMP_MEASURING,
+                    ScenarioID.TEMP_HIGH_ALERT,
+                )
+                tts.preload_scenarios(preload_ids)
+            except Exception as preload_exc:
+                self.logger.debug("Không thể preload TTS: %s", preload_exc)
             return tts
         except Exception as exc:  # pragma: no cover
             self.logger.error(f"Không khởi tạo được TTSManager: {exc}")

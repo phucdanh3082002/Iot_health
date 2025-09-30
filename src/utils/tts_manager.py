@@ -17,7 +17,7 @@ from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Callable, Dict, Optional, Tuple, Union
+from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
 
 LOGGER = logging.getLogger(__name__)
@@ -61,6 +61,7 @@ class PiperTTS:
         message: str,
         volume: Optional[int] = None,
         cache_path: Optional[Path] = None,
+        playback: bool = True,
     ) -> None:
         if not message:
             return
@@ -70,7 +71,7 @@ class PiperTTS:
 
         try:
             if use_cache:
-                self._ensure_cached(message, volume, cache_path)
+                self.ensure_cached(message, volume, cache_path)
                 target_path = cache_path
             else:
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
@@ -84,7 +85,8 @@ class PiperTTS:
                 self._apply_fade_edges(tmp_path)
                 target_path = tmp_path
 
-            subprocess.run(["aplay", "-q", str(target_path)], check=True)
+            if playback:
+                subprocess.run(["aplay", "-q", str(target_path)], check=True)
 
         except subprocess.CalledProcessError as exc:
             LOGGER.error("Piper command failed: return code %s", exc.returncode)
@@ -116,7 +118,7 @@ class PiperTTS:
         LOGGER.debug("Running Piper command: %s", command)
         subprocess.run(command, check=True)
 
-    def _ensure_cached(
+    def ensure_cached(
         self,
         message: str,
         volume: Optional[int],
@@ -217,6 +219,7 @@ class NullTTS:
         message: str,
         volume: Optional[int] = None,
         cache_path: Optional[Path] = None,
+        playback: bool = True,
     ) -> None:  # pragma: no cover
         LOGGER.warning("TTS unavailable. Message skipped: %s", message)
 
@@ -497,6 +500,7 @@ class _SpeechJob:
     scenario_id: ScenarioID
     message: str
     volume: int
+    playback: bool = True
 
 
 class TTSManager:
@@ -610,7 +614,8 @@ class TTSManager:
 
             try:
                 self._process_job(job)
-                self._last_spoken[job.scenario_id] = time.monotonic()
+                if job.playback:
+                    self._last_spoken[job.scenario_id] = time.monotonic()
             except Exception as exc:  # pragma: no cover
                 LOGGER.error("Failed to play scenario '%s': %s", job.scenario_id.value, exc)
             finally:
@@ -621,7 +626,13 @@ class TTSManager:
         if self._cache_dir and isinstance(self.engine, PiperTTS):
             cache_path = self._get_cache_path(job.message, job.volume)
 
-        self.engine.speak(job.message, volume=job.volume, cache_path=cache_path)
+        if job.playback:
+            self.engine.speak(job.message, volume=job.volume, cache_path=cache_path, playback=True)
+        else:
+            if isinstance(self.engine, PiperTTS) and cache_path is not None:
+                self.engine.ensure_cached(job.message, job.volume, cache_path)
+            else:
+                LOGGER.debug("Skipping preload for non-Piper engine or missing cache path")
 
     def _get_cache_path(self, message: str, volume: int) -> Path:
         assert self._cache_dir is not None
@@ -642,6 +653,33 @@ class TTSManager:
         if last_time is None:
             return False
         return (time.monotonic() - last_time) < cooldown_seconds
+
+    def preload_scenarios(
+        self,
+        scenarios: Union[Tuple[ScenarioID, ...], Iterable[ScenarioID]],
+        *,
+        locale: Optional[str] = None,
+        volume: Optional[int] = None,
+    ) -> None:
+        if not isinstance(self.engine, PiperTTS):
+            return
+
+        chosen_locale = locale or self.default_locale
+        job_volume = volume or self.default_volume
+
+        for scenario in scenarios:
+            template = SCENARIO_LIBRARY.get(scenario)
+            if not template or template.required_fields:
+                continue
+
+            message = template.render(chosen_locale)
+            if not message:
+                continue
+
+            try:
+                self._queue.put_nowait(_SpeechJob(scenario, message, job_volume, playback=False))
+            except Exception as exc:  # pragma: no cover
+                LOGGER.debug("Unable to queue preload for %s: %s", scenario.value, exc)
 
     def shutdown(self) -> None:
         if self._shutdown_called:

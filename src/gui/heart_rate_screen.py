@@ -638,7 +638,7 @@ class HeartRateScreen(Screen):
         self.hr_value_label.text = '--'
         self.spo2_value_label.text = '--'
         self.progress_bar.value = 0
-        self.status_label.text = 'Sẵn sàng đo (5 giây)'
+        self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động (5 giây)'
         self.signal_label.text = 'Chất lượng tín hiệu: --'
         
         # Clear measurement data
@@ -647,9 +647,13 @@ class HeartRateScreen(Screen):
         self.current_hr = 0
         self.current_spo2 = 0
         self.stable_readings = 0
-        
-        # Auto-start measurement when entering screen
-        self._start_measurement()
+        self.measuring = False
+
+        # Reset control buttons
+        self.start_stop_btn.text = 'Bắt đầu đo'
+        self.start_stop_btn.background_color = (0.2, 0.8, 0.2, 1)
+        self.save_btn.disabled = True
+        self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
     
     def on_leave(self):
         """Called when screen is left"""

@@ -544,11 +544,13 @@ class TemperatureScreen(Screen):
         self.obj_temp_label.text = '--°C'
         self.amb_temp_label.text = '--°C'
         self.progress_bar.value = 0
-        self.status_label.text = 'Sẵn sàng đo'
+        self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động'
         self.temp_gauge.update_temperature(36.0)
-        
-        # Auto-start measurement when entering screen
-        self._start_measurement()
+        self.measuring = False
+
+        # Reset control buttons
+        self.start_stop_btn.text = 'Bắt đầu đo'
+        self.start_stop_btn.background_color = (0.8, 0.3, 0.3, 1)
     
     def on_leave(self):
         """Called when screen is left"""
