@@ -260,6 +260,12 @@ class ScenarioID(str, Enum):
     TEMP_MEASURING = "temp_measuring"
     TEMP_NORMAL = "temp_normal"
     TEMP_HIGH_ALERT = "temp_high_alert"
+    TEMP_RESULT_CRITICAL_LOW = "temp_result_critical_low"
+    TEMP_RESULT_LOW = "temp_result_low"
+    TEMP_RESULT_NORMAL = "temp_result_normal"
+    TEMP_RESULT_FEVER = "temp_result_fever"
+    TEMP_RESULT_HIGH_FEVER = "temp_result_high_fever"
+    TEMP_RESULT_CRITICAL_HIGH = "temp_result_critical_high"
     BP_INFLATE = "bp_inflate"
     BP_OVERPRESSURE = "bp_overpressure"
     BP_DEFLATE = "bp_deflate"
@@ -394,6 +400,48 @@ SCENARIO_LIBRARY: Dict[ScenarioID, ScenarioTemplate] = {
         template_vi="Nhiệt độ cao bất thường, hãy kiểm tra lại hoặc liên hệ nhân viên y tế.",
         template_en="Abnormally high temperature detected, please double-check or contact medical staff.",
         cooldown_seconds=15.0,
+    ),
+    ScenarioID.TEMP_RESULT_CRITICAL_LOW: ScenarioTemplate(
+        template_vi="Nhiệt độ rất thấp, khoảng {temp} độ C. Cần làm ấm cơ thể ngay.",
+        template_en="Temperature is critically low at about {temp} degrees Celsius. Warm the body immediately.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=4.0,
+    ),
+    ScenarioID.TEMP_RESULT_LOW: ScenarioTemplate(
+        template_vi="Nhiệt độ hơi thấp, khoảng {temp} độ C.",
+        template_en="Body temperature slightly low at {temp} degrees Celsius.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=4.0,
+    ),
+    ScenarioID.TEMP_RESULT_NORMAL: ScenarioTemplate(
+        template_vi="Nhiệt độ {temp} độ C, trong giới hạn bình thường.",
+        template_en="Temperature {temp} degrees Celsius, within normal range.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=4.0,
+    ),
+    ScenarioID.TEMP_RESULT_FEVER: ScenarioTemplate(
+        template_vi="Nhiệt độ hơi cao, khoảng {temp} độ C. Theo dõi thêm các triệu chứng.",
+        template_en="Mild fever detected at about {temp} degrees Celsius. Keep monitoring symptoms.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=6.0,
+    ),
+    ScenarioID.TEMP_RESULT_HIGH_FEVER: ScenarioTemplate(
+        template_vi="Nhiệt độ cao {temp} độ C. Cần hạ sốt và liên hệ nhân viên y tế nếu kéo dài.",
+        template_en="High fever at {temp} degrees Celsius. Take antipyretic measures and contact medical staff if it persists.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=6.0,
+    ),
+    ScenarioID.TEMP_RESULT_CRITICAL_HIGH: ScenarioTemplate(
+        template_vi="Nhiệt độ rất cao, khoảng {temp} độ C. Đây là tình trạng nguy hiểm, cần hỗ trợ y tế khẩn." ,
+        template_en="Temperature is dangerously high at about {temp} degrees Celsius. Seek immediate medical assistance.",
+        required_fields=("temp",),
+        formatters={"temp": lambda value: _format_decimal(value, decimals=1, fallback="0")},
+        cooldown_seconds=6.0,
     ),
     ScenarioID.BP_INFLATE: ScenarioTemplate(
         template_vi="Bắt đầu bơm cuff, bạn sẽ cảm thấy hơi căng.",

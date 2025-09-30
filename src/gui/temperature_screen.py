@@ -16,6 +16,8 @@ from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse
 from kivy.animation import Animation
 
+from src.utils.tts_manager import ScenarioID
+
 
 class TemperatureGauge(BoxLayout):
     """Widget hiển thị nhiệt độ dạng gauge"""
@@ -416,6 +418,7 @@ class TemperatureScreen(Screen):
             # Schedule updates
             Clock.schedule_interval(self._update_measurement, self.sample_interval)
             
+            self._speak_temp_scenario(ScenarioID.TEMP_MEASURING)
             self.logger.info("Temperature measurement started")
             
         except Exception as e:
@@ -534,7 +537,7 @@ class TemperatureScreen(Screen):
                 elif ambient_temp is not None:
                     self.amb_temp_label.text = '--°C'
 
-                result_message = self._build_result_message(average_temp)
+                scenario_id, result_message = self._determine_result_scenario(average_temp)
                 self.save_btn.disabled = False
                 self.save_btn.background_color = (0.2, 0.6, 0.8, 1)
                 self.progress_bar.value = 100
@@ -543,6 +546,9 @@ class TemperatureScreen(Screen):
                     len(self.samples),
                     average_temp,
                 )
+
+                if scenario_id is not None:
+                    self._speak_temp_scenario(scenario_id, temp=average_temp)
 
                 self._stop_measurement(
                     final_message=result_message,
@@ -601,18 +607,47 @@ class TemperatureScreen(Screen):
 
         return avg_temp, avg_ambient
 
-    def _build_result_message(self, avg_temp: float) -> str:
+    def _determine_result_scenario(self, avg_temp: float) -> tuple[ScenarioID | None, str]:
         if avg_temp < 35.0:
-            return f'Hoàn thành - Nhiệt độ rất thấp ({avg_temp:.1f}°C)'
+            return (
+                ScenarioID.TEMP_RESULT_CRITICAL_LOW,
+                f'Hoàn thành - Nhiệt độ rất thấp ({avg_temp:.1f}°C)',
+            )
         if avg_temp < 36.0:
-            return f'Hoàn thành - Nhiệt độ hơi thấp ({avg_temp:.1f}°C)'
+            return (
+                ScenarioID.TEMP_RESULT_LOW,
+                f'Hoàn thành - Nhiệt độ hơi thấp ({avg_temp:.1f}°C)',
+            )
         if avg_temp <= 37.5:
-            return f'Hoàn thành - Nhiệt độ bình thường ({avg_temp:.1f}°C)'
+            return (
+                ScenarioID.TEMP_RESULT_NORMAL,
+                f'Hoàn thành - Nhiệt độ bình thường ({avg_temp:.1f}°C)',
+            )
         if avg_temp <= 38.5:
-            return f'Hoàn thành - Cảnh báo sốt nhẹ ({avg_temp:.1f}°C)'
+            return (
+                ScenarioID.TEMP_RESULT_FEVER,
+                f'Hoàn thành - Cảnh báo sốt nhẹ ({avg_temp:.1f}°C)',
+            )
         if avg_temp <= 40.0:
-            return f'Hoàn thành - Cảnh báo sốt cao ({avg_temp:.1f}°C)'
-        return f'Hoàn thành - Nguy hiểm: sốt rất cao ({avg_temp:.1f}°C)'
+            return (
+                ScenarioID.TEMP_RESULT_HIGH_FEVER,
+                f'Hoàn thành - Cảnh báo sốt cao ({avg_temp:.1f}°C)',
+            )
+        return (
+            ScenarioID.TEMP_RESULT_CRITICAL_HIGH,
+            f'Hoàn thành - Nguy hiểm: sốt rất cao ({avg_temp:.1f}°C)',
+        )
+
+    def _speak_temp_scenario(self, scenario_id: ScenarioID, **kwargs) -> None:
+        if not scenario_id:
+            return
+
+        speak_fn = getattr(self.app_instance, '_speak_scenario', None)
+        if callable(speak_fn):
+            try:
+                speak_fn(scenario_id, **kwargs)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                self.logger.error("Không thể phát TTS cho kịch bản %s: %s", scenario_id, exc)
     
     def on_enter(self):
         """Called when screen is entered"""

@@ -278,6 +278,12 @@ class HealthMonitorApp(App):
                     ScenarioID.TEMP_PREP,
                     ScenarioID.TEMP_MEASURING,
                     ScenarioID.TEMP_HIGH_ALERT,
+                    ScenarioID.TEMP_RESULT_CRITICAL_LOW,
+                    ScenarioID.TEMP_RESULT_LOW,
+                    ScenarioID.TEMP_RESULT_NORMAL,
+                    ScenarioID.TEMP_RESULT_FEVER,
+                    ScenarioID.TEMP_RESULT_HIGH_FEVER,
+                    ScenarioID.TEMP_RESULT_CRITICAL_HIGH,
                 )
                 tts.preload_scenarios(preload_ids)
             except Exception as preload_exc:
