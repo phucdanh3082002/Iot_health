@@ -3,8 +3,9 @@ Temperature Measurement Screen
 Màn hình đo chi tiết cho MLX90614 (nhiệt độ)
 """
 
-from typing import Dict, Any, Optional
 import logging
+import math
+import statistics
 import time
 from kivy.uix.screenmanager import Screen
 from kivy.uix.boxlayout import BoxLayout
@@ -23,7 +24,6 @@ class TemperatureGauge(BoxLayout):
         super().__init__(**kwargs)
         
         self.current_temp = 36.0
-        self.target_temp = 36.0
         
         # Temperature display
         self.temp_label = Label(
@@ -85,7 +85,6 @@ class TemperatureGauge(BoxLayout):
         angle = angle_range[0] + temp_normalized * (angle_range[1] - angle_range[0])
         
         # Convert to radians and calculate position
-        import math
         angle_rad = math.radians(angle)
         radius = min(self.width, self.height) * 0.3
         
@@ -96,8 +95,6 @@ class TemperatureGauge(BoxLayout):
     
     def update_temperature(self, temp: float):
         """Update displayed temperature"""
-        self.target_temp = temp
-        
         # Animate temperature change
         anim = Animation(current_temp=temp, duration=0.5)
         anim.bind(on_progress=self._animate_temp)
@@ -133,13 +130,15 @@ class TemperatureScreen(Screen):
         
         # Measurement state
         self.measuring = False
-        self.measurements = []
-        self.stable_count = 0
-        self.required_stable = 5
-        
+        self.measurement_start_ts = None
+        self.measurement_duration = 5.0  # seconds
+        self.sample_interval = 0.2  # seconds between UI updates
+        self.max_temp_deviation = 0.7  # °C, for outlier rejection
+        self.samples = []
+
         # Current values
-        self.current_temp = 0
-        self.ambient_temp = 0
+        self.current_temp = 0.0
+        self.ambient_temp = 0.0
         
         self._build_layout()
     
@@ -400,8 +399,10 @@ class TemperatureScreen(Screen):
                 return
 
             self.measuring = True
-            self.measurements.clear()
-            self.stable_count = 0
+            self.measurement_start_ts = time.time()
+            self.samples.clear()
+            self.current_temp = 0.0
+            self.ambient_temp = 0.0
             
             # Update UI
             self.start_stop_btn.text = 'Dừng đo'
@@ -409,132 +410,209 @@ class TemperatureScreen(Screen):
             self.save_btn.disabled = True
             self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
             
-            self.status_label.text = 'Đang đo... Giữ cảm biến ổn định'
+            self.status_label.text = f'Đang đo... 0.0/{self.measurement_duration:.1f}s'
             self.progress_bar.value = 0
             
             # Schedule updates
-            Clock.schedule_interval(self._update_measurement, 0.5)
+            Clock.schedule_interval(self._update_measurement, self.sample_interval)
             
             self.logger.info("Temperature measurement started")
             
         except Exception as e:
             self.logger.error(f"Error starting measurement: {e}")
+            self.status_label.text = 'Lỗi khi khởi động đo nhiệt độ'
     
-    def _stop_measurement(self):
+    def _stop_measurement(self, final_message: str | None = None, reset_progress: bool = True, keep_save_state: bool = False):
         """Stop temperature measurement"""
         try:
-            self.measuring = False
+            if self.measuring:
+                self.measuring = False
             
             # Update UI
             self.start_stop_btn.text = 'Bắt đầu đo'
             self.start_stop_btn.background_color = (0.8, 0.3, 0.3, 1)
-            self.status_label.text = 'Đã dừng đo'
-            self.progress_bar.value = 0
+            if reset_progress:
+                self.progress_bar.value = 0
+
+            if final_message:
+                self.status_label.text = final_message
+            elif reset_progress:
+                self.status_label.text = 'Đã dừng đo'
+
+            if not keep_save_state:
+                self.save_btn.disabled = True
+                self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
             
             # Stop updates
             Clock.unschedule(self._update_measurement)
+            self.measurement_start_ts = None
+            self.samples.clear()
             
             self.logger.info("Temperature measurement stopped")
             
         except Exception as e:
             self.logger.error(f"Error stopping measurement: {e}")
         finally:
-            self.app_instance.stop_sensor('MLX90614')
+            try:
+                self.app_instance.stop_sensor('MLX90614')
+            except Exception as sensor_error:
+                self.logger.error(f"Error stopping MLX90614 sensor: {sensor_error}")
     
     def _update_measurement(self, dt):
         """Update measurement progress"""
         try:
-            if not self.measuring:
+            if not self.measuring or not self.measurement_start_ts:
                 return False
+
+            now = time.time()
+            elapsed = max(0.0, now - self.measurement_start_ts)
+            progress_ratio = min(elapsed / self.measurement_duration, 1.0)
+            self.progress_bar.value = progress_ratio * 100
+            elapsed_display = min(elapsed, self.measurement_duration)
+            self.status_label.text = f'Đang đo... {elapsed_display:.1f}/{self.measurement_duration:.1f}s'
             
             # Get current sensor data
             sensor_data = self.app_instance.get_sensor_data()
             mlx90614_status = sensor_data.get('sensor_status', {}).get('MLX90614', {})
             
             # Get temperature data following MLX90614 logic
-            object_temp = sensor_data.get('temperature', 0)  # Primary temperature (object)
-            ambient_temp = sensor_data.get('ambient_temperature', 0)
-            temp_status = mlx90614_status.get('status', 'normal')
-            measurement_type = mlx90614_status.get('measurement_type', 'object')
-            
-            # Validate temperature readings based on MLX90614 ranges
-            if object_temp > 0 and -70 <= object_temp <= 380:
-                # Update displays with current temperature
-                self.current_temp = object_temp
-                self.obj_temp_label.text = f"{object_temp:.1f}°C"
-                self.temp_gauge.update_temperature(object_temp)
-                
-                # Update ambient temperature if available
-                if ambient_temp > 0 and -40 <= ambient_temp <= 85:
-                    self.ambient_temp = ambient_temp
-                    self.amb_temp_label.text = f"{ambient_temp:.1f}°C"
+            object_temp = sensor_data.get('temperature')
+            ambient_temp = sensor_data.get('ambient_temperature')
+
+            # Validate and collect samples
+            if self._is_valid_object_temp(object_temp):
+                if self._accept_sample(object_temp):
+                    sample = {
+                        'timestamp': now,
+                        'object': float(object_temp),
+                        'ambient': self._validate_ambient_temp(ambient_temp),
+                    }
+                    self.samples.append(sample)
+
+                    running_avg, running_ambient = self._compute_average()
+                    if running_avg is not None:
+                        self.current_temp = running_avg
+                        self.obj_temp_label.text = f"{running_avg:.1f}°C"
+                        self.temp_gauge.update_temperature(running_avg)
+                    if running_ambient is not None:
+                        self.ambient_temp = running_ambient
+                        self.amb_temp_label.text = f"{running_ambient:.1f}°C"
+                    elif ambient_temp is not None:
+                        self.amb_temp_label.text = '--°C'
                 else:
-                    self.amb_temp_label.text = "--°C"
-                
-                # Add to measurements list for stability checking
-                self.measurements.append(object_temp)
-                if len(self.measurements) > 10:
-                    self.measurements.pop(0)
-                
-                # Check stability using MLX90614 smoothing criteria
-                if len(self.measurements) >= 5:
-                    recent_temps = self.measurements[-5:]
-                    temp_std = sum([(t - sum(recent_temps)/len(recent_temps))**2 for t in recent_temps]) ** 0.5
-                    temp_range = max(recent_temps) - min(recent_temps)
-                    
-                    # Consider stable if standard deviation < 0.15°C and range < 0.3°C
-                    if temp_std < 0.15 and temp_range < 0.3:
-                        self.stable_count += 1
-                    else:
-                        self.stable_count = max(0, self.stable_count - 1)
-                    
-                    # Update progress based on stability
-                    progress = min((self.stable_count / self.required_stable) * 100, 100)
-                    self.progress_bar.value = progress
-                    
-                    # Update status based on temperature status from MLX90614
-                    if self.stable_count >= self.required_stable:
-                        if temp_status == 'critical_low':
-                            self.status_label.text = f'Hoàn thành - Nhiệt độ rất thấp ({object_temp:.1f}°C)'
-                        elif temp_status == 'critical_high':
-                            self.status_label.text = f'Hoàn thành - Sốt cao ({object_temp:.1f}°C)'
-                        elif temp_status == 'high':
-                            self.status_label.text = f'Hoàn thành - Hơi sốt ({object_temp:.1f}°C)'
-                        elif temp_status == 'low':
-                            self.status_label.text = f'Hoàn thành - Hơi thấp ({object_temp:.1f}°C)'
-                        else:
-                            self.status_label.text = f'Hoàn thành - Bình thường ({object_temp:.1f}°C)'
-                        
-                        self.save_btn.disabled = False
-                        self.save_btn.background_color = (0.2, 0.6, 0.8, 1)
-                        self._stop_measurement()
-                    else:
-                        stability_percent = (self.stable_count / self.required_stable) * 100
-                        self.status_label.text = f'Đang ổn định... {stability_percent:.0f}%'
-                else:
-                    # Not enough measurements yet
-                    self.status_label.text = 'Đang thu thập dữ liệu...'
-                    self.progress_bar.value = len(self.measurements) * 10  # Show initial progress
-                    
+                    self.logger.debug(
+                        "Rejected temperature sample %.2f°C as outlier (baseline %.2f°C)",
+                        object_temp,
+                        statistics.median([s['object'] for s in self.samples]) if self.samples else object_temp,
+                    )
             else:
-                # Invalid temperature reading
-                if object_temp <= 0:
-                    self.status_label.text = 'Không nhận được dữ liệu từ cảm biến'
-                elif object_temp < -70:
-                    self.status_label.text = 'Nhiệt độ quá thấp (< -70°C)'
-                elif object_temp > 380:
-                    self.status_label.text = 'Nhiệt độ quá cao (> 380°C)'
-                else:
-                    self.status_label.text = 'Dữ liệu không hợp lệ'
-                    
-                self.stable_count = 0
-                self.progress_bar.value = 0
-            
+                self.status_label.text = (
+                    f'Đang đo... {elapsed_display:.1f}/{self.measurement_duration:.1f}s '
+                    '(giữ cảm biến ổn định)'
+                )
+
+            # Finalise after duration window
+            if elapsed >= self.measurement_duration:
+                average_temp, average_ambient = self._compute_average()
+
+                if average_temp is None:
+                    self.logger.warning("Temperature measurement finished without valid samples")
+                    self._stop_measurement(
+                        final_message='Không đủ mẫu hợp lệ, vui lòng đo lại.',
+                        reset_progress=True,
+                        keep_save_state=False,
+                    )
+                    return False
+
+                self.current_temp = average_temp
+                self.obj_temp_label.text = f"{average_temp:.1f}°C"
+                self.temp_gauge.update_temperature(average_temp)
+
+                if average_ambient is not None:
+                    self.ambient_temp = average_ambient
+                    self.amb_temp_label.text = f"{average_ambient:.1f}°C"
+                elif ambient_temp is not None:
+                    self.amb_temp_label.text = '--°C'
+
+                result_message = self._build_result_message(average_temp)
+                self.save_btn.disabled = False
+                self.save_btn.background_color = (0.2, 0.6, 0.8, 1)
+                self.progress_bar.value = 100
+                self.logger.info(
+                    "Temperature measurement completed with %d samples, average %.2f°C",
+                    len(self.samples),
+                    average_temp,
+                )
+
+                self._stop_measurement(
+                    final_message=result_message,
+                    reset_progress=False,
+                    keep_save_state=True,
+                )
+                return False
+
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Error updating measurement: {e}")
+            self._stop_measurement(
+                final_message='Xảy ra lỗi trong quá trình đo, vui lòng thử lại.',
+                reset_progress=True,
+                keep_save_state=False,
+            )
             return False
+
+    def _is_valid_object_temp(self, value: float | None) -> bool:
+        if value is None:
+            return False
+        return value > 0 and -70 <= value <= 380
+
+    def _validate_ambient_temp(self, value: float | None) -> float | None:
+        if value is None:
+            return None
+        return float(value) if -40 <= value <= 85 else None
+
+    def _accept_sample(self, temp_value: float) -> bool:
+        if len(self.samples) < 3:
+            return True
+        baseline = statistics.median(sample['object'] for sample in self.samples)
+        return abs(temp_value - baseline) <= self.max_temp_deviation
+
+    def _compute_average(self) -> tuple[float | None, float | None]:
+        if not self.samples:
+            return None, None
+
+        temps = [sample['object'] for sample in self.samples]
+        median_temp = statistics.median(temps)
+        filtered_temps = [temp for temp in temps if abs(temp - median_temp) <= self.max_temp_deviation]
+        if not filtered_temps:
+            filtered_temps = temps
+
+        avg_temp = sum(filtered_temps) / len(filtered_temps)
+
+        ambient_values = [sample['ambient'] for sample in self.samples if sample['ambient'] is not None]
+        avg_ambient = None
+        if ambient_values:
+            median_ambient = statistics.median(ambient_values)
+            filtered_ambient = [val for val in ambient_values if abs(val - median_ambient) <= 1.5]
+            if not filtered_ambient:
+                filtered_ambient = ambient_values
+            avg_ambient = sum(filtered_ambient) / len(filtered_ambient)
+
+        return avg_temp, avg_ambient
+
+    def _build_result_message(self, avg_temp: float) -> str:
+        if avg_temp < 35.0:
+            return f'Hoàn thành - Nhiệt độ rất thấp ({avg_temp:.1f}°C)'
+        if avg_temp < 36.0:
+            return f'Hoàn thành - Nhiệt độ hơi thấp ({avg_temp:.1f}°C)'
+        if avg_temp <= 37.5:
+            return f'Hoàn thành - Nhiệt độ bình thường ({avg_temp:.1f}°C)'
+        if avg_temp <= 38.5:
+            return f'Hoàn thành - Cảnh báo sốt nhẹ ({avg_temp:.1f}°C)'
+        if avg_temp <= 40.0:
+            return f'Hoàn thành - Cảnh báo sốt cao ({avg_temp:.1f}°C)'
+        return f'Hoàn thành - Nguy hiểm: sốt rất cao ({avg_temp:.1f}°C)'
     
     def on_enter(self):
         """Called when screen is entered"""
@@ -547,10 +625,14 @@ class TemperatureScreen(Screen):
         self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động'
         self.temp_gauge.update_temperature(36.0)
         self.measuring = False
+        self.measurement_start_ts = None
+        self.samples.clear()
 
         # Reset control buttons
         self.start_stop_btn.text = 'Bắt đầu đo'
         self.start_stop_btn.background_color = (0.8, 0.3, 0.3, 1)
+        self.save_btn.disabled = True
+        self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
     
     def on_leave(self):
         """Called when screen is left"""
@@ -559,3 +641,6 @@ class TemperatureScreen(Screen):
         # Stop any ongoing measurement
         if self.measuring:
             self._stop_measurement()
+        else:
+            self.measurement_start_ts = None
+            self.samples.clear()

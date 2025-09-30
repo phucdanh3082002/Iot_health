@@ -15,7 +15,8 @@ import wave
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from queue import Empty, Queue
+from itertools import count
+from queue import Empty, PriorityQueue
 from threading import Event, Thread
 from typing import Callable, Dict, Iterable, Optional, Tuple, Union
 
@@ -163,7 +164,6 @@ class PiperTTS:
             frames = wav_file.readframes(params.nframes)
 
         scaled_frames = audioop.mul(frames, params.sampwidth, factor)
-
         with wave.open(str(wav_path), "wb") as wav_file:
             wav_file.setparams(params)
             wav_file.writeframes(scaled_frames)
@@ -511,19 +511,30 @@ class TTSManager:
         engine: Union[PiperTTS, NullTTS],
         default_locale: str = "vi",
         default_volume: int = 100,
+        cache_dir: Optional[Path] = None,
+        strict_assets: bool = False,
     ) -> None:
         self.engine = engine
         self.default_locale = default_locale
         self.default_volume = default_volume
         self._last_spoken: Dict[ScenarioID, float] = {}
-        self._queue: "Queue[Optional[_SpeechJob]]" = Queue()
+        self._queue: PriorityQueue[Tuple[int, int, Optional[_SpeechJob]]] = PriorityQueue()
+        self._counter = count()
         self._stop_event = Event()
         self._shutdown_called = False
         self._cache_dir: Optional[Path] = None
         self._cache_index: Dict[str, Path] = {}
+        self._owns_cache_dir = False
+        self._strict_assets = strict_assets
 
         if isinstance(self.engine, PiperTTS):
-            self._cache_dir = Path(tempfile.mkdtemp(prefix="tts_cache_"))
+            if cache_dir:
+                self._cache_dir = Path(cache_dir).expanduser()
+                self._cache_dir.mkdir(parents=True, exist_ok=True)
+                self._owns_cache_dir = False
+            else:
+                self._cache_dir = Path(tempfile.mkdtemp(prefix="tts_cache_"))
+                self._owns_cache_dir = True
 
         self._worker = Thread(target=self._worker_loop, name="tts-worker", daemon=True)
         self._worker.start()
@@ -537,13 +548,21 @@ class TTSManager:
         speaker: Optional[str] = None,
         default_locale: str = "vi",
         default_volume: int = 100,
+        cache_dir: Optional[Path] = None,
+        strict_assets: bool = False,
     ) -> "TTSManager":
         try:
             engine = PiperTTS(model_path=model_path, config_path=config_path, speaker=speaker)
         except FileNotFoundError:
             LOGGER.warning("Falling back to NullTTS (missing Piper model or binary).")
             engine = NullTTS()
-        return cls(engine=engine, default_locale=default_locale, default_volume=default_volume)
+        return cls(
+            engine=engine,
+            default_locale=default_locale,
+            default_volume=default_volume,
+            cache_dir=cache_dir,
+            strict_assets=strict_assets,
+        )
 
     def speak_scenario(
         self,
@@ -584,7 +603,7 @@ class TTSManager:
 
         job_volume = volume or self.default_volume
         try:
-            self._queue.put_nowait(_SpeechJob(scenario_id, message, job_volume))
+            self._enqueue_job(_SpeechJob(scenario_id, message, job_volume))
             return True
         except Exception as exc:  # pragma: no cover
             LOGGER.error("Failed to enqueue scenario '%s': %s", scenario_id.value, exc)
@@ -601,10 +620,13 @@ class TTSManager:
                 LOGGER.error("Unknown scenario key: %s", scenario)
         return None
 
+    def _enqueue_job(self, job: Optional[_SpeechJob], priority: int = 0) -> None:
+        self._queue.put((priority, next(self._counter), job))
+
     def _worker_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                job = self._queue.get(timeout=0.5)
+                priority, _, job = self._queue.get(timeout=0.5)
             except Empty:
                 continue
 
@@ -623,16 +645,38 @@ class TTSManager:
 
     def _process_job(self, job: _SpeechJob) -> None:
         cache_path: Optional[Path] = None
-        if self._cache_dir and isinstance(self.engine, PiperTTS):
-            cache_path = self._get_cache_path(job.message, job.volume)
+        template = SCENARIO_LIBRARY.get(job.scenario_id)
+        can_use_cache = self._cache_dir is not None and isinstance(self.engine, PiperTTS)
+
+        if can_use_cache:
+            cache_candidate = self._get_cache_path(job.message, job.volume)
+            if cache_candidate.exists():
+                cache_path = cache_candidate
+            else:
+                if self._strict_assets and self._is_static_scenario(job.scenario_id):
+                    LOGGER.warning(
+                        "Missing pre-generated audio for scenario '%s' at %s",
+                        job.scenario_id.value,
+                        cache_candidate,
+                    )
+                    return
+                cache_path = cache_candidate
 
         if job.playback:
-            self.engine.speak(job.message, volume=job.volume, cache_path=cache_path, playback=True)
+            self.engine.speak(
+                job.message,
+                volume=job.volume,
+                cache_path=cache_path,
+                playback=True,
+            )
         else:
             if isinstance(self.engine, PiperTTS) and cache_path is not None:
+                if cache_path.exists():
+                    LOGGER.debug("Asset already present for %s", job.scenario_id.value)
+                    return
                 self.engine.ensure_cached(job.message, job.volume, cache_path)
             else:
-                LOGGER.debug("Skipping preload for non-Piper engine or missing cache path")
+                LOGGER.debug("Skipping preload for scenario '%s'", job.scenario_id.value)
 
     def _get_cache_path(self, message: str, volume: int) -> Path:
         assert self._cache_dir is not None
@@ -645,6 +689,12 @@ class TTSManager:
         path = self._cache_dir / f"{hashlib.sha1(key.encode('utf-8')).hexdigest()}.wav"
         self._cache_index[key] = path
         return path
+
+    def _is_static_scenario(self, scenario: ScenarioID) -> bool:
+        template = SCENARIO_LIBRARY.get(scenario)
+        if not template:
+            return False
+        return not template.required_fields
 
     def _is_in_cooldown(self, scenario: ScenarioID, cooldown_seconds: float) -> bool:
         if cooldown_seconds <= 0:
@@ -677,7 +727,7 @@ class TTSManager:
                 continue
 
             try:
-                self._queue.put_nowait(_SpeechJob(scenario, message, job_volume, playback=False))
+                self._enqueue_job(_SpeechJob(scenario, message, job_volume, playback=False), priority=10)
             except Exception as exc:  # pragma: no cover
                 LOGGER.debug("Unable to queue preload for %s: %s", scenario.value, exc)
 
@@ -692,15 +742,12 @@ class TTSManager:
             pass
         self._stop_event.set()
 
-        try:
-            self._queue.put_nowait(None)
-        except Exception:
-            pass
+        self._enqueue_job(None, priority=-100)
 
         if self._worker.is_alive():
             self._worker.join(timeout=2.0)
 
-        if self._cache_dir and self._cache_dir.exists():
+        if self._cache_dir and self._owns_cache_dir and self._cache_dir.exists():
             shutil.rmtree(self._cache_dir, ignore_errors=True)
 
 

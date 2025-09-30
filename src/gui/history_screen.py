@@ -1,9 +1,6 @@
-"""
-History Screen
-Screen hiển thị lịch sử các phép đo
-"""
+"""Lịch sử đo lường và cảnh báo cho hệ thống IoT Health."""
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 import logging
 from datetime import datetime, timedelta
 from kivy.uix.screenmanager import Screen
@@ -16,77 +13,100 @@ from kivy.graphics import Color, Rectangle
 
 
 class MeasurementRecord(BoxLayout):
-    """Widget hiển thị một bản ghi đo"""
-    
+    """Widget hiển thị một bản ghi đo."""
+
     def __init__(self, record_data: Dict[str, Any], **kwargs):
-        super().__init__(orientation='horizontal', size_hint_y=None, height=60, spacing=10, **kwargs)
-        
+        super().__init__(orientation='vertical', size_hint_y=None, height=72, spacing=4, **kwargs)
+
         self.record_data = record_data
-        
-        # Background với màu xen kẽ
+
         with self.canvas.before:
             Color(0.12, 0.12, 0.18, 1)
             self.rect = Rectangle(size=self.size, pos=self.pos)
         self.bind(size=self._update_rect, pos=self._update_rect)
-        
-        # Time column
-        time_str = datetime.fromtimestamp(record_data.get('timestamp', 0)).strftime('%H:%M\n%d/%m')
+
+        top_row = BoxLayout(orientation='horizontal', spacing=10, size_hint_y=0.7)
+
+        timestamp = record_data.get('timestamp')
         time_label = Label(
-            text=time_str,
+            text=self._format_timestamp(timestamp),
             font_size='10sp',
-            size_hint_x=0.15,
-            color=(0.8, 0.8, 0.8, 1)
+            size_hint_x=0.18,
+            color=(0.8, 0.8, 0.8, 1),
         )
-        self.add_widget(time_label)
-        
-        # Heart rate column
-        hr = record_data.get('heart_rate', 0)
-        hr_text = f"{hr:.0f}" if hr > 0 else "--"
-        hr_color = self._get_hr_color(hr)
+        top_row.add_widget(time_label)
+
+        hr = record_data.get('heart_rate') or record_data.get('hr') or 0
         hr_label = Label(
-            text=f"{hr_text}\nbpm",
+            text=f"{hr:.0f}\nbpm" if hr else "--\nbpm",
             font_size='12sp',
-            size_hint_x=0.2,
-            color=hr_color
+            size_hint_x=0.18,
+            color=self._get_hr_color(hr),
         )
-        self.add_widget(hr_label)
-        
-        # SpO2 column
-        spo2 = record_data.get('spo2', 0)
-        spo2_text = f"{spo2:.0f}" if spo2 > 0 else "--"
-        spo2_color = self._get_spo2_color(spo2)
+        top_row.add_widget(hr_label)
+
+        spo2 = record_data.get('spo2')
         spo2_label = Label(
-            text=f"{spo2_text}\n%",
+            text=f"{spo2:.0f}\n%" if spo2 else "--\n%",
             font_size='12sp',
-            size_hint_x=0.2,
-            color=spo2_color
+            size_hint_x=0.18,
+            color=self._get_spo2_color(spo2 or 0),
         )
-        self.add_widget(spo2_label)
-        
-        # Temperature column
-        temp = record_data.get('temperature', 0)
-        temp_text = f"{temp:.1f}" if temp > 0 else "--"
-        temp_color = self._get_temp_color(temp)
+        top_row.add_widget(spo2_label)
+
+        temp = (
+            record_data.get('temperature')
+            or record_data.get('temp')
+            or record_data.get('object_temperature')
+        )
         temp_label = Label(
-            text=f"{temp_text}\n°C",
+            text=f"{temp:.1f}\n°C" if temp else "--\n°C",
             font_size='12sp',
-            size_hint_x=0.2,
-            color=temp_color
+            size_hint_x=0.18,
+            color=self._get_temp_color(temp or 0),
         )
-        self.add_widget(temp_label)
-        
-        # Blood pressure column
-        systolic = record_data.get('systolic', 0)
-        diastolic = record_data.get('diastolic', 0)
-        bp_text = f"{systolic:.0f}/{diastolic:.0f}" if systolic > 0 and diastolic > 0 else "--"
-        bp_color = self._get_bp_color(systolic, diastolic)
+        top_row.add_widget(temp_label)
+
+        systolic = record_data.get('blood_pressure_systolic') or record_data.get('systolic')
+        diastolic = record_data.get('blood_pressure_diastolic') or record_data.get('diastolic')
+        bp_text = f"{systolic:.0f}/{diastolic:.0f}" if systolic and diastolic else "--"
         bp_label = Label(
             text=f"{bp_text}\nmmHg",
             font_size='12sp',
-            size_hint_x=0.25,
-            color=bp_color
+            size_hint_x=0.28,
+            color=self._get_bp_color(systolic or 0, diastolic or 0),
         )
-        self.add_widget(bp_label)
+        top_row.add_widget(bp_label)
+
+        self.add_widget(top_row)
+
+        alert = record_data.get('alert')
+        if alert:
+            alert_label = Label(
+                text=str(alert),
+                font_size='11sp',
+                size_hint_y=0.3,
+                color=(0.95, 0.75, 0.45, 1),
+                halign='left',
+                valign='middle',
+            )
+            alert_label.bind(size=alert_label.setter('text_size'))
+            self.add_widget(alert_label)
+
+    @staticmethod
+    def _format_timestamp(value: Union[datetime, str, float, int, None]) -> str:
+        if isinstance(value, datetime):
+            ts = value
+        elif isinstance(value, (int, float)):
+            ts = datetime.fromtimestamp(value)
+        elif isinstance(value, str):
+            try:
+                ts = datetime.fromisoformat(value.strip())
+            except ValueError:
+                return value
+        else:
+            return "--\n--"
+        return ts.strftime('%H:%M\n%d/%m')
     
     def _update_rect(self, instance, value):
         self.rect.pos = instance.pos
@@ -351,13 +371,12 @@ class HistoryScreen(Screen):
                 start_date = now - timedelta(days=7)
             elif self.current_filter == 'month':
                 start_date = now - timedelta(days=30)
-            else:  # all
-                start_date = datetime(2020, 1, 1)  # Far past date
-            
-            # Generate sample data (in real app, this would come from database)
-            sample_records = self._generate_sample_records(start_date, now)
-            
-            if not sample_records:
+            else:
+                start_date = None
+
+            records = self.app_instance.get_history_records(start_date, now, limit=200)
+
+            if not records:
                 # No records message
                 no_records_label = Label(
                     text='Không có dữ liệu trong khoảng thời gian này',
@@ -369,11 +388,11 @@ class HistoryScreen(Screen):
                 self.records_list.add_widget(no_records_label)
             else:
                 # Add records to list
-                for record in reversed(sample_records):  # Most recent first
+                for record in records:
                     record_widget = MeasurementRecord(record)
                     self.records_list.add_widget(record_widget)
             
-            self.logger.info(f"Loaded {len(sample_records)} records for filter: {self.current_filter}")
+            self.logger.info(f"Loaded {len(records)} records for filter: {self.current_filter}")
             
         except Exception as e:
             self.logger.error(f"Error loading records: {e}")
@@ -385,25 +404,22 @@ class HistoryScreen(Screen):
         
         records = []
         current_date = start_date
-        
-        # Generate records every few hours
+
+        # Deprecated: giữ lại cho mục đích demo hoặc khi chưa có dữ liệu thật
         while current_date <= end_date:
-            # Skip some records randomly to make it more realistic
-            if random.random() > 0.3:  # 70% chance of having a record
-                record = {
-                    'timestamp': current_date.timestamp(),
-                    'heart_rate': random.randint(60, 120) + random.random() * 10,
-                    'spo2': random.randint(95, 100) + random.random() * 3,
-                    'temperature': 36.0 + random.random() * 2,  # 36-38°C
-                    'systolic': random.randint(110, 140),
-                    'diastolic': random.randint(70, 90)
-                }
-                records.append(record)
-            
-            # Move to next time slot (2-6 hours)
-            hours_increment = random.randint(2, 6)
-            current_date += timedelta(hours=hours_increment)
-        
+            if random.random() > 0.3:
+                records.append(
+                    {
+                        'timestamp': current_date.timestamp(),
+                        'heart_rate': random.randint(60, 120) + random.random() * 10,
+                        'spo2': random.randint(95, 100) + random.random() * 3,
+                        'temperature': 36.0 + random.random() * 2,
+                        'systolic': random.randint(110, 140),
+                        'diastolic': random.randint(70, 90),
+                    }
+                )
+            current_date += timedelta(hours=random.randint(2, 6))
+
         return records
     
     def _export_data(self, instance):

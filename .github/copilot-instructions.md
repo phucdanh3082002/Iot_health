@@ -15,6 +15,7 @@ Xây dựng hệ thống IoT theo dõi sức khỏe: HR/SpO₂ (**MAX30102**), N
 * **KHÔNG** commit secrets (token, mật khẩu). Dùng biến môi trường / file cấu hình hiện có.
 * Tuân thủ **OOP, module hóa**, Python 3.11+, PEP8, logging chuẩn của dự án.
 * Tôn trọng kiến trúc **Hybrid**: Edge (Pi) ổn định; Server (PC) mở rộng.
+* Luôn trả lời tôi bằng tiếng việt, có thể vài từ tiếng anh kỹ thuật nếu cần thiết.
 
 ---
 

@@ -3,11 +3,15 @@ Main Kivy Application
 Main application class cho IoT Health Monitoring GUI
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 import sys
 import time
 from pathlib import Path
+from datetime import datetime
+from contextlib import closing
+import sqlite3
+import yaml
 from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager
 from kivy.clock import Clock
@@ -107,7 +111,7 @@ class HealthMonitorApp(App):
         if sensors is None:
             self.sensors = self._create_sensors_from_config()
         else:
-            self.sensors = sensors
+            self.sensors = self._normalize_sensor_keys(sensors)
 
         self.tts_manager = self._init_tts_manager()
         self._hr_finger_present: Optional[bool] = None
@@ -195,6 +199,26 @@ class HealthMonitorApp(App):
         
         return sensors
 
+    @staticmethod
+    def _normalize_sensor_keys(sensors: Dict[str, Any]) -> Dict[str, Any]:
+        mapping = {
+            'max30102': 'MAX30102',
+            'mlx90614': 'MLX90614',
+            'blood_pressure': 'BloodPressure',
+            'bloodpressure': 'BloodPressure',
+        }
+        normalized: Dict[str, Any] = {}
+        for key, sensor in sensors.items():
+            if not isinstance(key, str):
+                normalized[key] = sensor
+                continue
+            lookup = mapping.get(key)
+            if lookup:
+                normalized[lookup] = sensor
+            else:
+                normalized[key] = sensor
+        return normalized
+
     def _init_tts_manager(self) -> Optional[TTSManager]:
         """Khởi tạo bộ quản lý TTS dựa theo cấu hình."""
         try:
@@ -220,6 +244,15 @@ class HealthMonitorApp(App):
                 else DEFAULT_PIPER_CONFIG if DEFAULT_PIPER_CONFIG.exists() else None
             )
             speaker = piper_cfg.get('speaker') or None
+            assets_dir_value = piper_cfg.get('assets_dir')
+            if assets_dir_value:
+                assets_path = Path(assets_dir_value).expanduser()
+                if not assets_path.is_absolute():
+                    assets_path = (project_root / assets_dir_value).resolve()
+            else:
+                assets_path = (project_root / "asset" / "tts").resolve()
+
+            strict_assets = bool(piper_cfg.get('strict_assets', False))
 
             default_locale = self.audio_config.get('locale', 'vi')
             default_volume = int(self.audio_config.get('volume', 100))
@@ -230,6 +263,8 @@ class HealthMonitorApp(App):
                 speaker=speaker,
                 default_locale=default_locale,
                 default_volume=default_volume,
+                cache_dir=assets_path,
+                strict_assets=strict_assets,
             )
             self.logger.info("TTSManager khởi tạo thành công")
 
@@ -256,6 +291,21 @@ class HealthMonitorApp(App):
         if not self.tts_manager:
             return False
         return self.tts_manager.speak_scenario(scenario, **kwargs)
+
+    def speak_text(self, message: str, *, volume: Optional[int] = None, force: bool = True) -> bool:
+        """Queue a free-form TTS message using the Piper backend."""
+        if not self.tts_manager or not message:
+            return False
+        try:
+            return self.tts_manager.speak_scenario(
+                ScenarioID.CHATBOT_PROMPT,
+                override_message=message,
+                volume=volume,
+                force=force,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self.logger.error("Không thể phát thông điệp tuỳ chỉnh: %s", exc)
+            return False
 
     def _handle_navigation_tts(self, screen_name: str):
         mapping = {
@@ -656,18 +706,166 @@ class HealthMonitorApp(App):
     def get_sensor_data(self) -> Dict[str, Any]:
         """Get current sensor data"""
         return self.current_data.copy()
+
+    def get_history_records(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """Fetch historical measurement records from database or fallback storage."""
+        patient_id = (self.config_data.get('patient') or {}).get('id', 'patient_001')
+
+        if self.database and hasattr(self.database, 'get_health_records'):
+            try:
+                records = self.database.get_health_records(
+                    patient_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                    limit=limit,
+                )
+                if records:
+                    return records
+            except Exception as exc:
+                self.logger.error("Database history retrieval failed: %s", exc)
+
+        db_path = project_root / "data" / "vitals.db"
+        if not db_path.exists():
+            return []
+
+        query = "SELECT ts, hr, spo2, temp, alert FROM vitals"
+        filters: List[str] = []
+        params: List[Any] = []
+        if start_time:
+            filters.append("ts >= ?")
+            params.append(start_time.isoformat())
+        if end_time:
+            filters.append("ts <= ?")
+            params.append(end_time.isoformat())
+        if filters:
+            query += " WHERE " + " AND ".join(filters)
+        query += " ORDER BY ts DESC LIMIT ?"
+        params.append(int(limit))
+
+        results: List[Dict[str, Any]] = []
+        try:
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                with closing(conn.cursor()) as cursor:
+                    cursor.execute(query, params)
+                    for row in cursor.fetchall():
+                        try:
+                            ts = datetime.fromisoformat(row["ts"].strip()) if row["ts"] else None
+                        except ValueError:
+                            ts = None
+                        results.append(
+                            {
+                                'timestamp': ts,
+                                'heart_rate': row['hr'],
+                                'spo2': row['spo2'],
+                                'temperature': row['temp'],
+                                'alert': row['alert'],
+                            }
+                        )
+        except Exception as exc:
+            self.logger.error("Failed to read fallback history: %s", exc)
+            return []
+
+        return results
     
     def save_measurement_to_database(self, measurement_data: Dict[str, Any]):
         """Save measurement data to database"""
         try:
             if self.database:
-                self.database.insert_vital_signs(measurement_data)
-                self.logger.info("Measurement saved to database")
+                inserted = False
+                insert_vitals = getattr(self.database, 'insert_vital_signs', None)
+                save_record = getattr(self.database, 'save_health_record', None)
+                try:
+                    if callable(insert_vitals):
+                        insert_vitals(measurement_data)
+                        inserted = True
+                    elif callable(save_record):
+                        save_record(measurement_data)
+                        inserted = True
+                except Exception as exc:
+                    self.logger.error("Primary database save failed: %s", exc)
+
+                if inserted:
+                    self.logger.info("Measurement saved to database")
+                    return
+
+                self.logger.warning("Database handler missing insert method; using local fallback")
+
+            if self._save_to_local_vitals(measurement_data):
+                self.logger.info("Measurement saved to local vitals.db")
             else:
-                self.logger.warning("Database not available")
+                self.logger.warning("Unable to persist measurement data")
                 
         except Exception as e:
             self.logger.error(f"Error saving to database: {e}")
+
+    def _save_to_local_vitals(self, measurement_data: Dict[str, Any]) -> bool:
+        db_path = project_root / "data" / "vitals.db"
+        try:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = measurement_data.get('timestamp')
+            if isinstance(timestamp, (int, float)):
+                ts_str = datetime.fromtimestamp(timestamp).isoformat()
+            elif isinstance(timestamp, str):
+                ts_str = timestamp
+            else:
+                ts_str = datetime.now().isoformat()
+
+            hr = measurement_data.get('heart_rate') or measurement_data.get('hr')
+            spo2 = measurement_data.get('spo2')
+            temp = (
+                measurement_data.get('temperature')
+                or measurement_data.get('temp')
+                or measurement_data.get('object_temperature')
+            )
+
+            measurement_type = measurement_data.get('measurement_type', '')
+            alert = measurement_data.get('alert') or ''
+
+            if measurement_type == 'blood_pressure':
+                systolic = measurement_data.get('systolic') or measurement_data.get('blood_pressure_systolic')
+                diastolic = measurement_data.get('diastolic') or measurement_data.get('blood_pressure_diastolic')
+                if systolic and diastolic:
+                    alert = f"BP {systolic:.0f}/{diastolic:.0f} mmHg"
+
+            with closing(sqlite3.connect(db_path)) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS vitals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ts TEXT NOT NULL,
+                        hr REAL,
+                        spo2 REAL,
+                        temp REAL,
+                        alert TEXT
+                    )
+                    """
+                )
+                conn.execute(
+                    "INSERT INTO vitals (ts, hr, spo2, temp, alert) VALUES (?, ?, ?, ?, ?)",
+                    (ts_str, hr, spo2, temp, alert),
+                )
+                conn.commit()
+            return True
+        except Exception as exc:
+            self.logger.error("Local vitals save failed: %s", exc)
+            return False
+
+    def persist_config(self) -> None:
+        """Persist current configuration back to YAML file."""
+        config_path = project_root / "config" / "app_config.yaml"
+        try:
+            with config_path.open('w', encoding='utf-8') as handle:
+                yaml.safe_dump(self.config_data, handle, allow_unicode=True, sort_keys=False)
+            self.audio_config = self.config_data.get('audio', {}) or {}
+            self.logger.info("Configuration persisted to %s", config_path)
+        except Exception as exc:
+            self.logger.error("Không thể lưu cấu hình: %s", exc)
     
     def on_stop(self):
         """Called when app is stopping"""

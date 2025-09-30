@@ -114,12 +114,9 @@ audio:
   piper:
     model_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx"
     config_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx.json"
-    speaker: null
-  tts_engine: "piper"
-  piper:
-    model_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx"
-    config_path: "/home/pi/piper_models/vi_VN-vais1000-medium.onnx.json"
     speaker: ""
+    assets_dir: "asset/tts"
+    strict_assets: true
 
 # Logging Configuration
 logging:
