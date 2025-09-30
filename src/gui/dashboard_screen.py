@@ -338,10 +338,8 @@ class DashboardScreen(Screen):
             else:
                 self.cardio_button.update_state("--", "Nhấn để đo", subtitle='Nhấn để đo trực tiếp')
 
-            if temp and temp > 0:
-                self.temp_button.update_state(f"{temp:.1f}°C", "Đã đo", subtitle='Nhấn để xem chi tiết')
-            else:
-                self.temp_button.update_state("--", "Nhấn để đo", subtitle='Đưa cảm biến gần trán')
+            # Luôn giữ ô nhiệt độ ở trạng thái chờ đo, không hiển thị giá trị
+            self.temp_button.update_state("--", "Nhấn để đo", subtitle='Đưa cảm biến gần trán')
 
             systolic = sensor_data.get('blood_pressure_systolic')
             diastolic = sensor_data.get('blood_pressure_diastolic')

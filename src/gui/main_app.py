@@ -86,9 +86,9 @@ class HealthMonitorApp(App):
             alert_system: Alert system
         """
         super().__init__(**kwargs)
-        
-    # Setup logging early for downstream helper usage
-    self.logger = logging.getLogger(__name__)
+
+        # Setup logging early for downstream helper usage
+        self.logger = logging.getLogger(__name__)
 
         self.config_data = config
         self.database = database
@@ -120,7 +120,7 @@ class HealthMonitorApp(App):
         self.data_update_event = None
 
         # Pre-register callbacks for sensors
-        self.sensor_callbacks: Dict[str, Any] = {
+        self.sensor_callbacks = {
             'MAX30102': self.on_max30102_data,
             'MLX90614': self.on_temperature_data,
             'BloodPressure': self.on_blood_pressure_data,
@@ -231,9 +231,8 @@ class HealthMonitorApp(App):
             for key, callback in self.sensor_callbacks.items():
                 sensor = self.sensors.get(key)
                 if not sensor:
-                    self.current_data['sensor_status'][key] = {
-                        'status': 'unavailable'
-                    }
+                    status_entry = self.current_data['sensor_status'].setdefault(key, {})
+                    status_entry['status'] = 'unavailable'
                     continue
 
                 if hasattr(sensor, 'set_data_callback'):
@@ -267,8 +266,12 @@ class HealthMonitorApp(App):
             started = sensor.start()
             if started:
                 self.logger.info(f"Sensor {sensor_key} được khởi động theo yêu cầu")
+                status_entry = self.current_data['sensor_status'].setdefault(sensor_key, {})
+                status_entry['status'] = 'running'
             else:
                 self.logger.error(f"Không thể khởi động sensor {sensor_key}")
+                status_entry = self.current_data['sensor_status'].setdefault(sensor_key, {})
+                status_entry['status'] = 'error'
             return bool(started)
 
         self.logger.error(f"Sensor {sensor_key} không hỗ trợ start()")
@@ -284,6 +287,8 @@ class HealthMonitorApp(App):
             stopped = sensor.stop()
             if stopped:
                 self.logger.info(f"Sensor {sensor_key} đã dừng sau khi đo")
+                status_entry = self.current_data['sensor_status'].setdefault(sensor_key, {})
+                status_entry['status'] = 'idle'
             else:
                 self.logger.warning(f"Sensor {sensor_key} stop() trả về False")
             return bool(stopped)
@@ -315,6 +320,7 @@ class HealthMonitorApp(App):
                 
                 # Store comprehensive sensor status
                 self.current_data['sensor_status']['MAX30102'] = {
+                    'status': 'streaming',
                     'hr_status': hr_status,
                     'spo2_status': spo2_status,
                     'finger_detected': self.current_data['finger_detected'],
@@ -359,7 +365,7 @@ class HealthMonitorApp(App):
                 
                 # Store MLX90614 sensor status with actual sensor data
                 self.current_data['sensor_status']['MLX90614'] = {
-                    'status': 'normal',  # MLX90614 doesn't have complex status like MAX30102
+                    'status': 'streaming',
                     'measurement_type': 'object' if getattr(sensor, 'use_object_temp', True) else 'ambient',
                     'temperature_unit': 'celsius',
                     'temperature_offset': getattr(sensor, 'temperature_offset', 0),
