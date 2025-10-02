@@ -2,7 +2,6 @@
 Temperature Measurement Screen
 Màn hình đo chi tiết cho MLX90614 (nhiệt độ)
 """
-
 import logging
 import math
 import statistics
@@ -29,7 +28,7 @@ class TemperatureGauge(BoxLayout):
         
         # Temperature display
         self.temp_label = Label(
-            text='36.0°C',
+            text='Đang chờ đo',
             font_size='48sp',
             bold=True,
             color=(0, 0, 0, 1)  # Black text for better visibility
@@ -403,8 +402,8 @@ class TemperatureScreen(Screen):
             self.measuring = True
             self.measurement_start_ts = time.time()
             self.samples.clear()
-            self.current_temp = 0.0
-            self.ambient_temp = 0.0
+            self._display_object_temp(None)
+            self._display_ambient_temp(None)
             
             # Update UI
             self.start_stop_btn.text = 'Dừng đo'
@@ -412,7 +411,7 @@ class TemperatureScreen(Screen):
             self.save_btn.disabled = True
             self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
             
-            self.status_label.text = f'Đang đo... 0.0/{self.measurement_duration:.1f}s'
+            self.status_label.text = self._format_measurement_status(0.0)
             self.progress_bar.value = 0
             
             # Schedule updates
@@ -472,12 +471,10 @@ class TemperatureScreen(Screen):
             progress_ratio = min(elapsed / self.measurement_duration, 1.0)
             self.progress_bar.value = progress_ratio * 100
             elapsed_display = min(elapsed, self.measurement_duration)
-            self.status_label.text = f'Đang đo... {elapsed_display:.1f}/{self.measurement_duration:.1f}s'
+            self.status_label.text = self._format_measurement_status(elapsed_display)
             
             # Get current sensor data
             sensor_data = self.app_instance.get_sensor_data()
-            mlx90614_status = sensor_data.get('sensor_status', {}).get('MLX90614', {})
-            
             # Get temperature data following MLX90614 logic
             object_temp = sensor_data.get('temperature')
             ambient_temp = sensor_data.get('ambient_temperature')
@@ -485,23 +482,20 @@ class TemperatureScreen(Screen):
             # Validate and collect samples
             if self._is_valid_object_temp(object_temp):
                 if self._accept_sample(object_temp):
+                    ambient_validated = self._validate_ambient_temp(ambient_temp)
                     sample = {
                         'timestamp': now,
                         'object': float(object_temp),
-                        'ambient': self._validate_ambient_temp(ambient_temp),
+                        'ambient': ambient_validated,
                     }
                     self.samples.append(sample)
 
                     running_avg, running_ambient = self._compute_average()
                     if running_avg is not None:
-                        self.current_temp = running_avg
-                        self.obj_temp_label.text = f"{running_avg:.1f}°C"
-                        self.temp_gauge.update_temperature(running_avg)
-                    if running_ambient is not None:
-                        self.ambient_temp = running_ambient
-                        self.amb_temp_label.text = f"{running_ambient:.1f}°C"
-                    elif ambient_temp is not None:
-                        self.amb_temp_label.text = '--°C'
+                        self._display_object_temp(running_avg)
+
+                    effective_ambient = running_ambient if running_ambient is not None else ambient_validated
+                    self._display_ambient_temp(effective_ambient)
                 else:
                     self.logger.debug(
                         "Rejected temperature sample %.2f°C as outlier (baseline %.2f°C)",
@@ -509,10 +503,7 @@ class TemperatureScreen(Screen):
                         statistics.median([s['object'] for s in self.samples]) if self.samples else object_temp,
                     )
             else:
-                self.status_label.text = (
-                    f'Đang đo... {elapsed_display:.1f}/{self.measurement_duration:.1f}s '
-                    '(giữ cảm biến ổn định)'
-                )
+                self.status_label.text = f"{self._format_measurement_status(elapsed_display)} (giữ cảm biến ổn định)"
 
             # Finalise after duration window
             if elapsed >= self.measurement_duration:
@@ -527,15 +518,8 @@ class TemperatureScreen(Screen):
                     )
                     return False
 
-                self.current_temp = average_temp
-                self.obj_temp_label.text = f"{average_temp:.1f}°C"
-                self.temp_gauge.update_temperature(average_temp)
-
-                if average_ambient is not None:
-                    self.ambient_temp = average_ambient
-                    self.amb_temp_label.text = f"{average_ambient:.1f}°C"
-                elif ambient_temp is not None:
-                    self.amb_temp_label.text = '--°C'
+                self._display_object_temp(average_temp)
+                self._display_ambient_temp(average_ambient)
 
                 scenario_id, result_message = self._determine_result_scenario(average_temp)
                 self.save_btn.disabled = False
@@ -648,17 +632,40 @@ class TemperatureScreen(Screen):
                 speak_fn(scenario_id, **kwargs)
             except Exception as exc:  # pragma: no cover - defensive logging
                 self.logger.error("Không thể phát TTS cho kịch bản %s: %s", scenario_id, exc)
+
+    def _format_measurement_status(self, elapsed_seconds: float) -> str:
+        elapsed_clamped = max(0.0, min(elapsed_seconds, self.measurement_duration))
+        return f'Đang đo... {elapsed_clamped:.1f}/{self.measurement_duration:.1f}s'
+
+    def _display_object_temp(self, value: float | None) -> None:
+        if value is None:
+            self.current_temp = 0.0
+            self.obj_temp_label.text = '--°C'
+            self.temp_gauge.update_temperature(36.0)
+            return
+
+        self.current_temp = value
+        self.obj_temp_label.text = f"{value:.1f}°C"
+        self.temp_gauge.update_temperature(value)
+
+    def _display_ambient_temp(self, value: float | None) -> None:
+        if value is None:
+            self.ambient_temp = 0.0
+            self.amb_temp_label.text = '--°C'
+            return
+
+        self.ambient_temp = value
+        self.amb_temp_label.text = f"{value:.1f}°C"
     
     def on_enter(self):
         """Called when screen is entered"""
         self.logger.info("Temperature measurement screen entered")
         
         # Reset displays
-        self.obj_temp_label.text = '--°C'
-        self.amb_temp_label.text = '--°C'
+        self._display_object_temp(None)
+        self._display_ambient_temp(None)
         self.progress_bar.value = 0
         self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động'
-        self.temp_gauge.update_temperature(36.0)
         self.measuring = False
         self.measurement_start_ts = None
         self.samples.clear()
