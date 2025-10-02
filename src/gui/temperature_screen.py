@@ -3,120 +3,29 @@ Temperature Measurement Screen
 Màn hình đo chi tiết cho MLX90614 (nhiệt độ)
 """
 import logging
-import math
 import statistics
 import time
 from kivy.uix.screenmanager import Screen
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
 from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse
-from kivy.animation import Animation
+from kivy.graphics import Color, Rectangle
+from kivy.metrics import dp
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDRectangleFlatIconButton
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDLabel, MDIcon
+from kivymd.uix.progressbar import MDProgressBar
+from kivymd.uix.toolbar import MDTopAppBar
 
 from src.utils.tts_manager import ScenarioID
 
 
-class TemperatureGauge(BoxLayout):
-    """Widget hiển thị nhiệt độ dạng gauge"""
-    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        
-        self.current_temp = 36.0
-        
-        # Temperature display
-        self.temp_label = Label(
-            text='Đang chờ đo',
-            font_size='48sp',
-            bold=True,
-            color=(0, 0, 0, 1)  # Black text for better visibility
-        )
-        self.add_widget(self.temp_label)
-        
-        # Background gauge
-        with self.canvas.before:
-            # Cold zone (blue)
-            Color(0.2, 0.4, 1, 0.3)
-            self.cold_arc = Ellipse(size=(150, 150), pos=(50, 50))
-            
-            # Normal zone (green)
-            Color(0.2, 0.8, 0.2, 0.3)
-            self.normal_arc = Ellipse(size=(150, 150), pos=(50, 50))
-            
-            # Hot zone (red)
-            Color(1, 0.3, 0.3, 0.3)
-            self.hot_arc = Ellipse(size=(150, 150), pos=(50, 50))
-            
-            # Current temperature indicator
-            Color(1, 1, 1, 1)
-            self.temp_indicator = Ellipse(size=(10, 10), pos=(120, 120))
-        
-        self.bind(size=self._update_gauge, pos=self._update_gauge)
-    
-    def _update_gauge(self, instance, value):
-        """Update gauge graphics"""
-        center_x = self.center_x
-        center_y = self.center_y
-        radius = min(self.width, self.height) * 0.4
-        
-        # Update arcs
-        self.cold_arc.pos = (center_x - radius, center_y - radius)
-        self.cold_arc.size = (radius * 2, radius * 2)
-        
-        self.normal_arc.pos = (center_x - radius, center_y - radius)
-        self.normal_arc.size = (radius * 2, radius * 2)
-        
-        self.hot_arc.pos = (center_x - radius, center_y - radius)
-        self.hot_arc.size = (radius * 2, radius * 2)
-        
-        # Update temperature indicator position
-        self._update_temp_indicator()
-    
-    def _update_temp_indicator(self):
-        """Update temperature indicator position"""
-        # Map temperature to angle (30°C = bottom, 42°C = top)
-        temp_range = (30, 42)
-        angle_range = (-90, 90)  # degrees
-        
-        temp_normalized = (self.current_temp - temp_range[0]) / (temp_range[1] - temp_range[0])
-        temp_normalized = max(0, min(1, temp_normalized))
-        
-        angle = angle_range[0] + temp_normalized * (angle_range[1] - angle_range[0])
-        
-        # Convert to radians and calculate position
-        angle_rad = math.radians(angle)
-        radius = min(self.width, self.height) * 0.3
-        
-        x = self.center_x + radius * math.cos(angle_rad) - 5
-        y = self.center_y + radius * math.sin(angle_rad) - 5
-        
-        self.temp_indicator.pos = (x, y)
-    
-    def update_temperature(self, temp: float):
-        """Update displayed temperature"""
-        # Animate temperature change
-        anim = Animation(current_temp=temp, duration=0.5)
-        anim.bind(on_progress=self._animate_temp)
-        anim.start(self)
-    
-    def _animate_temp(self, animation, widget, progress):
-        """Animate temperature value"""
-        self.temp_label.text = f"{self.current_temp:.1f}°C"
-        self._update_temp_indicator()
-        
-        # Update color based on temperature with better contrast
-        if self.current_temp < 35.0:
-            self.temp_label.color = (0.2, 0.2, 0.8, 1)  # Dark blue (low)
-        elif self.current_temp < 36.0:
-            self.temp_label.color = (0.2, 0.4, 0.8, 1)  # Blue
-        elif self.current_temp <= 37.5:
-            self.temp_label.color = (0.1, 0.6, 0.1, 1)  # Dark green (normal)
-        elif self.current_temp <= 38.5:
-            self.temp_label.color = (0.8, 0.4, 0, 1)     # Dark orange (fever)
-        else:
-            self.temp_label.color = (0.8, 0.1, 0.1, 1)   # Dark red (high fever)
+MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
+MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
+MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
+MED_PRIMARY = (0.12, 0.55, 0.76, 1)
+MED_WARNING = (0.96, 0.4, 0.3, 1)
+TEXT_PRIMARY = (1, 1, 1, 1)
+TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 
 
 class TemperatureScreen(Screen):
@@ -145,30 +54,22 @@ class TemperatureScreen(Screen):
     
     def _build_layout(self):
         """Build temperature measurement screen"""
-        # Main container
-        main_layout = BoxLayout(orientation='vertical', spacing=15, padding=20)
-        
-        # Background
+        main_layout = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(10),
+            padding=(dp(12), dp(10), dp(12), dp(10)),
+        )
+
         with main_layout.canvas.before:
-            Color(0.1, 0.05, 0.05, 1)  # Dark red background
+            Color(*MED_BG_COLOR)
             self.bg_rect = Rectangle(size=main_layout.size, pos=main_layout.pos)
         main_layout.bind(size=self._update_bg, pos=self._update_bg)
-        
-        # Header
+
         self._create_header(main_layout)
-        
-        # Instructions
-        self._create_instructions(main_layout)
-        
-        # Temperature gauge
-        self._create_temperature_display(main_layout)
-        
-        # Status and readings
+        self._create_measurement_panel(main_layout)
         self._create_status_display(main_layout)
-        
-        # Controls
         self._create_controls(main_layout)
-        
+
         self.add_widget(main_layout)
     
     def _update_bg(self, instance, value):
@@ -177,189 +78,259 @@ class TemperatureScreen(Screen):
     
     def _create_header(self, parent):
         """Create header"""
-        header = BoxLayout(orientation='horizontal', size_hint_y=0.08, spacing=10)
-        
-        # Back button
-        back_btn = Button(
-            text='← Dashboard',
-            font_size='14sp',
-            size_hint_x=0.25,
-            background_color=(0.4, 0.4, 0.4, 1)
+        toolbar = MDTopAppBar(
+            title='NHIỆT ĐỘ CƠ THỂ',
+            elevation=0,
+            md_bg_color=MED_PRIMARY,
+            specific_text_color=TEXT_PRIMARY,
+            left_action_items=[["arrow-left", lambda _: self._on_back_pressed(None)]],
+            size_hint_y=None,
+            height=dp(42),
         )
-        back_btn.bind(on_press=self._on_back_pressed)
-        header.add_widget(back_btn)
-        
-        # Title
-        title = Label(
-            text='NHIỆT ĐỘ CƠ THỂ',
-            font_size='20sp',
-            bold=True,
-            color=(1, 1, 1, 1),
-            size_hint_x=0.75
+        parent.add_widget(toolbar)
+
+    def _create_measurement_panel(self, parent):
+        """Create compact measurement + instructions row cho màn 3.5"""
+        panel_layout = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(10),
+            size_hint_y=None,
+            height=dp(132),
         )
-        header.add_widget(title)
-        
-        parent.add_widget(header)
-    
-    def _create_instructions(self, parent):
-        """Create instructions panel"""
-        instruction_container = BoxLayout(
+
+        measurement_card = MDCard(
             orientation='vertical',
-            size_hint_y=0.12,
-            spacing=5
+            size_hint_x=0.48,
+            padding=(dp(14), dp(12), dp(14), dp(12)),
+            spacing=dp(6),
+            radius=[dp(18)],
+            md_bg_color=MED_CARD_BG,
         )
-        
-        # Background
-        with instruction_container.canvas.before:
-            Color(0.3, 0.1, 0.1, 0.3)
-            self.instruction_rect = RoundedRectangle(
-                size=instruction_container.size,
-                pos=instruction_container.pos,
-                radius=[10]
-            )
-        instruction_container.bind(
-            size=self._update_instruction_rect,
-            pos=self._update_instruction_rect
+
+        header_layout = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(28),
+            spacing=dp(6),
         )
-        
-        # Instructions
-        self.instruction_label = Label(
-            text='Đưa cảm biến gần trán (2-5cm)\\nGiữ ổn định trong vài giây\\nTránh di chuyển khi đo',
-            font_size='12sp',
-            color=(0.9, 0.9, 0.9, 1),
-            halign='center'
+        measure_icon = MDIcon(
+            icon='thermometer',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
         )
-        self.instruction_label.bind(size=self.instruction_label.setter('text_size'))
-        instruction_container.add_widget(self.instruction_label)
-        
-        parent.add_widget(instruction_container)
-    
-    def _update_instruction_rect(self, instance, value):
-        self.instruction_rect.pos = instance.pos
-        self.instruction_rect.size = instance.size
-    
-    def _create_temperature_display(self, parent):
-        """Create temperature gauge display"""
-        temp_container = BoxLayout(
+        measure_icon.icon_size = dp(20)
+        header_layout.add_widget(measure_icon)
+
+        title_label = MDLabel(
+            text='Nhiệt độ cơ thể',
+            font_style='Subtitle2',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+            halign='left',
+            valign='middle',
+        )
+        title_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        header_layout.add_widget(title_label)
+        measurement_card.add_widget(header_layout)
+
+        self.temp_value_label = MDLabel(
+            text='--°C',
+            font_style='H2',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
+        )
+        self.temp_value_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        measurement_card.add_widget(self.temp_value_label)
+
+        self.temp_state_label = MDLabel(
+            text='Chờ đo',
+            font_style='Caption',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        self.temp_state_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        measurement_card.add_widget(self.temp_state_label)
+
+        panel_layout.add_widget(measurement_card)
+
+        instruction_card = MDCard(
             orientation='vertical',
-            size_hint_y=0.45,
-            spacing=10
+            size_hint_x=0.52,
+            padding=(dp(14), dp(12), dp(14), dp(12)),
+            spacing=dp(6),
+            radius=[dp(18)],
+            md_bg_color=MED_CARD_BG,
         )
-        
-        # Temperature gauge
-        self.temp_gauge = TemperatureGauge(size_hint_y=0.8)
-        temp_container.add_widget(self.temp_gauge)
-        
-        # Temperature range indicator
-        range_layout = BoxLayout(orientation='horizontal', size_hint_y=0.2)
-        
-        # Normal range
-        range_label = Label(
-            text='Bình thường: 36.0 - 37.5°C',
-            font_size='12sp',
-            color=(0.2, 0.8, 0.2, 1)
+
+        instruction_header = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(28),
+            spacing=dp(6),
         )
-        range_layout.add_widget(range_label)
-        
-        temp_container.add_widget(range_layout)
-        
-        parent.add_widget(temp_container)
+        instruction_icon = MDIcon(
+            icon='clipboard-pulse-outline',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
+        )
+        instruction_icon.icon_size = dp(20)
+        instruction_header.add_widget(instruction_icon)
+
+        instruction_title = MDLabel(
+            text='Hướng dẫn nhanh',
+            font_style='Subtitle2',
+            halign='left',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        instruction_title.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        instruction_header.add_widget(instruction_title)
+        instruction_card.add_widget(instruction_header)
+
+        self.instruction_label = MDLabel(
+            text='1. Đưa cảm biến cách trán 2-5cm\n2. Giữ tay chắc suốt 5 giây\n3. Tránh rung lắc, gió lạnh',
+            font_style='Caption',
+            halign='left',
+            valign='top',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        self.instruction_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        instruction_card.add_widget(self.instruction_label)
+
+        panel_layout.add_widget(instruction_card)
+
+        parent.add_widget(panel_layout)
     
     def _create_status_display(self, parent):
         """Create status and readings display"""
-        status_container = BoxLayout(
+        status_card = MDCard(
             orientation='vertical',
-            size_hint_y=0.25,
-            spacing=10
+            size_hint_y=None,
+            height=dp(92),
+            padding=(dp(14), dp(12), dp(14), dp(12)),
+            spacing=dp(8),
+            radius=[dp(18)],
+            md_bg_color=MED_CARD_BG,
         )
-        
-        # Status label
-        self.status_label = Label(
+
+        self.status_label = MDLabel(
             text='Sẵn sàng đo',
-            font_size='16sp',
-            color=(1, 1, 1, 1)
+            font_style='Body2',
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
         )
-        status_container.add_widget(self.status_label)
-        
-        # Readings info
-        readings_layout = BoxLayout(orientation='horizontal', spacing=20)
-        
-        # Object temperature
-        obj_temp_layout = BoxLayout(orientation='vertical')
-        obj_temp_title = Label(
+        status_card.add_widget(self.status_label)
+
+        readings_layout = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(16),
+            size_hint_y=None,
+            height=dp(40),
+        )
+
+        obj_temp_layout = MDBoxLayout(orientation='vertical', spacing=dp(2))
+        obj_icon = MDIcon(
+            icon='account-heart',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
+        )
+        obj_icon.icon_size = dp(20)
+        obj_temp_layout.add_widget(obj_icon)
+        obj_temp_title = MDLabel(
             text='Nhiệt độ cơ thể',
-            font_size='12sp',
-            size_hint_y=0.4,
-            color=(0.8, 0.8, 0.8, 1)
+            font_style='Caption',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
         )
-        self.obj_temp_label = Label(
+        self.obj_temp_label = MDLabel(
             text='--°C',
-            font_size='18sp',
-            bold=True,
-            size_hint_y=0.6,
-            color=(1, 1, 1, 1)
+            font_style='Subtitle1',
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
         )
         obj_temp_layout.add_widget(obj_temp_title)
         obj_temp_layout.add_widget(self.obj_temp_label)
         readings_layout.add_widget(obj_temp_layout)
-        
-        # Ambient temperature
-        amb_temp_layout = BoxLayout(orientation='vertical')
-        amb_temp_title = Label(
-            text='Nhiệt độ môi trường',
-            font_size='12sp',
-            size_hint_y=0.4,
-            color=(0.8, 0.8, 0.8, 1)
+
+        amb_temp_layout = MDBoxLayout(orientation='vertical', spacing=dp(2))
+        amb_icon = MDIcon(
+            icon='home-thermometer',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
         )
-        self.amb_temp_label = Label(
+        amb_icon.icon_size = dp(20)
+        amb_temp_layout.add_widget(amb_icon)
+        amb_temp_title = MDLabel(
+            text='Nhiệt độ môi trường',
+            font_style='Caption',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        self.amb_temp_label = MDLabel(
             text='--°C',
-            font_size='18sp',
-            size_hint_y=0.6,
-            color=(0.7, 0.7, 0.7, 1)
+            font_style='Subtitle2',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
         )
         amb_temp_layout.add_widget(amb_temp_title)
         amb_temp_layout.add_widget(self.amb_temp_label)
         readings_layout.add_widget(amb_temp_layout)
-        
-        status_container.add_widget(readings_layout)
-        
-        # Progress bar
-        self.progress_bar = ProgressBar(
+
+        status_card.add_widget(readings_layout)
+
+        self.progress_bar = MDProgressBar(
             max=100,
             value=0,
-            size_hint_y=0.2
+            color=MED_CARD_ACCENT,
+            size_hint_y=None,
+            height=dp(4),
         )
-        status_container.add_widget(self.progress_bar)
-        
-        parent.add_widget(status_container)
+        status_card.add_widget(self.progress_bar)
+
+        parent.add_widget(status_card)
     
     def _create_controls(self, parent):
         """Create control buttons"""
-        control_layout = BoxLayout(
+        control_layout = MDBoxLayout(
             orientation='horizontal',
-            size_hint_y=0.1,
-            spacing=15
+            size_hint_y=None,
+            height=dp(48),
+            spacing=dp(12),
         )
-        
-        # Start/Stop button
-        self.start_stop_btn = Button(
+
+        self.start_stop_btn = MDRectangleFlatIconButton(
             text='Bắt đầu đo',
-            font_size='16sp',
-            background_color=(0.8, 0.3, 0.3, 1)  # Red theme
+            icon='play-circle',
+            text_color=MED_CARD_ACCENT,
+            line_color=MED_CARD_ACCENT,
         )
         self.start_stop_btn.bind(on_press=self._on_start_stop_pressed)
         control_layout.add_widget(self.start_stop_btn)
-        
-        # Save button
-        self.save_btn = Button(
+
+        self.save_btn = MDRectangleFlatIconButton(
             text='Lưu kết quả',
-            font_size='16sp',
-            background_color=(0.2, 0.6, 0.8, 1),
-            disabled=True
+            icon='content-save',
+            disabled=True,
+            text_color=(1, 1, 1, 0.3),
+            line_color=(1, 1, 1, 0.3),
         )
         self.save_btn.bind(on_press=self._on_save_pressed)
         control_layout.add_widget(self.save_btn)
-        
+
         parent.add_widget(control_layout)
     
     def _on_back_pressed(self, instance):
@@ -388,8 +359,28 @@ class TemperatureScreen(Screen):
             self.logger.info(f"Saved temperature measurement: {self.current_temp}°C")
             
             # Reset for next measurement
-            self.save_btn.disabled = True
-            self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
+            self._style_save_button(enabled=False)
+
+    def _style_start_button(self, active: bool) -> None:
+        if active:
+            self.start_stop_btn.text = 'Dừng đo'
+            self.start_stop_btn.icon = 'stop-circle'
+            self.start_stop_btn.text_color = MED_WARNING
+            self.start_stop_btn.line_color = MED_WARNING
+        else:
+            self.start_stop_btn.text = 'Bắt đầu đo'
+            self.start_stop_btn.icon = 'play-circle'
+            self.start_stop_btn.text_color = MED_CARD_ACCENT
+            self.start_stop_btn.line_color = MED_CARD_ACCENT
+
+    def _style_save_button(self, enabled: bool) -> None:
+        self.save_btn.disabled = not enabled
+        if enabled:
+            self.save_btn.text_color = MED_CARD_ACCENT
+            self.save_btn.line_color = MED_CARD_ACCENT
+        else:
+            self.save_btn.text_color = (1, 1, 1, 0.3)
+            self.save_btn.line_color = (1, 1, 1, 0.3)
     
     def _start_measurement(self):
         """Start temperature measurement"""
@@ -404,12 +395,11 @@ class TemperatureScreen(Screen):
             self.samples.clear()
             self._display_object_temp(None)
             self._display_ambient_temp(None)
+            self.temp_state_label.text = 'Đang đo trong 5 giây'
             
             # Update UI
-            self.start_stop_btn.text = 'Dừng đo'
-            self.start_stop_btn.background_color = (1, 0.2, 0.2, 1)
-            self.save_btn.disabled = True
-            self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
+            self._style_start_button(active=True)
+            self._style_save_button(enabled=False)
             
             self.status_label.text = self._format_measurement_status(0.0)
             self.progress_bar.value = 0
@@ -431,8 +421,7 @@ class TemperatureScreen(Screen):
                 self.measuring = False
             
             # Update UI
-            self.start_stop_btn.text = 'Bắt đầu đo'
-            self.start_stop_btn.background_color = (0.8, 0.3, 0.3, 1)
+            self._style_start_button(active=False)
             if reset_progress:
                 self.progress_bar.value = 0
 
@@ -442,8 +431,10 @@ class TemperatureScreen(Screen):
                 self.status_label.text = 'Đã dừng đo'
 
             if not keep_save_state:
-                self.save_btn.disabled = True
-                self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
+                self._style_save_button(enabled=False)
+                self.temp_state_label.text = 'Chờ đo'
+            elif final_message:
+                self.temp_state_label.text = 'Sẵn sàng cho lần đo tiếp theo'
             
             # Stop updates
             Clock.unschedule(self._update_measurement)
@@ -522,8 +513,7 @@ class TemperatureScreen(Screen):
                 self._display_ambient_temp(average_ambient)
 
                 scenario_id, result_message = self._determine_result_scenario(average_temp)
-                self.save_btn.disabled = False
-                self.save_btn.background_color = (0.2, 0.6, 0.8, 1)
+                self._style_save_button(enabled=True)
                 self.progress_bar.value = 100
                 self.logger.info(
                     "Temperature measurement completed with %d samples, average %.2f°C",
@@ -539,6 +529,7 @@ class TemperatureScreen(Screen):
                     reset_progress=False,
                     keep_save_state=True,
                 )
+                self.temp_state_label.text = 'Đã hoàn tất'
                 return False
 
             return True
@@ -641,12 +632,14 @@ class TemperatureScreen(Screen):
         if value is None:
             self.current_temp = 0.0
             self.obj_temp_label.text = '--°C'
-            self.temp_gauge.update_temperature(36.0)
+            self.temp_value_label.text = '--°C'
+            self.temp_value_label.text_color = TEXT_PRIMARY
             return
 
         self.current_temp = value
         self.obj_temp_label.text = f"{value:.1f}°C"
-        self.temp_gauge.update_temperature(value)
+        self.temp_value_label.text = f"{value:.1f}°C"
+        self.temp_value_label.text_color = self._get_temp_color(value)
 
     def _display_ambient_temp(self, value: float | None) -> None:
         if value is None:
@@ -656,6 +649,17 @@ class TemperatureScreen(Screen):
 
         self.ambient_temp = value
         self.amb_temp_label.text = f"{value:.1f}°C"
+
+    def _get_temp_color(self, value: float) -> tuple[float, float, float, float]:
+        if value < 35.0:
+            return (0.2, 0.4, 0.9, 1)
+        if value < 36.0:
+            return (0.2, 0.55, 0.95, 1)
+        if value <= 37.5:
+            return (0.0, 0.72, 0.58, 1)
+        if value <= 38.5:
+            return (0.95, 0.6, 0.2, 1)
+        return (0.94, 0.28, 0.28, 1)
     
     def on_enter(self):
         """Called when screen is entered"""
@@ -666,15 +670,14 @@ class TemperatureScreen(Screen):
         self._display_ambient_temp(None)
         self.progress_bar.value = 0
         self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động'
+        self.temp_state_label.text = 'Chờ đo'
         self.measuring = False
         self.measurement_start_ts = None
         self.samples.clear()
 
         # Reset control buttons
-        self.start_stop_btn.text = 'Bắt đầu đo'
-        self.start_stop_btn.background_color = (0.8, 0.3, 0.3, 1)
-        self.save_btn.disabled = True
-        self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
+        self._style_start_button(active=False)
+        self._style_save_button(enabled=False)
     
     def on_leave(self):
         """Called when screen is left"""
@@ -686,3 +689,5 @@ class TemperatureScreen(Screen):
         else:
             self.measurement_start_ts = None
             self.samples.clear()
+            self._style_start_button(active=False)
+            self._style_save_button(enabled=False)

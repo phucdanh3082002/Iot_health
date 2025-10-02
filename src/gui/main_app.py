@@ -12,10 +12,10 @@ from datetime import datetime
 from contextlib import closing
 import sqlite3
 import yaml
-from kivy.app import App
 from kivy.uix.screenmanager import ScreenManager
 from kivy.clock import Clock
 from kivy.config import Config
+from kivymd.app import MDApp
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -69,7 +69,7 @@ Config.set('graphics', 'fullscreen', 'auto')
 Config.set('graphics', 'show_cursor', False)
 
 
-class HealthMonitorApp(App):
+class HealthMonitorApp(MDApp):
     """
     Main Kivy application cho IoT Health Monitoring System
     
@@ -97,6 +97,12 @@ class HealthMonitorApp(App):
             alert_system: Alert system
         """
         super().__init__(**kwargs)
+
+        # Configure KivyMD theme to align với palette y tế
+        self.theme_cls.theme_style = "Dark"
+        self.theme_cls.primary_palette = "Blue"
+        self.theme_cls.primary_hue = "500"
+        self.theme_cls.accent_palette = "Teal"
 
         # Setup logging early for downstream helper usage
         self.logger = logging.getLogger(__name__)
