@@ -9,6 +9,7 @@ from kivy.uix.screenmanager import Screen
 from kivy.clock import Clock
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
+from kivy.core.window import Window
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDRectangleFlatIconButton
 from kivymd.uix.card import MDCard
@@ -56,8 +57,8 @@ class TemperatureScreen(Screen):
         """Build temperature measurement screen"""
         main_layout = MDBoxLayout(
             orientation='vertical',
-            spacing=dp(10),
-            padding=(dp(12), dp(10), dp(12), dp(10)),
+            spacing=dp(6),
+            padding=(dp(8), dp(6), dp(8), dp(8)),
         )
 
         with main_layout.canvas.before:
@@ -85,24 +86,25 @@ class TemperatureScreen(Screen):
             specific_text_color=TEXT_PRIMARY,
             left_action_items=[["arrow-left", lambda _: self._on_back_pressed(None)]],
             size_hint_y=None,
-            height=dp(42),
+            height=dp(30),
         )
         parent.add_widget(toolbar)
 
     def _create_measurement_panel(self, parent):
         """Create compact measurement + instructions row cho màn 3.5"""
+        available_height = Window.height
         panel_layout = MDBoxLayout(
             orientation='horizontal',
             spacing=dp(10),
             size_hint_y=None,
-            height=dp(132),
+            height=min(dp(118), available_height * 0.36),
         )
 
         measurement_card = MDCard(
             orientation='vertical',
             size_hint_x=0.48,
-            padding=(dp(14), dp(12), dp(14), dp(12)),
-            spacing=dp(6),
+            padding=(dp(12), dp(10), dp(12), dp(10)),
+            spacing=dp(4),
             radius=[dp(18)],
             md_bg_color=MED_CARD_BG,
         )
@@ -110,8 +112,8 @@ class TemperatureScreen(Screen):
         header_layout = MDBoxLayout(
             orientation='horizontal',
             size_hint_y=None,
-            height=dp(28),
-            spacing=dp(6),
+            height=dp(24),
+            spacing=dp(4),
         )
         measure_icon = MDIcon(
             icon='thermometer',
@@ -137,7 +139,7 @@ class TemperatureScreen(Screen):
 
         self.temp_value_label = MDLabel(
             text='--°C',
-            font_style='H2',
+            font_style='H3',
             halign='center',
             valign='middle',
             theme_text_color='Custom',
@@ -162,8 +164,8 @@ class TemperatureScreen(Screen):
         instruction_card = MDCard(
             orientation='vertical',
             size_hint_x=0.52,
-            padding=(dp(14), dp(12), dp(14), dp(12)),
-            spacing=dp(6),
+            padding=(dp(12), dp(10), dp(12), dp(10)),
+            spacing=dp(4),
             radius=[dp(18)],
             md_bg_color=MED_CARD_BG,
         )
@@ -171,8 +173,8 @@ class TemperatureScreen(Screen):
         instruction_header = MDBoxLayout(
             orientation='horizontal',
             size_hint_y=None,
-            height=dp(28),
-            spacing=dp(6),
+            height=dp(24),
+            spacing=dp(4),
         )
         instruction_icon = MDIcon(
             icon='clipboard-pulse-outline',
@@ -216,16 +218,16 @@ class TemperatureScreen(Screen):
         status_card = MDCard(
             orientation='vertical',
             size_hint_y=None,
-            height=dp(92),
-            padding=(dp(14), dp(12), dp(14), dp(12)),
-            spacing=dp(8),
+            height=dp(78),
+            padding=(dp(12), dp(10), dp(12), dp(10)),
+            spacing=dp(6),
             radius=[dp(18)],
             md_bg_color=MED_CARD_BG,
         )
 
         self.status_label = MDLabel(
             text='Sẵn sàng đo',
-            font_style='Body2',
+            font_style='Caption',
             theme_text_color='Custom',
             text_color=TEXT_PRIMARY,
         )
@@ -233,9 +235,9 @@ class TemperatureScreen(Screen):
 
         readings_layout = MDBoxLayout(
             orientation='horizontal',
-            spacing=dp(16),
+            spacing=dp(12),
             size_hint_y=None,
-            height=dp(40),
+            height=dp(34),
         )
 
         obj_temp_layout = MDBoxLayout(orientation='vertical', spacing=dp(2))
@@ -308,8 +310,8 @@ class TemperatureScreen(Screen):
         control_layout = MDBoxLayout(
             orientation='horizontal',
             size_hint_y=None,
-            height=dp(48),
-            spacing=dp(12),
+            height=dp(44),
+            spacing=dp(10),
         )
 
         self.start_stop_btn = MDRectangleFlatIconButton(
