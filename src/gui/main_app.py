@@ -187,18 +187,26 @@ class HealthMonitorApp(MDApp):
                 except Exception as e:
                     self.logger.error(f"Error creating MLX90614 sensor: {e}")
             
-            # Create Blood Pressure sensor if enabled
-            if sensor_configs.get('blood_pressure', {}).get('enabled', False) and BloodPressureSensor:
-                try:
-                    bp_config = sensor_configs['blood_pressure']
-                    sensor = BloodPressureSensor(bp_config)
-                    if sensor.initialize():
-                        sensors['BloodPressure'] = sensor
-                        self.logger.info("BloodPressure sensor created and initialized")
-                    else:
-                        self.logger.warning("BloodPressure sensor failed to initialize")
-                except Exception as e:
-                    self.logger.error(f"Error creating BloodPressure sensor: {e}")
+            # Create Blood Pressure sensor if enabled and HX710B config ready
+            bp_config = sensor_configs.get('blood_pressure', {})
+            hx710b_config = sensor_configs.get('hx710b', {})
+            if bp_config.get('enabled', False) and BloodPressureSensor:
+                if not hx710b_config:
+                    self.logger.warning("HX710B config chưa được định nghĩa - bỏ qua khởi tạo cảm biến huyết áp")
+                elif not hx710b_config.get('enabled', False):
+                    self.logger.info("HX710B đang bị tắt trong cấu hình - cảm biến huyết áp sẽ không khởi tạo")
+                else:
+                    try:
+                        merged_config = bp_config.copy()
+                        merged_config['hx710b'] = hx710b_config
+                        sensor = BloodPressureSensor(merged_config)
+                        if sensor.initialize():
+                            sensors['BloodPressure'] = sensor
+                            self.logger.info("BloodPressure sensor created and initialized")
+                        else:
+                            self.logger.warning("BloodPressure sensor failed to initialize")
+                    except Exception as e:
+                        self.logger.error(f"Error creating BloodPressure sensor: {e}")
             
         except Exception as e:
             self.logger.error(f"Error creating sensors from config: {e}")

@@ -44,8 +44,23 @@ sensors:
     pressure_sensor: "MPX2050"
     pump_gpio: 18
     valve_gpio: 19
+    inflate_target_mmhg: 165
     max_pressure: 180  # mmHg
     safety_pressure: 200  # mmHg
+    deflate_rate_mmhg_s: 3.0
+    ratio:
+      sys_frac: 0.5
+      dia_frac: 0.8
+
+  hx710b:
+    enabled: false
+    gpio_dout: 17
+    gpio_sck: 27
+    sps_hint: 50
+    calibration:
+      offset_counts: 0
+      slope_mmhg_per_count: 0.001
+    timeout_ms: 1000
 
 # Display Configuration
 display:
