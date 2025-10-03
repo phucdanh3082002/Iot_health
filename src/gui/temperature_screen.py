@@ -200,7 +200,7 @@ class TemperatureScreen(Screen):
 
         self.instruction_label = MDLabel(
             text='1. Đưa cảm biến cách trán 2-5cm\n2. Giữ tay chắc suốt 5 giây\n3. Tránh rung lắc, gió lạnh',
-            font_style='Caption',
+            font_style='Body1',
             halign='left',
             valign='top',
             theme_text_color='Custom',
@@ -218,7 +218,7 @@ class TemperatureScreen(Screen):
         status_card = MDCard(
             orientation='vertical',
             size_hint_y=None,
-            height=dp(78),
+            height=dp(85),
             padding=(dp(12), dp(10), dp(12), dp(10)),
             spacing=dp(6),
             radius=[dp(18)],
@@ -240,56 +240,69 @@ class TemperatureScreen(Screen):
             height=dp(34),
         )
 
-        obj_temp_layout = MDBoxLayout(orientation='vertical', spacing=dp(2))
+        obj_temp_layout = MDBoxLayout(orientation='horizontal', spacing=dp(6))
         obj_icon = MDIcon(
             icon='account-heart',
             theme_text_color='Custom',
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
             size=(dp(22), dp(22)),
+            pos_hint={'center_y': 0.8},  # Căn giữa theo chiều dọc
+
         )
         obj_icon.icon_size = dp(20)
         obj_temp_layout.add_widget(obj_icon)
+
+        # Layout dọc bên phải cho tiêu đề và giá trị
+        obj_text_layout = MDBoxLayout(orientation='vertical', spacing=dp(2), size_hint_x=1)
         obj_temp_title = MDLabel(
             text='Nhiệt độ cơ thể',
             font_style='Caption',
             theme_text_color='Custom',
             text_color=TEXT_MUTED,
+            halign='left',
+            valign='middle',
         )
+        obj_text_layout.add_widget(obj_temp_title)
         self.obj_temp_label = MDLabel(
             text='--°C',
             font_style='Subtitle1',
             theme_text_color='Custom',
             text_color=TEXT_PRIMARY,
+            halign='left',
+            valign='middle',
         )
-        obj_temp_layout.add_widget(obj_temp_title)
-        obj_temp_layout.add_widget(self.obj_temp_label)
+        obj_text_layout.add_widget(self.obj_temp_label)
+        obj_temp_layout.add_widget(obj_text_layout)
         readings_layout.add_widget(obj_temp_layout)
 
-        amb_temp_layout = MDBoxLayout(orientation='vertical', spacing=dp(2))
+        amb_temp_layout = MDBoxLayout(orientation='horizontal', spacing=dp(6))
         amb_icon = MDIcon(
             icon='home-thermometer',
             theme_text_color='Custom',
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
             size=(dp(22), dp(22)),
+            pos_hint={'center_y': 0.8},
         )
         amb_icon.icon_size = dp(20)
         amb_temp_layout.add_widget(amb_icon)
+        amb_text_layout = MDBoxLayout(orientation='vertical', spacing=dp(2), size_hint_x=1)
         amb_temp_title = MDLabel(
             text='Nhiệt độ môi trường',
             font_style='Caption',
             theme_text_color='Custom',
             text_color=TEXT_MUTED,
         )
+        amb_text_layout.add_widget(amb_temp_title)
         self.amb_temp_label = MDLabel(
             text='--°C',
             font_style='Subtitle2',
             theme_text_color='Custom',
             text_color=TEXT_MUTED,
         )
-        amb_temp_layout.add_widget(amb_temp_title)
-        amb_temp_layout.add_widget(self.amb_temp_label)
+        amb_temp_layout.add_widget(amb_text_layout)
+        amb_text_layout.add_widget(self.amb_temp_label)
         readings_layout.add_widget(amb_temp_layout)
 
         status_card.add_widget(readings_layout)
