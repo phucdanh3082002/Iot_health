@@ -900,6 +900,14 @@ class HealthMonitorApp(MDApp):
 
             measurement_type = measurement_data.get('measurement_type', '')
             alert = measurement_data.get('alert') or ''
+            
+            # ============================================================
+            # PHASE 2: Extract metadata for quality tracking
+            # ============================================================
+            hr_sqi = measurement_data.get('signal_quality_index')  # SQI 0-100
+            spo2_cv = measurement_data.get('spo2_cv')  # Coefficient of variation
+            peak_count = measurement_data.get('peak_count')  # Number of peaks
+            measurement_duration = measurement_data.get('measurement_elapsed')  # Duration in seconds
 
             if measurement_type == 'blood_pressure':
                 systolic = measurement_data.get('systolic') or measurement_data.get('blood_pressure_systolic')
@@ -908,6 +916,7 @@ class HealthMonitorApp(MDApp):
                     alert = f"BP {systolic:.0f}/{diastolic:.0f} mmHg"
 
             with closing(sqlite3.connect(db_path)) as conn:
+                # Create/update table with Phase 2 metadata columns
                 conn.execute(
                     """
                     CREATE TABLE IF NOT EXISTS vitals (
@@ -916,13 +925,22 @@ class HealthMonitorApp(MDApp):
                         hr REAL,
                         spo2 REAL,
                         temp REAL,
-                        alert TEXT
+                        alert TEXT,
+                        hr_sqi REAL,
+                        spo2_cv REAL,
+                        peak_count INTEGER,
+                        measurement_duration REAL
                     )
                     """
                 )
+                # PHASE 2: Insert with metadata
                 conn.execute(
-                    "INSERT INTO vitals (ts, hr, spo2, temp, alert) VALUES (?, ?, ?, ?, ?)",
-                    (ts_str, hr, spo2, temp, alert),
+                    """
+                    INSERT INTO vitals 
+                    (ts, hr, spo2, temp, alert, hr_sqi, spo2_cv, peak_count, measurement_duration) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (ts_str, hr, spo2, temp, alert, hr_sqi, spo2_cv, peak_count, measurement_duration),
                 )
                 conn.commit()
             return True

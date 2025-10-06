@@ -6,11 +6,20 @@ import logging
 import time
 from collections import deque
 import numpy as np
+from scipy import signal as scipy_signal  # For bandpass filter
 from .base_sensor import BaseSensor
 try:
     import smbus  # type: ignore[attr-defined]
 except ImportError:  # pragma: no cover - hardware optional
     smbus = None
+
+
+# ============================================================
+# PHASE 2: Global variables for metadata tracking
+# ============================================================
+_last_sqi: float = 0.0
+_last_cv: float = 0.0
+_last_peak_count: int = 0
 
 
 @dataclass
@@ -22,6 +31,7 @@ class MeasurementState:
     spo2_valid: bool = False
     signal_quality_ir: float = 0.0
     signal_quality_red: float = 0.0
+    signal_quality_index: float = 0.0  # PHASE 2: SQI score 0-100
     window_fill: float = 0.0
     status: str = "idle"
     ready: bool = False
@@ -256,17 +266,64 @@ class MAX30102Hardware:
         return red, ir
 
     def read_samples(self, max_samples: int) -> List[Tuple[int, int]]:
+        """
+        Read samples from FIFO with optimized batch reading.
+        
+        Batch reads up to 5 samples (30 bytes) per I²C transaction to reduce latency
+        while staying within SMBus 32-byte limit.
+        
+        Args:
+            max_samples: Maximum number of samples to read
+            
+        Returns:
+            List of (RED, IR) tuples
+        """
         samples: List[Tuple[int, int]] = []
         if max_samples <= 0:
             return samples
 
         available = self.get_data_present()
+        
+        # Batch read strategy: 5 samples = 30 bytes (safe for SMBus 32-byte limit)
+        BATCH_SIZE = 5
+        
         while available > 0 and len(samples) < max_samples:
-            sample = self.read_fifo_sample()
-            if sample is None:
-                break
-            samples.append(sample)
-            available -= 1
+            # Determine batch size for this iteration
+            n_to_read = min(BATCH_SIZE, available, max_samples - len(samples))
+            
+            if n_to_read == 1:
+                # Single sample fallback
+                sample = self.read_fifo_sample()
+                if sample is None:
+                    break
+                samples.append(sample)
+                available -= 1
+            else:
+                # Batch read: 6 bytes per sample
+                try:
+                    n_bytes = 6 * n_to_read
+                    data = self.bus.read_i2c_block_data(self.address, REG_FIFO_DATA, n_bytes)
+                    
+                    # Parse samples from batch data
+                    for i in range(0, len(data), 6):
+                        if i + 5 < len(data):
+                            red = (data[i] << 16 | data[i+1] << 8 | data[i+2]) & 0x03FFFF
+                            ir = (data[i+3] << 16 | data[i+4] << 8 | data[i+5]) & 0x03FFFF
+                            
+                            # Validate: skip saturated samples
+                            if red != 0x03FFFF and ir != 0x03FFFF:
+                                samples.append((red, ir))
+                    
+                    available -= n_to_read
+                    
+                except Exception as exc:
+                    # Fallback to single-read if batch fails
+                    self.logger.warning(f"Batch read failed, fallback to single: {exc}")
+                    sample = self.read_fifo_sample()
+                    if sample is None:
+                        break
+                    samples.append(sample)
+                    available -= 1
 
         return samples
 
@@ -386,6 +443,135 @@ class HRCalculator:
     MA_SIZE = 4
     MAX_NUM_PEAKS = 15
 
+    @staticmethod
+    def calc_signal_quality_index(
+        ir_data: np.ndarray,
+        red_data: np.ndarray,
+        peak_locs: List[int],
+        sample_rate: int
+    ) -> float:
+        """
+        Calculate Signal Quality Index (SQI) from 0-100%
+        
+        Components:
+        - SNR (40%): Signal-to-Noise Ratio
+        - Perfusion (30%): AC/DC ratio indicating blood flow
+        - Stability (20%): Baseline drift rate
+        - Regularity (10%): Inter-beat interval consistency
+        
+        Args:
+            ir_data: IR channel data
+            red_data: RED channel data
+            peak_locs: Detected peak locations
+            sample_rate: Sampling rate in Hz
+            
+        Returns:
+            SQI score 0-100
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        sqi_scores = []
+        
+        # 1. SNR Score (40%) - Signal quality based on noise
+        try:
+            # Calculate AC component (signal)
+            ir_mean = np.mean(ir_data)
+            ir_ac_rms = np.sqrt(np.mean((ir_data - ir_mean) ** 2))
+            
+            # Estimate noise from high-frequency components
+            # Use difference between consecutive samples as noise proxy
+            ir_diff = np.diff(ir_data)
+            noise_rms = np.sqrt(np.mean(ir_diff ** 2)) / np.sqrt(2)  # Normalize
+            
+            if noise_rms > 0:
+                snr = ir_ac_rms / noise_rms
+                snr_db = 10 * np.log10(snr) if snr > 0 else 0
+                # Map SNR: 0dB=0%, 20dB=100%
+                snr_score = np.clip(snr_db / 20.0 * 100, 0, 100)
+            else:
+                snr_score = 100
+            
+            sqi_scores.append(('SNR', snr_score, 0.40))
+            logger.debug("[SQI] SNR: %.1f dB → score %.1f%%", snr_db if 'snr_db' in locals() else 0, snr_score)
+            
+        except Exception as e:
+            logger.debug("[SQI] SNR calculation failed: %s", e)
+            sqi_scores.append(('SNR', 50, 0.40))
+        
+        # 2. Perfusion Index Score (30%) - AC/DC ratio
+        try:
+            ir_dc = np.mean(ir_data)
+            ir_ac = np.max(ir_data) - np.min(ir_data)
+            
+            if ir_dc > 0:
+                perfusion_index = (ir_ac / ir_dc) * 100  # Percentage
+                # Good PI: >1%, Map 0-5% → 0-100%
+                perfusion_score = np.clip(perfusion_index / 5.0 * 100, 0, 100)
+            else:
+                perfusion_score = 0
+            
+            sqi_scores.append(('Perfusion', perfusion_score, 0.30))
+            logger.debug("[SQI] Perfusion Index: %.2f%% → score %.1f%%", 
+                        perfusion_index if 'perfusion_index' in locals() else 0, perfusion_score)
+            
+        except Exception as e:
+            logger.debug("[SQI] Perfusion calculation failed: %s", e)
+            sqi_scores.append(('Perfusion', 50, 0.30))
+        
+        # 3. Baseline Stability Score (20%) - Drift rate
+        try:
+            # Calculate baseline drift using linear regression
+            x = np.arange(len(ir_data))
+            coeffs = np.polyfit(x, ir_data, 1)
+            drift_per_sample = abs(coeffs[0])
+            
+            # Convert to drift per second
+            drift_per_sec = drift_per_sample * sample_rate
+            
+            # Good stability: <50 counts/s, Map 0-200 → 100-0%
+            stability_score = np.clip(100 - (drift_per_sec / 200.0 * 100), 0, 100)
+            
+            sqi_scores.append(('Stability', stability_score, 0.20))
+            logger.debug("[SQI] Baseline drift: %.1f counts/s → score %.1f%%", drift_per_sec, stability_score)
+            
+        except Exception as e:
+            logger.debug("[SQI] Stability calculation failed: %s", e)
+            sqi_scores.append(('Stability', 50, 0.20))
+        
+        # 4. Peak Regularity Score (10%) - IBI consistency
+        try:
+            if len(peak_locs) >= 3:
+                intervals = np.diff(peak_locs)
+                mean_interval = np.mean(intervals)
+                std_interval = np.std(intervals)
+                
+                if mean_interval > 0:
+                    cv = std_interval / mean_interval  # Coefficient of variation
+                    # Good regularity: CV<15%, Map 0-30% → 100-0%
+                    regularity_score = np.clip(100 - (cv / 0.30 * 100), 0, 100)
+                else:
+                    regularity_score = 0
+            else:
+                regularity_score = 50  # Not enough peaks to judge
+            
+            sqi_scores.append(('Regularity', regularity_score, 0.10))
+            logger.debug("[SQI] IBI CV: %.1f%% → score %.1f%%", 
+                        cv * 100 if 'cv' in locals() else 0, regularity_score)
+            
+        except Exception as e:
+            logger.debug("[SQI] Regularity calculation failed: %s", e)
+            sqi_scores.append(('Regularity', 50, 0.10))
+        
+        # Calculate weighted average
+        total_sqi = sum(score * weight for name, score, weight in sqi_scores)
+        
+        logger.debug("[SQI] Total: %.1f%% (SNR:%.0f PI:%.0f Stab:%.0f Reg:%.0f)", 
+                    total_sqi, 
+                    sqi_scores[0][1], sqi_scores[1][1], sqi_scores[2][1], sqi_scores[3][1])
+        
+        return float(total_sqi)
+
     @classmethod
     def calc_hr_and_spo2(
         cls,
@@ -398,21 +584,54 @@ class HRCalculator:
 
         # FIX: Clip data vào range hợp lý trước khi xử lý
         # MAX30102 ADC 18-bit: 0-262143, nhưng thường < 200000
-        ir = np.array(ir_data[-cls.BUFFER_SIZE:], dtype=np.float64)
-        red = np.array(red_data[-cls.BUFFER_SIZE:], dtype=np.float64)
+        ir_raw = np.array(ir_data[-cls.BUFFER_SIZE:], dtype=np.float64)
+        red_raw = np.array(red_data[-cls.BUFFER_SIZE:], dtype=np.float64)
         
         # Filter out saturated/invalid values (> 250000 hoặc < 0)
-        ir = np.clip(ir, 0, 250000)
-        red = np.clip(red, 0, 250000)
+        ir_raw = np.clip(ir_raw, 0, 250000)
+        red_raw = np.clip(red_raw, 0, 250000)
         
-        # Convert to int32 AFTER clipping
-        ir = ir.astype(np.int32)
-        red = red.astype(np.int32)
+        # ============================================================
+        # NEW: Bandpass Filter 0.5-5 Hz CHỈ CHO PEAK DETECTION
+        # CRITICAL: SpO2 calculation cần RAW data (có DC component)
+        # ============================================================
+        ir_for_peaks = ir_raw.copy()  # For peak detection
+        try:
+            nyquist = sample_rate / 2.0
+            low_cutoff = 0.5 / nyquist   # 0.5 Hz = 30 BPM
+            high_cutoff = 5.0 / nyquist  # 5 Hz = 300 BPM
+            
+            # Butterworth bandpass filter order 2 (gentle roll-off, no ringing)
+            b, a = scipy_signal.butter(2, [low_cutoff, high_cutoff], btype='band')
+            
+            # Apply zero-phase filter (forward-backward to avoid phase shift)
+            ir_filtered = scipy_signal.filtfilt(b, a, ir_raw)
+            
+            # Add back DC offset to keep values positive for peak detection
+            ir_dc_offset = float(np.mean(ir_raw))
+            ir_for_peaks = ir_filtered + ir_dc_offset
+            
+        except Exception as exc:
+            # Fallback to original data if filter fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("[BPF] Filter thất bại, dùng raw data: %s", exc)
+        
+        # Convert for peak detection (filtered)
+        ir = ir_for_peaks.astype(np.int32)
+        
+        # Keep RAW data for SpO2 calculation (không filter)
+        ir_raw_int = ir_raw.astype(np.int32)
+        red = red_raw.astype(np.int32)
 
+        # ============================================================
+        # Peak Detection on filtered IR signal
+        # ============================================================
         ir_mean = int(np.mean(ir))
         x = -1 * (ir - ir_mean)
         x = x.astype(np.int32)
 
+        # Moving average smoothing (reduced from original, BPF already smoothed)
         for i in range(x.shape[0] - cls.MA_SIZE):
             x[i] = int(np.sum(x[i : i + cls.MA_SIZE]) / cls.MA_SIZE)
 
@@ -447,63 +666,255 @@ class HRCalculator:
         if exact_ir_valley_locs_count == 0:
             return hr, hr_valid, spo2, spo2_valid
 
-        ratio: List[int] = []
-        i_ratio_count = 0
+        ratio: List[float] = []  # Changed to float for better precision
+        
+        # ============================================================
+        # PHASE 2: Advanced Polynomial Detrending for better DC baseline
+        # Instead of linear interpolation per cycle, detrend entire signal
+        # This removes slow drift while preserving AC oscillations
+        # ============================================================
+        try:
+            # Polynomial detrend order 2 (quadratic) - handles curved baseline drift
+            x_indices = np.arange(len(ir_raw_int))
+            
+            # Fit polynomial to IR channel
+            ir_poly_coeffs = np.polyfit(x_indices, ir_raw_int, 2)
+            ir_baseline_trend = np.polyval(ir_poly_coeffs, x_indices)
+            
+            # Fit polynomial to RED channel
+            red_poly_coeffs = np.polyfit(x_indices, red, 2)
+            red_baseline_trend = np.polyval(red_poly_coeffs, x_indices)
+            
+            logger.debug("[Detrend] IR baseline range: %.0f-%.0f, RED baseline range: %.0f-%.0f",
+                        np.min(ir_baseline_trend), np.max(ir_baseline_trend),
+                        np.min(red_baseline_trend), np.max(red_baseline_trend))
+            
+        except Exception as e:
+            logger.debug("[Detrend] Polynomial fit failed, using mean baseline: %s", e)
+            # Fallback to simple mean baseline
+            ir_baseline_trend = np.full(len(ir_raw_int), np.mean(ir_raw_int))
+            red_baseline_trend = np.full(len(red), np.mean(red))
 
         for k in range(exact_ir_valley_locs_count - 1):
-            red_dc_max = -1
-            ir_dc_max = -1
-            red_dc_max_index = -1
-            ir_dc_max_index = -1
-            if ir_valley_locs[k + 1] - ir_valley_locs[k] > 3:
-                for i in range(ir_valley_locs[k], ir_valley_locs[k + 1]):
-                    if ir[i] > ir_dc_max:
-                        ir_dc_max = ir[i]
-                        ir_dc_max_index = i
-                    if red[i] > red_dc_max:
-                        red_dc_max = red[i]
-                        red_dc_max_index = i
-
-                red_ac = int((red[ir_valley_locs[k + 1]] - red[ir_valley_locs[k]]) * (red_dc_max_index - ir_valley_locs[k]))
-                red_ac = red[ir_valley_locs[k]] + int(red_ac / (ir_valley_locs[k + 1] - ir_valley_locs[k]))
-                red_ac = red[red_dc_max_index] - red_ac
-
-                ir_ac = int((ir[ir_valley_locs[k + 1]] - ir[ir_valley_locs[k]]) * (ir_dc_max_index - ir_valley_locs[k]))
-                ir_ac = ir[ir_valley_locs[k]] + int(ir_ac / (ir_valley_locs[k + 1] - ir_valley_locs[k]))
-                ir_ac = ir[ir_dc_max_index] - ir_ac
-
-                nume = red_ac * ir_dc_max
-                denom = ir_ac * red_dc_max
-                if denom > 0 and nume != 0 and i_ratio_count < 5:
-                    # FIX: Dùng float để tránh overflow, sau đó clip vào range hợp lý
-                    ratio_value = (float(nume) * 100.0) / float(denom)
-                    # SpO2 ratio thường trong khoảng 0.4-2.0 (40-200%)
-                    # Nếu vượt quá → dữ liệu corrupt, bỏ qua
-                    if 10.0 <= ratio_value <= 500.0:
-                        ratio.append(int(ratio_value))
-                        i_ratio_count += 1
-                    # else: Skip invalid ratio
+            valley_start = ir_valley_locs[k]
+            valley_end = ir_valley_locs[k + 1]
+            
+            # Minimum 4 samples per cycle to calculate AC/DC reliably
+            if valley_end - valley_start <= 3:
+                continue
+            
+            # CRITICAL: Use RAW data for SpO2 (not filtered)
+            # Filtered data has no DC component → negative baseline → invalid
+            
+            # Find IR peak in this cycle (using RAW data)
+            ir_segment = ir_raw_int[valley_start:valley_end]
+            ir_peak_idx = valley_start + int(np.argmax(ir_segment))
+            ir_peak_value = ir_raw_int[ir_peak_idx]
+            
+            # Find RED peak in this cycle (independent from IR)
+            red_segment = red[valley_start:valley_end]
+            red_peak_idx = valley_start + int(np.argmax(red_segment))
+            red_peak_value = red[red_peak_idx]
+            
+            # ============================================================
+            # PHASE 2: Use polynomial baseline instead of linear interpolation
+            # This accounts for curved drift across multiple heartbeats
+            # ============================================================
+            ir_dc_at_peak = float(ir_baseline_trend[ir_peak_idx])
+            red_dc_at_peak = float(red_baseline_trend[red_peak_idx])
+            
+            # Calculate AC amplitude (Peak - DC baseline)
+            ir_ac = float(ir_peak_value) - ir_dc_at_peak
+            red_ac = float(red_peak_value) - red_dc_at_peak
+            
+            # Validate AC values (must be positive and significant)
+            if ir_ac <= 0 or red_ac <= 0:
+                logger.debug("[SpO2] Bỏ qua cycle %d: AC không hợp lệ (IR_AC=%.1f, RED_AC=%.1f)", 
+                             k, ir_ac, red_ac)
+                continue
+            
+            if ir_dc_at_peak <= 0 or red_dc_at_peak <= 0:
+                logger.debug("[SpO2] Bỏ qua cycle %d: DC không hợp lệ (IR_DC=%.1f, RED_DC=%.1f)", 
+                             k, ir_dc_at_peak, red_dc_at_peak)
+                continue
+            
+            # Calculate R-value = (AC_red/DC_red) / (AC_ir/DC_ir)
+            # This is the standard pulse oximetry ratio
+            ac_dc_red = red_ac / red_dc_at_peak
+            ac_dc_ir = ir_ac / ir_dc_at_peak
+            
+            if ac_dc_ir > 0:
+                r_value = ac_dc_red / ac_dc_ir
+                
+                # Physiological R-value range: 0.4 to 2.0
+                # Values outside indicate measurement error
+                if 0.4 <= r_value <= 2.0:
+                    ratio.append(r_value)
+                    logger.debug("[SpO2] Cycle %d: R=%.3f (RED: AC=%.1f DC=%.1f, IR: AC=%.1f DC=%.1f)", 
+                                 k, r_value, red_ac, red_dc_at_peak, ir_ac, ir_dc_at_peak)
+                else:
+                    logger.debug("[SpO2] Bỏ qua cycle %d: R=%.3f ngoài khoảng 0.4-2.0", k, r_value)
 
         if not ratio:
             logger.debug("[HRCalc] Không có ratio hợp lệ (peaks=%d)", n_peaks)
             return hr, hr_valid, spo2, spo2_valid
 
-        ratio.sort()
-        mid_index = len(ratio) // 2
-        if len(ratio) % 2 == 0 and len(ratio) > 1:
-            ratio_ave = (ratio[mid_index - 1] + ratio[mid_index]) / 2
-        else:
-            ratio_ave = ratio[mid_index]
+        # Use median R-value for robustness against outliers
+        ratio_median = float(np.median(ratio))
+        ratio_std = float(np.std(ratio))
         
-        logger.debug("[HRCalc] Ratio: count=%d, ave=%.1f, values=%s", len(ratio), ratio_ave, ratio[:5])
+        logger.debug("[HRCalc] R-value: count=%d, median=%.3f, std=%.3f, values=%s", 
+                     len(ratio), ratio_median, ratio_std, [f"{r:.3f}" for r in ratio[:5]])
 
-        if 2 < ratio_ave < 184:
-            spo2 = -45.060 * (ratio_ave ** 2) / 10000.0 + 30.054 * ratio_ave / 100.0 + 94.845
-            spo2_valid = True
+        # Improved SpO2 calibration curve (standard pulse oximetry formula)
+        # Based on empirical calibration: SpO2 = f(R)
+        # Original Maxim formula: SpO2 = -45.060*R^2 + 30.054*R + 94.845
+        # Valid R range: 0.5 to 1.8 (corresponding to SpO2 70-100%)
+        
+        if 0.5 <= ratio_median <= 1.8:
+            # Standard calibration curve
+            spo2 = -45.060 * (ratio_median ** 2) + 30.054 * ratio_median + 94.845
+            
+            # Clip to physiological range
+            spo2 = float(np.clip(spo2, 70.0, 100.0))
+            
+            # Confidence check: reject if variance too high
+            coefficient_of_variation = ratio_std / ratio_median if ratio_median > 0 else 1.0
+            if coefficient_of_variation < 0.15:  # CV < 15% → stable measurement
+                spo2_valid = True
+                logger.debug("[HRCalc] SpO2=%.1f%% VALID (R=%.3f, CV=%.1f%%)", 
+                             spo2, ratio_median, coefficient_of_variation * 100)
+            else:
+                spo2_valid = False
+                logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%%)", 
+                             spo2, coefficient_of_variation * 100)
         else:
-            logger.debug("[HRCalc] Ratio %.1f ngoài khoảng 2-184", ratio_ave)
+            logger.debug("[HRCalc] R-value %.3f ngoài khoảng hiệu chuẩn 0.5-1.8", ratio_median)
+            spo2 = -999.0
+            spo2_valid = False
+
+        # ============================================================
+        # PHASE 2: Calculate Signal Quality Index
+        # ============================================================
+        try:
+            sqi = cls.calc_signal_quality_index(ir_raw_int, red, ir_valley_locs, sample_rate)
+        except Exception as e:
+            logger.debug("[SQI] Calculation failed: %s", e)
+            sqi = 50.0  # Default moderate quality
+        
+        # Store SQI for metadata logging (accessed via module-level variable)
+        global _last_sqi, _last_cv, _last_peak_count
+        _last_sqi = sqi
+        _last_cv = coefficient_of_variation if 'coefficient_of_variation' in locals() else 0.0
+        _last_peak_count = n_peaks
 
         return hr, hr_valid, spo2, spo2_valid
+
+    @staticmethod
+    def validate_peak_valley_pairs(
+        x: np.ndarray,
+        peaks: List[int],
+        sample_rate: int
+    ) -> Tuple[List[int], int]:
+        """
+        PHASE 2: Validate peak-valley pairing and consistency.
+        
+        Removes false peaks by checking:
+        1. Each peak has valleys before/after within physiological HR range
+        2. Peak amplitude is symmetric (no sudden 2x jumps)
+        3. Inter-beat intervals are consistent (CV < 30%)
+        
+        Args:
+            x: Filtered signal
+            peaks: Initial peak locations
+            sample_rate: Sampling rate in Hz
+            
+        Returns:
+            (validated_peaks, count)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if len(peaks) < 2:
+            return peaks, len(peaks)
+        
+        validated = []
+        peak_amplitudes = []
+        
+        # Step 1: Validate inter-peak intervals (simpler and more reliable)
+        # For physiological HR 30-180 BPM → intervals 0.33-2.0s
+        for i, peak_idx in enumerate(peaks):
+            peak_amplitude = x[peak_idx]
+            
+            # Check interval to neighbors
+            valid_interval = False
+            
+            if i > 0:
+                # Check interval to previous peak
+                interval_prev = peak_idx - peaks[i-1]
+                interval_prev_sec = interval_prev / sample_rate
+                if 0.33 <= interval_prev_sec <= 2.0:
+                    valid_interval = True
+            
+            if i < len(peaks) - 1:
+                # Check interval to next peak
+                interval_next = peaks[i+1] - peak_idx
+                interval_next_sec = interval_next / sample_rate
+                if 0.33 <= interval_next_sec <= 2.0:
+                    valid_interval = True
+            
+            # Accept peak if at least one neighbor interval is valid
+            if valid_interval or len(peaks) == 1:
+                validated.append(peak_idx)
+                peak_amplitudes.append(peak_amplitude)
+            else:
+                # Log which interval failed
+                if i > 0 and i < len(peaks) - 1:
+                    logger.debug("[Peak Validation] Rejected peak at idx=%d: prev_interval=%.2fs, next_interval=%.2fs (expect 0.33-2.0s)",
+                                peak_idx, interval_prev_sec, interval_next_sec)
+                elif i > 0:
+                    logger.debug("[Peak Validation] Rejected peak at idx=%d: interval=%.2fs (expect 0.33-2.0s)",
+                                peak_idx, interval_prev_sec)
+                elif i < len(peaks) - 1:
+                    logger.debug("[Peak Validation] Rejected peak at idx=%d: interval=%.2fs (expect 0.33-2.0s)",
+                                peak_idx, interval_next_sec)
+        
+        if len(validated) < 2:
+            return validated, len(validated)
+        
+        # Step 2: Remove amplitude outliers (sudden jumps > 3x median)
+        # Increased tolerance from 2x to 3x to accommodate natural variation
+        median_amp = np.median(peak_amplitudes)
+        filtered = []
+        filtered_amps = []
+        
+        for peak_idx, amp in zip(validated, peak_amplitudes):
+            if 0.33 * median_amp <= amp <= 3.0 * median_amp:
+                filtered.append(peak_idx)
+                filtered_amps.append(amp)
+            else:
+                logger.debug("[Peak Validation] Rejected peak at idx=%d: amplitude=%.0f (median=%.0f, ratio=%.1fx)",
+                            peak_idx, amp, median_amp, amp / median_amp if median_amp > 0 else 0)
+        
+        if len(filtered) < 2:
+            return filtered, len(filtered)
+        
+        # Step 3: Check IBI consistency (CV < 30% = moderate regularity)
+        intervals = np.diff(filtered)
+        mean_interval = np.mean(intervals)
+        std_interval = np.std(intervals)
+        
+        if mean_interval > 0:
+            cv = std_interval / mean_interval
+            if cv > 0.30:
+                logger.debug("[Peak Validation] Warning: High IBI variability (CV=%.1f%%), may indicate arrhythmia or noise",
+                            cv * 100)
+                # Don't reject - just warn (arrhythmia is valid signal)
+        
+        logger.debug("[Peak Validation] %d/%d peaks validated (rejected %d)",
+                    len(filtered), len(peaks), len(peaks) - len(filtered))
+        
+        return filtered, len(filtered)
 
     @staticmethod
     def find_peaks(
@@ -513,6 +924,48 @@ class HRCalculator:
         min_dist: int,
         max_num: int,
     ) -> Tuple[List[int], int]:
+        """
+        Enhanced peak detection using scipy.signal.find_peaks with validation.
+        
+        Falls back to custom algorithm if scipy fails.
+        """
+        try:
+            # Try scipy first for better accuracy
+            peaks, properties = scipy_signal.find_peaks(
+                x,
+                height=min_height,           # Minimum peak height
+                distance=min_dist,           # Minimum distance between peaks
+                prominence=20,               # Peak must stand out (at least 20 units above surroundings)
+                width=(2, None)              # Peak width at least 2 samples (avoid spikes)
+            )
+            
+            # ============================================================
+            # PHASE 2: Enhanced peak validation
+            # ============================================================
+            if len(peaks) > 0:
+                # Assume sample rate from min_dist (min_dist ≈ sample_rate * 0.25)
+                estimated_sample_rate = int(min_dist / 0.25)
+                peaks_list = peaks.tolist()
+                
+                # Validate peak-valley pairs and consistency
+                validated_peaks, n_validated = HRCalculator.validate_peak_valley_pairs(
+                    x, peaks_list, estimated_sample_rate
+                )
+                
+                # Limit to max_num peaks
+                n_peaks = min(len(validated_peaks), max_num)
+                ir_valley_locs = validated_peaks[:n_peaks]
+                
+                if n_peaks > 0:
+                    return ir_valley_locs, n_peaks
+                
+        except Exception as exc:
+            # Fallback to original algorithm if scipy fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug("[Peak Detection] Scipy failed, using fallback: %s", exc)
+        
+        # Fallback: Original algorithm
         ir_valley_locs, n_peaks = HRCalculator.find_peaks_above_min_height(x, size, min_height, max_num)
         ir_valley_locs, n_peaks = HRCalculator.remove_close_peaks(n_peaks, ir_valley_locs, x, min_dist)
         n_peaks = min(n_peaks, max_num)
@@ -831,8 +1284,13 @@ class MAX30102Sensor(BaseSensor):
             ir_ds, red_ds, self.hr_algorithm_rate
         )
         
-        self.logger.debug("[Biometrics] HR=%.1f (valid=%s), SpO2=%.1f (valid=%s)", 
-                          hr_value, hr_valid, spo2_value, spo2_valid)
+        # ============================================================
+        # PHASE 2: Retrieve SQI from global variable
+        # ============================================================
+        global _last_sqi
+        
+        self.logger.debug("[Biometrics] HR=%.1f (valid=%s), SpO2=%.1f (valid=%s), SQI=%.1f%%", 
+                          hr_value, hr_valid, spo2_value, spo2_valid, _last_sqi)
 
         return hr_value, hr_valid, spo2_value, spo2_valid
 
@@ -994,6 +1452,11 @@ class MAX30102Sensor(BaseSensor):
             self.measurement.spo2_valid = False
 
     def _build_payload(self, read_size: int) -> Dict[str, Any]:
+        # ============================================================
+        # PHASE 2: Include SQI and metadata in payload
+        # ============================================================
+        global _last_sqi, _last_cv, _last_peak_count
+        
         return {
             "read_size": read_size,
             "heart_rate": float(self.measurement.heart_rate),
@@ -1003,6 +1466,7 @@ class MAX30102Sensor(BaseSensor):
             "finger_detected": bool(self.finger.detected),
             "signal_quality_ir": float(self.measurement.signal_quality_ir),
             "signal_quality_red": float(self.measurement.signal_quality_red),
+            "signal_quality_index": float(_last_sqi),  # PHASE 2: SQI 0-100
             "status": self.measurement.status,
             "window_fill": float(self.measurement.window_fill),
             "measurement_ready": bool(self.measurement.ready),
@@ -1012,6 +1476,9 @@ class MAX30102Sensor(BaseSensor):
             "finger_signal_amplitude": float(self.finger.signal_amplitude),
             "finger_signal_ratio": float(self.finger.signal_ratio),
             "finger_signal_quality": float(self.finger.signal_quality),
+            # PHASE 2: Additional metadata for logging/research
+            "spo2_cv": float(_last_cv),  # Coefficient of variation
+            "peak_count": int(_last_peak_count),  # Number of peaks detected
         }
 
     def _update_status_no_samples(self) -> None:

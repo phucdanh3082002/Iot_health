@@ -25,7 +25,7 @@ sensors:
     pulse_amplitude_red: 0x7F  # High brightness for LED visibility
     pulse_amplitude_ir: 0x7F   # High brightness for LED visibility
     adc_range: 4096
-    sample_average: 1  # CRITICAL: Giảm từ 8 → 1 để tăng throughput
+    sample_average: 4  # OPTIMIZED: Cân bằng SNR và throughput (4 samples average)
     buffer_size: 100  # buffer size for calculations
     ir_threshold: 50000  # threshold for finger detection
     min_readings_for_calc: 50  # minimum readings before calculating HR/SpO2
