@@ -18,12 +18,14 @@ patient:
 sensors:
   max30102:
     enabled: true
-    sample_rate: 50  # Hz
+    sample_rate: 5  # Hz - polling frequency (đọc mỗi 0.2s)
+    hardware_sample_rate: 50  # Hz - MAX30102 internal sampling
+    max_samples_per_read: 16  # Đọc 16 samples/lần (~0.32s @ 50Hz raw)
     led_mode: 3  # SpO2 mode (RED and IR LEDs active)
     pulse_amplitude_red: 0x7F  # High brightness for LED visibility
     pulse_amplitude_ir: 0x7F   # High brightness for LED visibility
     adc_range: 4096
-    sample_average: 8
+    sample_average: 1  # CRITICAL: Giảm từ 8 → 1 để tăng throughput
     buffer_size: 100  # buffer size for calculations
     ir_threshold: 50000  # threshold for finger detection
     min_readings_for_calc: 50  # minimum readings before calculating HR/SpO2

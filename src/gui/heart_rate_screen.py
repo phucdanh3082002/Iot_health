@@ -1,23 +1,23 @@
-"""
-Heart Rate & SpO2 Measurement Screen
-Màn hình đo chi tiết cho MAX30102 (nhịp tim và SpO2)
-"""
+"""Màn hình đo nhịp tim & SpO₂ với controller điều phối rõ ràng."""
 
-from typing import Dict, Any, Optional
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
 import logging
 import time
-import numpy as np
-from kivy.uix.screenmanager import Screen
-from kivy.uix.anchorlayout import AnchorLayout
-from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle
+
 from kivy.animation import Animation
-from kivy.metrics import dp
+from kivy.clock import Clock
 from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.uix.anchorlayout import AnchorLayout
+from kivy.uix.screenmanager import Screen
+
 from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDIconButton, MDRectangleFlatIconButton
 from kivymd.uix.card import MDCard
-from kivymd.uix.label import MDLabel, MDIcon
-from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton
+from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.progressbar import MDProgressBar
 
 
@@ -31,28 +31,27 @@ TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 
 
 class PulseAnimation(MDBoxLayout):
-    """Widget hiển thị animation nhịp tim"""
+    """Widget hoạt họa nhịp tim đơn giản."""
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
         self.padding = (0, dp(4), 0, dp(4))
         self.pulse_active = False
-        self.pulse_rate = 60  # BPM
+        self.pulse_rate = 60.0
         self.base_font_size = dp(44)
 
         self.heart_icon = MDIcon(
             icon="heart",
             theme_text_color="Custom",
-            text_color=(1, 0.36, 0.46, 1),
+            text_color=(1, 0.35, 0.46, 1),
             halign="center",
         )
         self.heart_icon.font_size = self.base_font_size
         self.heart_icon.pos_hint = {"center_x": 0.5}
         self.add_widget(self.heart_icon)
 
-    def start_pulse(self, bpm: float):
-        """Start pulse animation"""
+    def start_pulse(self, bpm: float) -> None:
         if bpm <= 0:
             self.stop_pulse()
             return
@@ -60,22 +59,19 @@ class PulseAnimation(MDBoxLayout):
         self.pulse_rate = bpm
         self.pulse_active = True
         Clock.unschedule(self._pulse_beat)
-        interval = 60.0 / bpm
-        self._schedule_pulse(interval)
+        interval = max(0.3, 60.0 / bpm)
+        self._schedule(interval)
 
-    def stop_pulse(self):
-        """Stop pulse animation"""
+    def stop_pulse(self) -> None:
         self.pulse_active = False
         Clock.unschedule(self._pulse_beat)
         self.heart_icon.font_size = self.base_font_size
 
-    def _schedule_pulse(self, interval):
-        """Schedule pulse animation"""
+    def _schedule(self, interval: float) -> None:
         if self.pulse_active:
             Clock.schedule_once(self._pulse_beat, interval)
 
-    def _pulse_beat(self, dt):
-        """Animate one heartbeat"""
+    def _pulse_beat(self, _dt: float) -> None:
         if not self.pulse_active:
             return
 
@@ -85,49 +81,303 @@ class PulseAnimation(MDBoxLayout):
         )
         anim.start(self.heart_icon)
 
-        interval = 60.0 / self.pulse_rate if self.pulse_rate > 0 else 1.0
-        self._schedule_pulse(interval)
+        interval = max(0.3, 60.0 / self.pulse_rate) if self.pulse_rate > 0 else 1.0
+        self._schedule(interval)
+
+
+class HeartRateMeasurementController:
+    """State machine điều khiển quá trình đo MAX30102."""
+
+    STATE_IDLE = "idle"
+    STATE_WAITING = "waiting"
+    STATE_MEASURING = "measuring"
+    STATE_FINISHED = "finished"
+
+    WAIT_TIMEOUT = 10.0  # Chờ ngón tay (chỉ để hiển thị UI, không timeout thực sự)
+    FINGER_LOSS_GRACE = 3.0  # Grace period khi mất ngón tay
+    TIMEOUT_MARGIN = 15.0  # Tăng lên 15s để đủ thời gian thu đủ samples
+
+    def __init__(self, screen: "HeartRateScreen", sensor_name: str = "MAX30102") -> None:
+        self.screen = screen
+        self.app = screen.app_instance
+        self.sensor_name = sensor_name
+        self.logger = logging.getLogger(__name__ + ".controller")
+
+        self.state = self.STATE_IDLE
+        self.poll_event = None
+        self.wait_started = 0.0
+        self.measure_started = 0.0
+        self.deadline = 0.0
+        self.finger_lost_ts: Optional[float] = None
+        self.last_snapshot: Dict[str, Any] = {}
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        if self.state in (self.STATE_WAITING, self.STATE_MEASURING):
+            self.logger.debug("Phiên đo đang chạy - bỏ qua yêu cầu start")
+            return
+
+        if not self._ensure_sensor_started():
+            self.screen.show_error_status("Không thể khởi động cảm biến. Kiểm tra kết nối.")
+            return
+
+        sensor = self._get_sensor()
+        if sensor and hasattr(sensor, "begin_measurement_session"):
+            try:
+                sensor.begin_measurement_session()
+            except Exception as exc:  # pragma: no cover - safety log
+                self.logger.error("Không thể begin_measurement_session: %s", exc)
+
+        now = time.time()
+        self.state = self.STATE_WAITING
+        self.wait_started = now
+        self.measure_started = 0.0
+        self.deadline = now + self.screen.measurement_duration + self.TIMEOUT_MARGIN
+        self.finger_lost_ts = None
+        self.last_snapshot = {}
+
+        self.screen.on_measurement_preparing(self.WAIT_TIMEOUT)
+        self._schedule_poll()
+        self.logger.info("Bắt đầu chờ ngón tay cho phiên đo nhịp tim")
+
+    def stop(self, user_cancelled: bool = True) -> None:
+        if self.state not in (self.STATE_WAITING, self.STATE_MEASURING):
+            self.reset()
+            self.screen.reset_to_idle()
+            return
+
+        snapshot = self.app.get_sensor_data() or {}
+        self._finalize(success=False, reason="user_cancel" if user_cancelled else "stopped", snapshot=snapshot)
+
+    def reset(self) -> None:
+        self._cancel_poll()
+        self.state = self.STATE_IDLE
+        self.wait_started = 0.0
+        self.measure_started = 0.0
+        self.deadline = 0.0
+        self.finger_lost_ts = None
+        self.last_snapshot = {}
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+    def _ensure_sensor_started(self) -> bool:
+        try:
+            return bool(self.app.ensure_sensor_started(self.sensor_name))
+        except Exception as exc:  # pragma: no cover - safety log
+            self.logger.error("Không thể khởi động %s: %s", self.sensor_name, exc)
+            return False
+
+    def _get_sensor(self):
+        sensors = getattr(self.app, "sensors", {})
+        if isinstance(sensors, dict):
+            return sensors.get(self.sensor_name)
+        return None
+
+    def _schedule_poll(self) -> None:
+        if self.poll_event is None:
+            self.poll_event = Clock.schedule_interval(self._poll_sensor, 0.2)
+
+    def _cancel_poll(self) -> None:
+        if self.poll_event is not None:
+            try:
+                self.poll_event.cancel()
+            except Exception:
+                Clock.unschedule(self._poll_sensor)
+        self.poll_event = None
+
+    def _poll_sensor(self, _dt: float) -> bool:
+        sensor_data = self.app.get_sensor_data() or {}
+        status = self._extract_status(sensor_data)
+        self.last_snapshot = {"sensor_status": {self.sensor_name: status}, **sensor_data}
+
+        now = time.time()
+        finger_present = bool(status.get("finger_detected", sensor_data.get("finger_detected", False)))
+        window_fill = float(status.get("window_fill", sensor_data.get("window_fill", 0.0)) or 0.0)
+        signal_quality = float(status.get("signal_quality_ir", sensor_data.get("signal_quality_ir", 0.0)) or 0.0)
+        detection_score = float(status.get("finger_detection_score", sensor_data.get("finger_detection_score", 0.0)) or 0.0)
+        detection_amp = float(status.get("finger_signal_amplitude", sensor_data.get("finger_signal_amplitude", 0.0)) or 0.0)
+        detection_ratio = float(status.get("finger_signal_ratio", sensor_data.get("finger_signal_ratio", 0.0)) or 0.0)
+        measurement_ready = bool(status.get("measurement_ready", sensor_data.get("measurement_ready", False)))
+        measurement_status = status.get("status", "idle") or "idle"
+        
+        # DEBUG: Log finger detection state
+        if self.state == self.STATE_WAITING and detection_score > 0:
+            self.logger.debug(
+                "[POLL] state=%s, finger_present=%s, score=%.2f, amp=%.0f, quality=%.0f",
+                self.state,
+                finger_present,
+                detection_score,
+                detection_amp,
+                signal_quality,
+            )
+
+        elapsed_report = float(status.get("measurement_elapsed", sensor_data.get("measurement_elapsed", 0.0)) or 0.0)
+        measurement_elapsed = elapsed_report if elapsed_report > 0 else (now - self.measure_started if self.measure_started else 0.0)
+        remaining_time = max(0.0, self.screen.measurement_duration - measurement_elapsed)
+        progress = max(window_fill, measurement_elapsed / self.screen.measurement_duration if self.screen.measurement_duration else 0.0)
+        self.screen.update_progress(progress * 100.0, measurement_status, remaining_time)
+        self.screen.show_signal_info(signal_quality, detection_score, detection_amp, detection_ratio)
+
+        hr_valid = bool(sensor_data.get("hr_valid"))
+        spo2_valid = bool(sensor_data.get("spo2_valid"))
+        heart_rate = float(sensor_data.get("heart_rate", 0.0) or 0.0)
+        spo2 = float(sensor_data.get("spo2", 0.0) or 0.0)
+        self.screen.update_live_metrics(heart_rate, hr_valid, spo2, spo2_valid, self.state)
+
+        if self.state == self.STATE_WAITING:
+            # Tính elapsed_wait nhưng chỉ hiển thị countdown, KHÔNG timeout khi không có ngón tay
+            elapsed_wait = now - self.wait_started
+            remaining_wait = max(0.0, self.WAIT_TIMEOUT - elapsed_wait)
+            self.screen.show_waiting_instructions(remaining_wait)
+            
+            if finger_present:
+                self.state = self.STATE_MEASURING
+                self.measure_started = now
+                self.finger_lost_ts = None
+                self.screen.on_measurement_started(self.screen.measurement_duration)
+                self.logger.info("Đã phát hiện ngón tay, chuyển sang trạng thái đo")
+            # KHÔNG timeout trong WAITING - chờ vô hạn cho đến khi có ngón tay hoặc user cancel
+            return True
+
+        if self.state != self.STATE_MEASURING:
+            return True
+
+        # TRONG TRẠNG THÁI MEASURING: Tạm dừng đếm ngược nếu mất ngón tay
+        if not finger_present:
+            if self.finger_lost_ts is None:
+                self.finger_lost_ts = now
+                self.logger.debug("Ngón tay rời khỏi cảm biến - TẠM DỪNG đếm ngược")
+            # DỪNG ĐẾM: measurement_elapsed không tăng khi mất ngón tay
+            # Tính lại elapsed dựa trên thời gian CÓ ngón tay
+            time_with_finger = (self.finger_lost_ts - self.measure_started) if self.measure_started else 0.0
+            measurement_elapsed = time_with_finger
+            remaining_time = max(0.0, self.screen.measurement_duration - measurement_elapsed)
+            
+            # Grace period: nếu mất ngón tay quá lâu → fail
+            if now - self.finger_lost_ts > self.FINGER_LOSS_GRACE:
+                self.logger.warning("Ngón tay rời khỏi cảm biến quá lâu")
+                self._finalize(success=False, reason="finger_removed", snapshot=sensor_data)
+                return False
+            self.screen.show_finger_instruction(missing=True)
+        else:
+            # Có ngón tay: tiếp tục đếm bình thường
+            if self.finger_lost_ts is not None:
+                # Ngón tay vừa quay lại → điều chỉnh measure_started
+                pause_duration = now - self.finger_lost_ts
+                self.measure_started += pause_duration  # Dịch thời điểm bắt đầu về sau
+                self.logger.debug("Ngón tay quay lại - TIẾP TỤC đếm (đã dừng %.1fs)", pause_duration)
+                self.finger_lost_ts = None
+
+        has_valid_metrics = (hr_valid and heart_rate > 0) or (spo2_valid and spo2 > 0)
+        if measurement_elapsed >= self.screen.minimum_active_time and (measurement_ready or has_valid_metrics):
+            self._finalize(success=True, reason="completed", snapshot=sensor_data)
+            return False
+
+        if now >= self.deadline:
+            self.logger.warning(
+                "Timeout đo nhịp tim (elapsed=%.1fs, chất lượng=%.1f)",
+                measurement_elapsed,
+                signal_quality,
+            )
+            self._finalize(success=False, reason="timeout", snapshot=sensor_data)
+            return False
+
+        if finger_present and measurement_status == "poor_signal":
+            self.screen.show_signal_warning()
+        elif finger_present:
+            self.screen.show_measurement_guidance(remaining_time)
+
+        return True
+
+    def _finalize(self, success: bool, reason: str, snapshot: Dict[str, Any]) -> None:
+        previous_state = self.state
+        self.state = self.STATE_FINISHED if success else self.STATE_IDLE
+        self._cancel_poll()
+
+        sensor = self._get_sensor()
+        if sensor and hasattr(sensor, "end_measurement_session"):
+            try:
+                sensor.end_measurement_session()
+            except Exception as exc:  # pragma: no cover - safety log
+                self.logger.debug("Không thể end_measurement_session: %s", exc)
+
+        try:
+            self.app.stop_sensor(self.sensor_name)
+        except Exception as exc:  # pragma: no cover - safety log
+            self.logger.debug("Không thể dừng sensor %s: %s", self.sensor_name, exc)
+
+        hr_valid = bool(snapshot.get("hr_valid"))
+        spo2_valid = bool(snapshot.get("spo2_valid"))
+        heart_rate = float(snapshot.get("heart_rate", 0.0) or 0.0)
+        spo2 = float(snapshot.get("spo2", 0.0) or 0.0)
+        quality = float(snapshot.get("signal_quality_ir", 0.0) or 0.0)
+        status = self._extract_status(snapshot)
+        quality = float(status.get("signal_quality_ir", quality))
+
+        self.screen.on_measurement_complete(
+            success=success,
+            reason=reason,
+            heart_rate=heart_rate if hr_valid and heart_rate > 0 else 0.0,
+            spo2=spo2 if spo2_valid and spo2 > 0 else 0.0,
+            hr_valid=hr_valid,
+            spo2_valid=spo2_valid,
+            signal_quality=quality,
+            previous_state=previous_state,
+        )
+
+    def _extract_status(self, sensor_data: Dict[str, Any]) -> Dict[str, Any]:
+        status_map = sensor_data.get("sensor_status") if isinstance(sensor_data, dict) else None
+        if isinstance(status_map, dict):
+            status = status_map.get(self.sensor_name)
+            if isinstance(status, dict):
+                return status
+        return {
+            "finger_detected": bool(sensor_data.get("finger_detected", False)),
+            "signal_quality_ir": float(sensor_data.get("signal_quality_ir", 0.0) or 0.0),
+            "window_fill": float(sensor_data.get("window_fill", 0.0) or 0.0),
+            "measurement_ready": bool(sensor_data.get("measurement_ready", False)),
+        }
 
 
 class HeartRateScreen(Screen):
-    """Màn hình đo chi tiết cho MAX30102"""
+    """Màn hình đo nhịp tim & SpO₂ với controller tách riêng."""
 
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)
         self.app_instance = app_instance
         self.logger = logging.getLogger(__name__)
 
-        # Measurement state
-        self.measuring = False
-        self.measurement_start_time = 0
-        self.measurement_duration = 5.0  # 5 seconds measurement time
-        self.stable_readings = 0
-        self.required_stable_readings = 10
+        sensor = getattr(self.app_instance, "sensors", {}).get("MAX30102") if hasattr(self.app_instance, "sensors") else None
+        default_duration = 8.0
+        if sensor and hasattr(sensor, "measurement_window_seconds"):
+            try:
+                default_duration = float(sensor.measurement_window_seconds)
+            except (TypeError, ValueError):
+                default_duration = 8.0
 
-        # Current values
-        self.current_hr = 0
-        self.current_spo2 = 0
+        self.measurement_duration = max(5.0, default_duration)
+        self.minimum_active_time = max(4.0, self.measurement_duration * 0.5)  # Giảm từ 0.6 xuống 0.5
 
-        # Finger detection gate
-        self.awaiting_finger = False
-        self.finger_wait_event = None
-        self.finger_wait_start = 0.0
-        self.finger_wait_timeout = 8.0  # seconds to wait for finger before aborting
-
-        # Valid readings collection
-        self.valid_hr_readings = []
-        self.valid_spo2_readings = []
-        self.max_valid_readings = 20  # Maximum readings to collect for filtering
+        self.current_hr = 0.0
+        self.current_spo2 = 0.0
 
         self._build_layout()
+        self.controller = HeartRateMeasurementController(self)
 
-    def _build_layout(self):
-        """Build measurement screen layout"""
+    # ------------------------------------------------------------------
+    # Layout builders
+    # ------------------------------------------------------------------
+    def _build_layout(self) -> None:
         main_layout = MDBoxLayout(
             orientation="vertical",
             spacing=dp(6),
             padding=(dp(8), dp(6), dp(8), dp(8)),
         )
+
+        from kivy.graphics import Color, Rectangle  # tránh import vòng ở module load
 
         with main_layout.canvas.before:
             Color(*MED_BG_COLOR)
@@ -141,11 +391,11 @@ class HeartRateScreen(Screen):
 
         self.add_widget(main_layout)
 
-    def _update_bg(self, instance, value):
+    def _update_bg(self, instance, _value) -> None:
         self.bg_rect.size = instance.size
         self.bg_rect.pos = instance.pos
 
-    def _create_header(self, parent):
+    def _create_header(self, parent) -> None:
         header_card = MDCard(
             orientation="horizontal",
             size_hint_y=None,
@@ -182,7 +432,7 @@ class HeartRateScreen(Screen):
         title_box.add_widget(title_label)
 
         subtitle_label = MDLabel(
-            text="Giữ ngón tay yên trên cảm biến",
+            text="Giữ ngón tay cố định khi đo",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
@@ -192,10 +442,9 @@ class HeartRateScreen(Screen):
         title_box.add_widget(subtitle_label)
 
         header_card.add_widget(title_box)
-
         parent.add_widget(header_card)
 
-    def _create_measurement_panel(self, parent):
+    def _create_measurement_panel(self, parent) -> None:
         available_height = Window.height
         panel_layout = MDBoxLayout(
             orientation="horizontal",
@@ -323,7 +572,6 @@ class HeartRateScreen(Screen):
         card_content.add_widget(pulse_wrapper)
 
         measurement_card.add_widget(card_content)
-
         panel_layout.add_widget(measurement_card)
 
         instruction_card = MDCard(
@@ -364,7 +612,7 @@ class HeartRateScreen(Screen):
         instruction_card.add_widget(instruction_header)
 
         self.instruction_label = MDLabel(
-            text="1. Đặt ngón tay lên cảm biến\n2. Giữ yên trong 5 giây\n3. Hít thở đều, tránh rung lắc",
+            text="1. Bấm 'Bắt đầu đo'\n2. Đặt ngón tay nhẹ nhàng lên cảm biến\n3. Giữ cố định đến khi hoàn tất",
             font_style="Body2",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
@@ -387,7 +635,7 @@ class HeartRateScreen(Screen):
         panel_layout.add_widget(instruction_card)
         parent.add_widget(panel_layout)
 
-    def _create_status_display(self, parent):
+    def _create_status_display(self, parent) -> None:
         status_card = MDCard(
             orientation="vertical",
             size_hint_y=None,
@@ -399,12 +647,12 @@ class HeartRateScreen(Screen):
         )
 
         self.status_label = MDLabel(
-            text='Sẵn sàng đo',
-            font_style='Body1',
-            theme_text_color='Custom',
+            text="Sẵn sàng đo",
+            font_style="Body1",
+            theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
         )
-        self.status_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        self.status_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         status_card.add_widget(self.status_label)
 
         self.progress_bar = MDProgressBar(
@@ -418,7 +666,7 @@ class HeartRateScreen(Screen):
 
         parent.add_widget(status_card)
 
-    def _create_controls(self, parent):
+    def _create_controls(self, parent) -> None:
         control_layout = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -447,15 +695,18 @@ class HeartRateScreen(Screen):
 
         parent.add_widget(control_layout)
 
+    # ------------------------------------------------------------------
+    # UI helpers
+    # ------------------------------------------------------------------
     def _style_start_button(self, active: bool) -> None:
         if active:
-            self.start_stop_btn.text = 'Dừng đo'
-            self.start_stop_btn.icon = 'stop-circle'
+            self.start_stop_btn.text = "Dừng đo"
+            self.start_stop_btn.icon = "stop-circle"
             self.start_stop_btn.text_color = MED_WARNING
             self.start_stop_btn.line_color = MED_WARNING
         else:
-            self.start_stop_btn.text = 'Bắt đầu đo'
-            self.start_stop_btn.icon = 'play-circle'
+            self.start_stop_btn.text = "Bắt đầu đo"
+            self.start_stop_btn.icon = "play-circle"
             self.start_stop_btn.text_color = MED_CARD_ACCENT
             self.start_stop_btn.line_color = MED_CARD_ACCENT
 
@@ -468,450 +719,208 @@ class HeartRateScreen(Screen):
             self.save_btn.text_color = (1, 1, 1, 0.3)
             self.save_btn.line_color = (1, 1, 1, 0.3)
 
-    def _prepare_measurement_session(self) -> None:
-        """Reset dữ liệu và giao diện trước khi bắt đầu đo."""
-        self.stable_readings = 0
-        self.valid_hr_readings.clear()
-        self.valid_spo2_readings.clear()
-        self.current_hr = 0
-        self.current_spo2 = 0
+    def on_measurement_preparing(self, wait_timeout: float) -> None:
+        self._style_start_button(True)
+        self._style_save_button(False)
         self.progress_bar.value = 0
-        self.signal_label.text = 'Chất lượng tín hiệu: --'
-        self.hr_value_label.text = '-- BPM'
-        self.spo2_value_label.text = '-- %'
-        self._style_save_button(enabled=False)
+        self.hr_value_label.text = "-- BPM"
+        self.spo2_value_label.text = "-- %"
+        self.status_label.text = "Đang chuẩn bị cảm biến..."
+        self.signal_label.text = "Chất lượng tín hiệu: --"
+        self.instruction_label.text = (
+            "• Đặt nhẹ ngón tay lên cảm biến trong %.0f giây\n"
+            "• Giữ cố định, không bóp mạnh"
+        ) % wait_timeout
+        self.pulse_widget.start_pulse(60.0)
 
-    def _is_finger_detected(self, sensor_data: Dict[str, Any]) -> bool:
-        """Trích xuất trạng thái phát hiện ngón tay từ dữ liệu cảm biến."""
-        if not sensor_data:
-            return False
-
-        status_map = sensor_data.get('sensor_status') or {}
-        max30102_status = status_map.get('MAX30102') or {}
-
-        if 'finger_detected' in max30102_status:
-            return bool(max30102_status.get('finger_detected'))
-
-        if 'finger_detected' in sensor_data:
-            return bool(sensor_data.get('finger_detected'))
-
-        return False
-
-    def _schedule_finger_wait(self) -> None:
-        """Đăng ký vòng lặp kiểm tra ngón tay khi đang chờ."""
-        if self.finger_wait_event is None:
-            self.finger_wait_event = Clock.schedule_interval(self._check_finger_ready, 0.2)
-
-    def _cancel_finger_wait(self) -> None:
-        """Huỷ vòng lặp kiểm tra ngón tay nếu còn tồn tại."""
-        if self.finger_wait_event is not None:
-            try:
-                self.finger_wait_event.cancel()
-            except Exception:
-                Clock.unschedule(self._check_finger_ready)
-            self.finger_wait_event = None
-
-    def _check_finger_ready(self, dt) -> bool:
-        """Kiểm tra định kỳ xem ngón tay đã được đặt lên cảm biến chưa."""
-        sensor_data = self.app_instance.get_sensor_data()
-        if self._is_finger_detected(sensor_data):
-            self.awaiting_finger = False
-            self.status_label.text = 'Đã phát hiện ngón tay - bắt đầu đo'
-            self._cancel_finger_wait()
-            # Bắt đầu phiên đo chính thức
-            self._begin_active_measurement()
-            return False
-
-        elapsed = time.time() - self.finger_wait_start
-        remaining = max(0.0, self.finger_wait_timeout - elapsed)
-
-        if elapsed >= self.finger_wait_timeout:
-            self.status_label.text = 'Chưa phát hiện ngón tay - hãy đặt ngón tay và nhấn lại'
-            self.logger.warning("Timeout chờ ngón tay - hủy phiên đo")
-            self._cancel_finger_wait()
-            self._style_start_button(active=False)
-            self.pulse_widget.stop_pulse()
-            self.app_instance.stop_sensor('MAX30102')
-            self.awaiting_finger = False
-            return False
-
-        self.status_label.text = f'Chưa phát hiện ngón tay - đặt ngón tay lên cảm biến ({remaining:.0f}s)'
-        return True
-
-    def _begin_active_measurement(self) -> None:
-        """Thiết lập trạng thái và UI khi chính thức bắt đầu đếm thời gian đo."""
-        self.measuring = True
-        self.measurement_start_time = time.time()
-        self._style_start_button(active=True)
-        self._style_save_button(enabled=False)
-        self.status_label.text = 'Đang đo trong 5 giây... Đặt ngón tay yên cố định'
-        self.progress_bar.value = 0
-        self.signal_label.text = 'Chất lượng tín hiệu: --'
-        self.hr_value_label.text = '-- BPM'
-        self.spo2_value_label.text = '-- %'
-
-        # Bật LED đỏ nếu có hỗ trợ
-        if 'MAX30102' in self.app_instance.sensors:
-            max30102_sensor = self.app_instance.sensors['MAX30102']
-            if hasattr(max30102_sensor, 'turn_on_red_led'):
-                max30102_sensor.turn_on_red_led()
-
-        # Chạy animation với BPM mặc định trong khi chờ nhịp thật
-        self._ensure_pulse_running(60)
-
-        # Bắt đầu cập nhật dữ liệu
-        Clock.schedule_interval(self._update_measurement, 0.2)
-
-        self.logger.info("Heart rate measurement started - 5 second timer")
-
-    def _ensure_pulse_running(self, bpm: float) -> None:
-        """Đảm bảo animation trái tim chạy với BPM mong muốn trong khi đo."""
-        if bpm <= 0:
-            bpm = 60.0
-
-        pulse_widget = self.pulse_widget
-        if not pulse_widget.pulse_active:
-            pulse_widget.start_pulse(bpm)
-        elif abs(pulse_widget.pulse_rate - bpm) > 1:
-            pulse_widget.start_pulse(bpm)
-    
-    def _on_back_pressed(self, instance):
-        """Handle back button press"""
-        if self.measuring:
-            self._stop_measurement()
-        self.app_instance.navigate_to_screen('dashboard')
-    
-    def _on_start_stop_pressed(self, instance):
-        """Handle start/stop button press"""
-        if self.measuring or self.awaiting_finger:
-            self._stop_measurement()
+    def show_waiting_instructions(self, remaining_time: float) -> None:
+        if remaining_time > 0:
+            self.status_label.text = f"Chưa phát hiện ngón tay - còn {remaining_time:.0f}s"
         else:
-            self._start_measurement()
-    
-    def _on_save_pressed(self, instance):
-        """Handle save button press"""
-        if self.current_hr > 0 and self.current_spo2 > 0:
-            measurement_data = {
-                'timestamp': time.time(),
-                'heart_rate': self.current_hr,
-                'spo2': self.current_spo2,
-                'measurement_type': 'heart_rate_spo2'
-            }
-            self.app_instance.save_measurement_to_database(measurement_data)
-            self.logger.info(f"Saved HR/SpO2 measurement: {self.current_hr}/{self.current_spo2}")
-            
-            # Reset for next measurement
-            self._style_save_button(enabled=False)
-    
-    def _start_measurement(self):
-        """Start measurement process"""
-        try:
-            if self.measuring or self.awaiting_finger:
-                self.logger.debug("Measurement already in progress or waiting for finger")
-                return
+            self.status_label.text = "Đang kiểm tra tín hiệu từ ngón tay..."
 
-            if not self.app_instance.ensure_sensor_started('MAX30102'):
-                self.status_label.text = 'Không thể khởi động cảm biến nhịp tim'
-                self.logger.error("Failed to start MAX30102 sensor on demand")
-                return
+    def on_measurement_started(self, duration: float) -> None:
+        self.status_label.text = f"Đang đo (~{duration:.0f}s) - giữ ngón tay thật cố định"
+        self.instruction_label.text = (
+            "• Giữ nguyên vị trí ngón tay\n"
+            "• Tránh rung lắc và ánh sáng trực tiếp"
+        )
 
-            # Reset session state trước khi bắt đầu hoặc chờ
-            self._prepare_measurement_session()
+    def show_finger_instruction(self, missing: bool) -> None:
+        if missing:
+            self.status_label.text = "Giữ ngón tay áp sát cảm biến"
+        else:
+            self.status_label.text = "Đang thu tín hiệu, tiếp tục giữ cố định"
 
-            # Kiểm tra trạng thái ngón tay hiện tại
-            sensor_data = self.app_instance.get_sensor_data()
-            finger_detected = self._is_finger_detected(sensor_data)
+    def show_measurement_guidance(self, remaining_time: float) -> None:
+        self.status_label.text = f"Đang đo - còn khoảng {remaining_time:.1f}s"
 
-            if finger_detected:
-                self.status_label.text = 'Đã phát hiện ngón tay - bắt đầu đo'
-                self._begin_active_measurement()
+    def show_signal_warning(self) -> None:
+        self.status_label.text = "Tín hiệu yếu - hãy nhấn nhẹ hơn và giữ yên"
+
+    def update_progress(self, percent: float, measurement_status: str, remaining_time: float) -> None:
+        self.progress_bar.value = max(0.0, min(100.0, percent))
+        if measurement_status == "partial":
+            self.status_label.text = "Đang thu thêm tín hiệu để đảm bảo chính xác"
+        elif measurement_status == "poor_signal":
+            self.status_label.text = "Tín hiệu yếu - tránh rung lắc"
+        elif measurement_status == "good" and remaining_time > 0:
+            self.status_label.text = f"Tín hiệu ổn định - còn {remaining_time:.1f}s"
+
+    def show_signal_info(self, quality: float, detection_score: float, amplitude: float, ratio: float) -> None:
+        ratio_scaled = ratio * 10000.0
+        self.signal_label.text = (
+            f"Chất lượng tín hiệu: {quality:.0f}%\n"
+            f"Điểm nhận diện: {detection_score:.2f} | Biên độ: {amplitude:.0f} | AC/DC×1e4: {ratio_scaled:.1f}"
+        )
+
+    def update_live_metrics(
+        self,
+        heart_rate: float,
+        hr_valid: bool,
+        spo2: float,
+        spo2_valid: bool,
+        controller_state: str,
+    ) -> None:
+        if controller_state in (HeartRateMeasurementController.STATE_MEASURING, HeartRateMeasurementController.STATE_WAITING):
+            if hr_valid and heart_rate > 0:
+                self.hr_value_label.text = f"{heart_rate:.0f} BPM"
+                self.pulse_widget.start_pulse(max(40.0, heart_rate))
             else:
-                self.awaiting_finger = True
-                self.finger_wait_start = time.time()
-                self.status_label.text = 'Chưa phát hiện ngón tay - đặt ngón tay lên cảm biến'
-                self._style_start_button(active=True)
-                self._ensure_pulse_running(60)
-                self._schedule_finger_wait()
-                self.logger.info("Đang chờ phát hiện ngón tay trước khi bắt đầu đo")
-                
-        except Exception as e:
-            self.logger.error(f"Error starting measurement: {e}")
-    
-    def _stop_measurement(self):
-        """Stop measurement process"""
-        try:
-            waiting_only = self.awaiting_finger and not self.measuring
-            self.awaiting_finger = False
-            self._cancel_finger_wait()
+                self.hr_value_label.text = "-- BPM"
 
-            if not self.measuring:
-                if waiting_only:
-                    self.logger.info("Huỷ đo khi chưa phát hiện ngón tay")
-                else:
-                    self.logger.debug("Stop measurement called when no active session")
-
-                self._style_start_button(active=False)
-                self.pulse_widget.stop_pulse()
-                Clock.unschedule(self._update_measurement)
-                self.status_label.text = 'Đã hủy - Đặt ngón tay lên cảm biến và thử lại'
-                self.progress_bar.value = 0
-                self.hr_value_label.text = '-- BPM'
-                self.spo2_value_label.text = '-- %'
-                self._style_save_button(enabled=False)
-                return
-
-            self.measuring = False
-
-            # Turn off RED LED after measurement
-            if 'MAX30102' in self.app_instance.sensors:
-                max30102_sensor = self.app_instance.sensors['MAX30102']
-                if hasattr(max30102_sensor, 'turn_off_red_led'):
-                    max30102_sensor.turn_off_red_led()
-
-            # Update UI
-            self._style_start_button(active=False)
-
-            # Stop animations
-            self.pulse_widget.stop_pulse()
-            Clock.unschedule(self._update_measurement)
-
-            # Process collected readings and filter invalid values
-            final_hr, final_spo2 = self._process_final_readings()
-
-            if final_hr > 0 and final_spo2 > 0:
-                self.current_hr = final_hr
-                self.current_spo2 = final_spo2
-                self.hr_value_label.text = f'{final_hr:.0f} BPM'
-                self.spo2_value_label.text = f'{final_spo2:.0f} %'
-
-                self.status_label.text = 'Đo hoàn thành - Có thể lưu kết quả!'
-                self.progress_bar.value = 100
-                self._style_save_button(enabled=True)
-
-                self.logger.info(f"Measurement completed: HR={final_hr:.0f}, SpO2={final_spo2:.0f}")
+            if spo2_valid and spo2 > 0:
+                self.spo2_value_label.text = f"{spo2:.1f} %"
             else:
-                self.status_label.text = 'Đo không thành công - Thử lại'
-                self.progress_bar.value = 0
-                self.hr_value_label.text = '-- BPM'
-                self.spo2_value_label.text = '-- %'
-                self._style_save_button(enabled=False)
-                self.logger.warning("Measurement failed - no valid readings")
-            
-        except Exception as e:
-            self.logger.error(f"Error stopping measurement: {e}")
-        finally:
-            self.app_instance.stop_sensor('MAX30102')
-    
-    def _update_measurement(self, dt):
-        """Update measurement progress with 5-second timer and data filtering"""
-        try:
-            if not self.measuring:
-                return False
-            
-            # Calculate elapsed time
-            elapsed_time = time.time() - self.measurement_start_time
-            remaining_time = max(0, self.measurement_duration - elapsed_time)
-            
-            # Update progress bar based on time
-            time_progress = min(100, (elapsed_time / self.measurement_duration) * 100)
-            self.progress_bar.value = time_progress
-            
-            # Check if measurement time is up
-            if elapsed_time >= self.measurement_duration:
-                self._stop_measurement()
-                return False
-            
-            # Get current sensor data from app
-            sensor_data = self.app_instance.get_sensor_data()
-            max30102_status = sensor_data.get('sensor_status', {}).get('MAX30102', {})
-            
-            # Get MAX30102 specific data
-            finger_detected = max30102_status.get('finger_detected', False)
-            hr_valid = sensor_data.get('hr_valid', False)
-            spo2_valid = sensor_data.get('spo2_valid', False)
-            signal_quality_ir = max30102_status.get('signal_quality_ir', 0)
-            measurement_status = max30102_status.get('status', 'no_finger')
-            
-            # Update signal quality display
-            self.signal_label.text = f'Chất lượng tín hiệu: {signal_quality_ir:.0f}%'
-            
-            # Update status with remaining time
-            if measurement_status == 'no_finger':
-                self.status_label.text = f'Đặt ngón tay lên cảm biến ({remaining_time:.1f}s)'
-                self.hr_value_label.text = '-- BPM'
-                self.spo2_value_label.text = '-- %'
-                self._ensure_pulse_running(60)
-                return True
-            
-            elif measurement_status == 'initializing':
-                self.status_label.text = f'Đang khởi tạo... ({remaining_time:.1f}s)'
-                self.hr_value_label.text = '-- BPM'
-                self.spo2_value_label.text = '-- %'
-                self._ensure_pulse_running(60)
-                return True
-            
-            elif measurement_status == 'poor_signal':
-                self.status_label.text = f'Tín hiệu yếu - Ấn chặt hơn ({remaining_time:.1f}s)'
-                self.hr_value_label.text = '-- BPM'
-                self.spo2_value_label.text = '-- %'
-                self._ensure_pulse_running(60)
-                return True
-            
-            # Get current HR and SpO2 values
-            current_hr = sensor_data.get('heart_rate', 0)
-            current_spo2 = sensor_data.get('spo2', 0)
-            
-            # Validate and collect readings using MAX30102 sensor validation
-            max30102_sensor = self.app_instance.sensors.get('MAX30102')
-            if max30102_sensor:
-                # Use sensor's validation methods if available
-                hr_is_valid = (hr_valid and 
-                              hasattr(max30102_sensor, 'validate_heart_rate') and 
-                              max30102_sensor.validate_heart_rate(current_hr))
-                spo2_is_valid = (spo2_valid and 
-                               hasattr(max30102_sensor, 'validate_spo2') and 
-                               max30102_sensor.validate_spo2(current_spo2))
-            else:
-                # Fallback validation
-                hr_is_valid = hr_valid and 40 <= current_hr <= 200 and current_hr != -999
-                spo2_is_valid = spo2_valid and 70 <= current_spo2 <= 100 and current_spo2 != -999
-            
-            # Collect valid readings for filtering
-            if hr_is_valid and len(self.valid_hr_readings) < self.max_valid_readings:
-                self.valid_hr_readings.append(current_hr)
-            
-            if spo2_is_valid and len(self.valid_spo2_readings) < self.max_valid_readings:
-                self.valid_spo2_readings.append(current_spo2)
-            
-            # Update displays with current values if valid
-            if hr_is_valid:
-                self.hr_value_label.text = f'{current_hr:.0f} BPM'
-                self._ensure_pulse_running(current_hr)
-            else:
-                self.hr_value_label.text = '-- BPM'
-                self._ensure_pulse_running(60)
-            
-            if spo2_is_valid:
-                self.spo2_value_label.text = f'{current_spo2:.0f} %'
-            else:
-                self.spo2_value_label.text = '-- %'
-            
-            # Update status based on data collection progress
-            valid_readings_count = len(self.valid_hr_readings) + len(self.valid_spo2_readings)
-            data_progress = min(100, (valid_readings_count / (self.max_valid_readings * 2)) * 100)
-            
-            if measurement_status in ['good', 'partial']:
-                self.status_label.text = f'Đang đo... {remaining_time:.1f}s (Dữ liệu: {data_progress:.0f}%)'
-            else:
-                self.status_label.text = f'Đang đo... {remaining_time:.1f}s - Giữ ngón tay yên'
-                    
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Error updating heart rate measurement: {e}")
-            return False
-    
-    def _process_final_readings(self):
-        """
-        Process and filter collected readings to get final values
-        
-        Returns:
-            Tuple of (final_hr, final_spo2)
-        """
-        try:
-            final_hr = 0
-            final_spo2 = 0
-            
-            # Process HR readings
-            if len(self.valid_hr_readings) >= 3:  # Need at least 3 valid readings
-                # Remove outliers using interquartile range (IQR) method
-                hr_array = np.array(self.valid_hr_readings)
-                q1_hr = np.percentile(hr_array, 25)
-                q3_hr = np.percentile(hr_array, 75)
-                iqr_hr = q3_hr - q1_hr
-                
-                # Define outlier bounds
-                lower_bound_hr = q1_hr - 1.5 * iqr_hr
-                upper_bound_hr = q3_hr + 1.5 * iqr_hr
-                
-                # Filter outliers
-                filtered_hr = hr_array[(hr_array >= lower_bound_hr) & (hr_array <= upper_bound_hr)]
-                
-                if len(filtered_hr) > 0:
-                    # Use median of filtered values for stability
-                    final_hr = np.median(filtered_hr)
-                    self.logger.info(f"HR processing: {len(self.valid_hr_readings)} readings → {len(filtered_hr)} filtered → {final_hr:.1f}")
-            
-            # Process SpO2 readings
-            if len(self.valid_spo2_readings) >= 3:  # Need at least 3 valid readings
-                # Remove outliers using IQR method
-                spo2_array = np.array(self.valid_spo2_readings)
-                q1_spo2 = np.percentile(spo2_array, 25)
-                q3_spo2 = np.percentile(spo2_array, 75)
-                iqr_spo2 = q3_spo2 - q1_spo2
-                
-                # Define outlier bounds (tighter for SpO2 as it's more stable)
-                lower_bound_spo2 = q1_spo2 - 1.0 * iqr_spo2
-                upper_bound_spo2 = q3_spo2 + 1.0 * iqr_spo2
-                
-                # Filter outliers
-                filtered_spo2 = spo2_array[(spo2_array >= lower_bound_spo2) & (spo2_array <= upper_bound_spo2)]
-                
-                if len(filtered_spo2) > 0:
-                    # Use median of filtered values for stability
-                    final_spo2 = np.median(filtered_spo2)
-                    self.logger.info(f"SpO2 processing: {len(self.valid_spo2_readings)} readings → {len(filtered_spo2)} filtered → {final_spo2:.1f}")
-            
-            # Additional validation of final values
-            if final_hr > 0 and not (40 <= final_hr <= 200):
-                self.logger.warning(f"Final HR {final_hr} out of range, discarding")
-                final_hr = 0
-                
-            if final_spo2 > 0 and not (70 <= final_spo2 <= 100):
-                self.logger.warning(f"Final SpO2 {final_spo2} out of range, discarding")
-                final_spo2 = 0
-            
-            return final_hr, final_spo2
-            
-        except Exception as e:
-            self.logger.error(f"Error processing final readings: {e}")
-            return 0, 0
-    
-    def on_enter(self):
-        """Called when screen is entered"""
-        self.logger.info("Heart rate measurement screen entered")
-        
-        # Reset values
-        self.hr_value_label.text = '-- BPM'
-        self.spo2_value_label.text = '-- %'
-        self.progress_bar.value = 0
-        self.status_label.text = 'Nhấn "Bắt đầu đo" để khởi động (5 giây)'
-        self.signal_label.text = 'Chất lượng tín hiệu: --'
+                self.spo2_value_label.text = "-- %"
+
+    def on_measurement_complete(
+        self,
+        success: bool,
+        reason: str,
+        heart_rate: float,
+        spo2: float,
+        hr_valid: bool,
+        spo2_valid: bool,
+        signal_quality: float,
+        previous_state: str,
+    ) -> None:
         self.pulse_widget.stop_pulse()
-        self.awaiting_finger = False
-        self._cancel_finger_wait()
-        
-        # Clear measurement data
-        self.valid_hr_readings.clear()
-        self.valid_spo2_readings.clear()
-        self.current_hr = 0
-        self.current_spo2 = 0
-        self.stable_readings = 0
-        self.measuring = False
+        self._style_start_button(False)
 
-        # Reset control buttons
-        self._style_start_button(active=False)
-        self._style_save_button(enabled=False)
-    
-    def on_leave(self):
-        """Called when screen is left"""
-        self.logger.info("Heart rate measurement screen left")
-        
-        # Stop any ongoing measurement
-        if self.measuring:
-            self._stop_measurement()
+        if success and ((hr_valid and heart_rate > 0) or (spo2_valid and spo2 > 0)):
+            self.current_hr = heart_rate if hr_valid and heart_rate > 0 else 0.0
+            self.current_spo2 = spo2 if spo2_valid and spo2 > 0 else 0.0
+
+            self.hr_value_label.text = f"{self.current_hr:.0f} BPM" if self.current_hr > 0 else "-- BPM"
+            self.spo2_value_label.text = f"{self.current_spo2:.1f} %" if self.current_spo2 > 0 else "-- %"
+            self.status_label.text = "Đã hoàn tất - nhấn 'Lưu kết quả' nếu cần"
+            self.progress_bar.value = 100.0
+            self._style_save_button(True)
+            self.logger.info(
+                "Đo nhịp tim thành công (HR=%.1f valid=%s, SpO₂=%.1f valid=%s)",
+                self.current_hr,
+                hr_valid,
+                self.current_spo2,
+                spo2_valid,
+            )
         else:
-            self.app_instance.stop_sensor('MAX30102')
-            self.pulse_widget.stop_pulse()
-            self.awaiting_finger = False
-            self._cancel_finger_wait()
+            self.current_hr = 0.0
+            self.current_spo2 = 0.0
+            self.hr_value_label.text = "-- BPM"
+            self.spo2_value_label.text = "-- %"
+            self.progress_bar.value = 0
+            self._style_save_button(False)
+
+            failure_reason = {
+                "timeout": "Đo không thành công - tín hiệu chưa ổn định",
+                "no_finger": "Không phát hiện ngón tay - vui lòng thử lại",
+                "finger_removed": "Ngón tay bị rời khỏi cảm biến",
+                "user_cancel": "Đã hủy phiên đo",
+                "stopped": "Phiên đo đã dừng",
+            }.get(reason, "Đo không thành công - thử lại sau")
+            self.status_label.text = failure_reason
+            if reason != "user_cancel" and previous_state == HeartRateMeasurementController.STATE_MEASURING:
+                self.logger.warning(
+                    "Measurement failed - hr_valid=%s spo2_valid=%s quality=%.1f reason=%s",
+                    hr_valid,
+                    spo2_valid,
+                    signal_quality,
+                    reason,
+                )
+
+        self.instruction_label.text = (
+            "• Nhấn 'Bắt đầu đo' để thực hiện lại\n"
+            "• Lau sạch cảm biến nếu tín hiệu yếu"
+        )
+
+    def reset_to_idle(self) -> None:
+        self._style_start_button(False)
+        self._style_save_button(False)
+        self.progress_bar.value = 0
+        self.hr_value_label.text = "-- BPM"
+        self.spo2_value_label.text = "-- %"
+        self.status_label.text = "Nhấn 'Bắt đầu đo' để khởi động"
+        self.signal_label.text = "Chất lượng tín hiệu: --"
+        self.instruction_label.text = (
+            "1. Bấm 'Bắt đầu đo'\n"
+            "2. Đặt ngón tay nhẹ nhàng lên cảm biến\n"
+            "3. Giữ cố định đến khi hoàn tất"
+        )
+        self.pulse_widget.stop_pulse()
+
+    def show_error_status(self, message: str) -> None:
+        self.status_label.text = message
+        self.logger.error(message)
+
+    # ------------------------------------------------------------------
+    # Button callbacks
+    # ------------------------------------------------------------------
+    def _on_back_pressed(self, _instance) -> None:
+        self.controller.stop(user_cancelled=True)
+        self.app_instance.navigate_to_screen("dashboard")
+
+    def _on_start_stop_pressed(self, _instance) -> None:
+        if self.controller.state in (HeartRateMeasurementController.STATE_WAITING, HeartRateMeasurementController.STATE_MEASURING):
+            self.controller.stop(user_cancelled=True)
+        else:
+            self.controller.start()
+
+    def _on_save_pressed(self, _instance) -> None:
+        if self.current_hr <= 0 and self.current_spo2 <= 0:
+            return
+
+        measurement_data = {
+            "timestamp": time.time(),
+            "heart_rate": self.current_hr,
+            "spo2": self.current_spo2,
+            "measurement_type": "heart_rate_spo2",
+        }
+        try:
+            self.app_instance.save_measurement_to_database(measurement_data)
+            self.logger.info(
+                "Đã lưu kết quả HR/SpO₂: HR=%.1f BPM, SpO₂=%.1f%%",
+                self.current_hr,
+                self.current_spo2,
+            )
+            self._style_save_button(False)
+        except Exception as exc:  # pragma: no cover - safety log
+            self.logger.error("Không thể lưu kết quả HR/SpO₂: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Screen lifecycle
+    # ------------------------------------------------------------------
+    def on_enter(self) -> None:
+        self.logger.info("Heart rate measurement screen entered")
+        self.controller.reset()
+        self.reset_to_idle()
+
+    def on_leave(self) -> None:
+        self.logger.info("Heart rate measurement screen left")
+        self.controller.stop(user_cancelled=True)
+        self.controller.reset()
+        try:
+            self.app_instance.stop_sensor("MAX30102")
+        except Exception:
+            pass
+        self.pulse_widget.stop_pulse()

@@ -134,6 +134,9 @@ class HealthMonitorApp(MDApp):
             'temperature': 0,
             'blood_pressure_systolic': 0,
             'blood_pressure_diastolic': 0,
+            'window_fill': 0.0,
+            'measurement_ready': False,
+            'measurement_elapsed': 0.0,
             'sensor_status': default_status,
             'timestamp': None
         }
@@ -459,32 +462,47 @@ class HealthMonitorApp(MDApp):
             
             # Update heart rate and SpO2 with validation from MAX30102 logic
             if sensor:
-                # Use sensor's current values directly
-                self.current_data['heart_rate'] = getattr(sensor, 'heart_rate', 0)
-                self.current_data['spo2'] = getattr(sensor, 'spo2', 0)
-                self.current_data['hr_valid'] = getattr(sensor, 'hr_valid', False)
-                self.current_data['spo2_valid'] = getattr(sensor, 'spo2_valid', False)
-                self.current_data['finger_detected'] = getattr(sensor, 'finger_detected', False)
+                # Use sensor's current values directly - TRUY CẬP ĐÚNG SAU REFACTOR
+                self.current_data['heart_rate'] = sensor.measurement.heart_rate
+                self.current_data['spo2'] = sensor.measurement.spo2
+                self.current_data['hr_valid'] = sensor.measurement.hr_valid
+                self.current_data['spo2_valid'] = sensor.measurement.spo2_valid
+                self.current_data['finger_detected'] = sensor.finger.detected
+                self.current_data['window_fill'] = sensor.measurement.window_fill
+                self.current_data['measurement_ready'] = sensor.measurement.ready
+                self.current_data['measurement_elapsed'] = sensor.session.elapsed
                 
                 # Get signal quality metrics
-                self.current_data['signal_quality_ir'] = getattr(sensor, 'signal_quality_ir', 0)
-                self.current_data['signal_quality_red'] = getattr(sensor, 'signal_quality_red', 0)
+                self.current_data['signal_quality_ir'] = sensor.measurement.signal_quality_ir
+                self.current_data['signal_quality_red'] = sensor.measurement.signal_quality_red
                 
                 # Get measurement status from sensor methods
                 hr_status = sensor.get_heart_rate_status() if hasattr(sensor, 'get_heart_rate_status') else 'unknown'
                 spo2_status = sensor.get_spo2_status() if hasattr(sensor, 'get_spo2_status') else 'unknown'
+
+                window = getattr(sensor, 'window', None)
+                buffer_fill = len(window.ir) if window and hasattr(window, 'ir') else 0
                 
                 # Store comprehensive sensor status
                 self.current_data['sensor_status']['MAX30102'] = {
-                    'status': 'streaming',
+                    'status': sensor.measurement.status,
                     'hr_status': hr_status,
                     'spo2_status': spo2_status,
-                    'finger_detected': self.current_data['finger_detected'],
-                    'signal_quality_ir': self.current_data['signal_quality_ir'],
-                    'signal_quality_red': self.current_data['signal_quality_red'],
-                    'buffer_fill': len(getattr(sensor, 'ir_buffer', [])),
-                    'readings_count': getattr(sensor, 'readings_count', 0),
-                    'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid']
+                    'finger_detected': sensor.finger.detected,
+                    'signal_quality_ir': sensor.measurement.signal_quality_ir,
+                    'signal_quality_red': sensor.measurement.signal_quality_red,
+                    'buffer_fill': buffer_fill,
+                    'readings_count': sensor.measurement.readings_count,
+                    'measurement_valid': sensor.measurement.hr_valid and sensor.measurement.spo2_valid,
+                    'window_fill': sensor.measurement.window_fill,
+                    'measurement_ready': sensor.measurement.ready,
+                    'session_active': sensor.session.active,
+                    'measurement_elapsed': sensor.session.elapsed,
+                    'measurement_duration': sensor.measurement_window_seconds,
+                    'finger_detection_score': sensor.finger.detection_score,
+                    'finger_signal_amplitude': sensor.finger.signal_amplitude,
+                    'finger_signal_ratio': sensor.finger.signal_ratio,
+                    'finger_signal_quality': sensor.finger.signal_quality,
                 }
             else:
                 # Fallback to data from callback if sensor not available
@@ -493,6 +511,31 @@ class HealthMonitorApp(MDApp):
                 self.current_data['hr_valid'] = data.get('hr_valid', False)
                 self.current_data['spo2_valid'] = data.get('spo2_valid', False)
                 self.current_data['finger_detected'] = data.get('finger_detected', False)
+                self.current_data['window_fill'] = data.get('window_fill', 0.0)
+                self.current_data['measurement_ready'] = data.get('measurement_ready', False)
+                self.current_data['measurement_elapsed'] = data.get('measurement_elapsed', 0.0)
+                self.current_data['signal_quality_ir'] = data.get('signal_quality_ir', 0)
+                self.current_data['signal_quality_red'] = data.get('signal_quality_red', 0)
+
+                self.current_data['sensor_status']['MAX30102'] = {
+                    'status': data.get('status', 'streaming'),
+                    'hr_status': data.get('hr_status', 'unknown'),
+                    'spo2_status': data.get('spo2_status', 'unknown'),
+                    'finger_detected': self.current_data['finger_detected'],
+                    'signal_quality_ir': data.get('signal_quality_ir', 0),
+                    'signal_quality_red': data.get('signal_quality_red', 0),
+                    'buffer_fill': data.get('buffer_fill', 0),
+                    'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid'],
+                    'window_fill': self.current_data['window_fill'],
+                    'measurement_ready': self.current_data['measurement_ready'],
+                    'session_active': data.get('session_active', False),
+                    'measurement_elapsed': self.current_data['measurement_elapsed'],
+                    'measurement_duration': data.get('measurement_duration'),
+                    'finger_detection_score': data.get('finger_detection_score', 0.0),
+                    'finger_signal_amplitude': data.get('finger_signal_amplitude', 0.0),
+                    'finger_signal_ratio': data.get('finger_signal_ratio', 0.0),
+                    'finger_signal_quality': data.get('finger_signal_quality', 0.0),
+                }
 
             finger_detected = bool(self.current_data.get('finger_detected'))
             previous_finger = self._hr_finger_present
@@ -651,14 +694,20 @@ class HealthMonitorApp(MDApp):
             if 'MAX30102' in self.sensors and self.sensors['MAX30102']:
                 sensor = self.sensors['MAX30102']
                 if hasattr(sensor, 'is_running') and sensor.is_running:
-                    self.current_data['heart_rate'] = getattr(sensor, 'heart_rate', 0)
-                    self.current_data['spo2'] = getattr(sensor, 'spo2', 0)
-                    self.current_data['hr_valid'] = getattr(sensor, 'hr_valid', False)
-                    self.current_data['spo2_valid'] = getattr(sensor, 'spo2_valid', False)
-                    self.current_data['finger_detected'] = getattr(sensor, 'finger_detected', False)
+                    # TRUY CẬP ĐÚNG SAU REFACTOR
+                    self.current_data['heart_rate'] = sensor.measurement.heart_rate
+                    self.current_data['spo2'] = sensor.measurement.spo2
+                    self.current_data['hr_valid'] = sensor.measurement.hr_valid
+                    self.current_data['spo2_valid'] = sensor.measurement.spo2_valid
+                    self.current_data['finger_detected'] = sensor.finger.detected
+                    self.current_data['window_fill'] = sensor.measurement.window_fill
+                    self.current_data['measurement_ready'] = sensor.measurement.ready
+                    self.current_data['measurement_elapsed'] = sensor.session.elapsed
+                    self.current_data['signal_quality_ir'] = sensor.measurement.signal_quality_ir
+                    self.current_data['signal_quality_red'] = sensor.measurement.signal_quality_red
                     
                     # Update status
-                    if not self.current_data['finger_detected']:
+                    if not sensor.finger.detected:
                         hr_status = 'no_finger'
                         spo2_status = 'no_finger'
                     else:
@@ -668,8 +717,13 @@ class HealthMonitorApp(MDApp):
                     self.current_data['sensor_status']['MAX30102'] = {
                         'hr_status': hr_status,
                         'spo2_status': spo2_status,
-                        'finger_detected': self.current_data['finger_detected'],
-                        'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid']
+                        'finger_detected': sensor.finger.detected,
+                        'measurement_valid': sensor.measurement.hr_valid and sensor.measurement.spo2_valid,
+                        'window_fill': sensor.measurement.window_fill,
+                        'measurement_ready': sensor.measurement.ready,
+                        'measurement_elapsed': sensor.session.elapsed,
+                        'measurement_duration': sensor.measurement_window_seconds,
+                        'session_active': sensor.session.active,
                     }
             
             # Update MLX90614 data directly
