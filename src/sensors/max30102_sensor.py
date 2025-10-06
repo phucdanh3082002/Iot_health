@@ -485,6 +485,7 @@ class HRCalculator:
                     # else: Skip invalid ratio
 
         if not ratio:
+            logger.debug("[HRCalc] Không có ratio hợp lệ (peaks=%d)", n_peaks)
             return hr, hr_valid, spo2, spo2_valid
 
         ratio.sort()
@@ -493,10 +494,14 @@ class HRCalculator:
             ratio_ave = (ratio[mid_index - 1] + ratio[mid_index]) / 2
         else:
             ratio_ave = ratio[mid_index]
+        
+        logger.debug("[HRCalc] Ratio: count=%d, ave=%.1f, values=%s", len(ratio), ratio_ave, ratio[:5])
 
         if 2 < ratio_ave < 184:
             spo2 = -45.060 * (ratio_ave ** 2) / 10000.0 + 30.054 * ratio_ave / 100.0 + 94.845
             spo2_valid = True
+        else:
+            logger.debug("[HRCalc] Ratio %.1f ngoài khoảng 2-184", ratio_ave)
 
         return hr, hr_valid, spo2, spo2_valid
 
@@ -574,7 +579,7 @@ class MAX30102Sensor(BaseSensor):
     """High-level MAX30102 sensor wrapper with fixed measurement window."""
 
     DEFAULT_MEASUREMENT_WINDOW = 8.0  # seconds
-    MIN_MEASUREMENT_SECONDS = 2.5  # Giảm từ 4.0 xuống 2.5s để nhanh hơn
+    MIN_MEASUREMENT_SECONDS = 3.0  # Giảm xuống 3.0s để bắt đầu tính toán sớm hơn (150 samples @ 50 SPS)
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__("MAX30102", config)
@@ -745,6 +750,8 @@ class MAX30102Sensor(BaseSensor):
             self.measurement.hr_valid = False
             if hr_valid:
                 self.logger.warning("[HR rejected] %.1f BPM - ngoài khoảng 40-200", hr_value)
+            elif self.finger.detected and self.window.has_enough_data():
+                self.logger.debug("[HR invalid] Chưa tính được HR (fill=%.1f%%)", self.window.fill_ratio() * 100)
 
         if spo2_valid and self.validate_spo2(spo2_value):
             self.spo2_history.append(float(spo2_value))
@@ -757,6 +764,8 @@ class MAX30102Sensor(BaseSensor):
             self.measurement.spo2_valid = False
             if spo2_valid:
                 self.logger.warning("[SpO2 rejected] %.1f%% - ngoài khoảng 70-100", spo2_value)
+            elif self.finger.detected and self.window.has_enough_data():
+                self.logger.debug("[SpO2 invalid] Chưa tính được SpO2 (fill=%.1f%%)", self.window.fill_ratio() * 100)
 
         self._expire_stale_values()
 
