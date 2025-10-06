@@ -249,7 +249,7 @@ class DashboardScreen(Screen):
         )
 
         self.cardio_button = FeatureCard(
-            title="Đo nhịp tim + SpO₂",
+            title="Đo nhịp tim + SpO2",
             subtitle="Nhấn để đo trực tiếp",
             icon="heart-pulse",
             card_color=(0.47, 0.2, 0.4, 1),
@@ -268,7 +268,7 @@ class DashboardScreen(Screen):
 
         self.auto_button = FeatureCard(
             title="Chế độ tự động",
-            subtitle="HR → SpO₂ → Temp",
+            subtitle="HR → SpO2 → Temp",
             icon="repeat",
             card_color=(0.24, 0.32, 0.52, 1),
         )
@@ -314,7 +314,7 @@ class DashboardScreen(Screen):
             if hr and hr > 0:
                 cardio_values.append(f"{hr:.0f} BPM")
             if spo2 and spo2 > 0:
-                cardio_values.append(f"{spo2:.0f}% SpO₂")
+                cardio_values.append(f"{spo2:.0f}% SpO2")
 
             if cardio_values:
                 self.cardio_button.update_state("\n".join(cardio_values), "Đã đo", subtitle="Nhấn để xem chi tiết")

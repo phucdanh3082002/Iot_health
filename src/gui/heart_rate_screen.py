@@ -1,4 +1,4 @@
-"""Màn hình đo nhịp tim & SpO₂ với controller điều phối rõ ràng."""
+"""Màn hình đo nhịp tim & SpO2 với controller điều phối rõ ràng."""
 
 from __future__ import annotations
 
@@ -219,11 +219,7 @@ class HeartRateMeasurementController:
                 signal_quality,
             )
 
-        elapsed_report = float(status.get("measurement_elapsed", sensor_data.get("measurement_elapsed", 0.0)) or 0.0)
-        measurement_elapsed = elapsed_report if elapsed_report > 0 else (now - self.measure_started if self.measure_started else 0.0)
-        remaining_time = max(0.0, self.MEASUREMENT_DURATION - measurement_elapsed)
-        progress = max(window_fill, measurement_elapsed / self.MEASUREMENT_DURATION if self.MEASUREMENT_DURATION else 0.0)
-        self.screen.update_progress(progress * 100.0, measurement_status, remaining_time)
+        # Hiển thị thông tin tín hiệu (không phụ thuộc state)
         self.screen.show_signal_info(signal_quality, detection_score, detection_amp, detection_ratio)
 
         hr_valid = bool(sensor_data.get("hr_valid"))
@@ -238,6 +234,8 @@ class HeartRateMeasurementController:
         if self.state == self.STATE_WAITING:
             # Hiển thị hướng dẫn chờ ngón tay (KHÔNG có countdown)
             self.screen.show_waiting_instructions()
+            # Progress = 0% khi đang chờ
+            self.screen.update_progress(0.0, "waiting", 0.0)
             
             if finger_present:
                 # Phát hiện ngón tay → bắt đầu đo NGAY LẬP TỨC
@@ -255,38 +253,57 @@ class HeartRateMeasurementController:
             return True
 
         # ============================================================
-        # STATE: MEASURING - Đo với countdown (CHỈ KHI CÓ NGÓN TAY)
+        # STATE: MEASURING - Tính measurement_elapsed chính xác
         # ============================================================
+        # CRITICAL: Tính elapsed CHỈ dựa trên thời gian CÓ ngón tay
         if not finger_present:
-            # Mất ngón tay trong lúc đo → DỪNG ĐẾM NGƯỢC
+            # Mất ngón tay → DỪNG ĐẾM NGƯỢC
             if self.finger_lost_ts is None:
+                # Lần đầu mất ngón tay → ghi nhận thời điểm
                 self.finger_lost_ts = now
-                self.logger.warning("Ngón tay rời khỏi cảm biến - DỪNG đếm ngược")
+                self.logger.warning("⏸️  Ngón tay rời khỏi cảm biến - DỪNG đếm ngược")
             
-            # Tính elapsed chỉ dựa trên thời gian CÓ ngón tay
-            time_with_finger = (self.finger_lost_ts - self.measure_started) if self.measure_started else 0.0
+            # Tính elapsed = thời gian từ measure_started đến finger_lost_ts
+            time_with_finger = self.finger_lost_ts - self.measure_started
             measurement_elapsed = time_with_finger
-            remaining_time = max(0.0, self.MEASUREMENT_DURATION - measurement_elapsed)
             
-            # Cập nhật UI với thời gian ĐỨNG YÊN
-            progress = measurement_elapsed / self.MEASUREMENT_DURATION if self.MEASUREMENT_DURATION else 0.0
-            self.screen.update_progress(progress * 100.0, "paused", remaining_time)
-            self.screen.show_finger_instruction(missing=True)
-            
-            # Grace period: nếu mất ngón tay quá lâu → hủy đo
-            if now - self.finger_lost_ts > self.FINGER_LOSS_GRACE:
-                self.logger.error("Mất ngón tay quá %ds - Hủy phiên đo", self.FINGER_LOSS_GRACE)
+            # Grace period check
+            pause_duration = now - self.finger_lost_ts
+            if pause_duration > self.FINGER_LOSS_GRACE:
+                self.logger.error("❌ Mất ngón tay quá %.1fs - Hủy phiên đo", self.FINGER_LOSS_GRACE)
                 self._finalize(success=False, reason="finger_removed", snapshot=sensor_data)
                 return False
+            
+            # Hiển thị trạng thái PAUSE
+            remaining_time = max(0.0, self.MEASUREMENT_DURATION - measurement_elapsed)
+            progress_percent = (measurement_elapsed / self.MEASUREMENT_DURATION * 100.0) if self.MEASUREMENT_DURATION else 0.0
+            self.screen.update_progress(progress_percent, "paused", remaining_time)
+            self.screen.show_finger_instruction(missing=True)
+            
         else:
-            # Có ngón tay: TIẾP TỤC ĐẾM NGƯỢC
+            # Có ngón tay → TIẾP TỤC ĐẾM NGƯỢC
             if self.finger_lost_ts is not None:
                 # Ngón tay vừa quay lại → điều chỉnh measure_started
                 pause_duration = now - self.finger_lost_ts
                 self.measure_started += pause_duration  # Dịch thời điểm bắt đầu về sau
                 self.deadline += pause_duration  # Kéo dài deadline tương ứng
-                self.logger.info("Ngón tay quay lại - TIẾP TỤC đếm (đã dừng %.1fs)", pause_duration)
+                self.logger.info("▶️  Ngón tay quay lại - TIẾP TỤC đếm (đã tạm dừng %.1fs)", pause_duration)
                 self.finger_lost_ts = None
+            
+            # Tính elapsed bình thường khi có ngón tay
+            measurement_elapsed = now - self.measure_started
+            remaining_time = max(0.0, self.MEASUREMENT_DURATION - measurement_elapsed)
+            progress_percent = (measurement_elapsed / self.MEASUREMENT_DURATION * 100.0) if self.MEASUREMENT_DURATION else 0.0
+            
+            # Cập nhật UI - progress phụ thuộc vào window_fill hoặc elapsed
+            progress_display = max(window_fill * 100.0, progress_percent)
+            self.screen.update_progress(progress_display, measurement_status, remaining_time)
+            
+            # Hiển thị hướng dẫn phù hợp
+            if measurement_status == "poor_signal":
+                self.screen.show_signal_warning()
+            else:
+                self.screen.show_measurement_guidance(remaining_time)
 
         # ============================================================
         # KIỂM TRA ĐIỀU KIỆN KẾT THÚC ĐO
@@ -299,29 +316,23 @@ class HeartRateMeasurementController:
         # 2. HOẶC đủ thời gian đầy đủ (15s) VÀ có ít nhất 1 giá trị
         if measurement_elapsed >= self.MINIMUM_MEASUREMENT_TIME:
             if has_both_metrics:
-                self.logger.info("Đo hoàn tất sau %.1fs - Có đủ HR và SpO₂", measurement_elapsed)
+                self.logger.info("✅ Đo hoàn tất sau %.1fs - Có đủ HR và SpO2", measurement_elapsed)
                 self._finalize(success=True, reason="measurement_complete", snapshot=sensor_data)
                 return False
             elif measurement_elapsed >= self.MEASUREMENT_DURATION and has_valid_metrics:
-                self.logger.warning("Đo hoàn tất sau %.1fs - Chỉ có 1 giá trị", measurement_elapsed)
+                self.logger.warning("⚠️  Đo hoàn tất sau %.1fs - Chỉ có 1 giá trị", measurement_elapsed)
                 self._finalize(success=True, reason="partial_complete", snapshot=sensor_data)
                 return False
 
         # Timeout tuyệt đối
         if now >= self.deadline:
             self.logger.error(
-                "Timeout đo nhịp tim sau %.1fs (chất lượng=%.1f%%)",
+                "❌ Timeout đo nhịp tim sau %.1fs (chất lượng=%.1f%%)",
                 measurement_elapsed,
                 signal_quality,
             )
             self._finalize(success=False, reason="timeout", snapshot=sensor_data)
             return False
-
-        # Hiển thị hướng dẫn phù hợp
-        if finger_present and measurement_status == "poor_signal":
-            self.screen.show_signal_warning()
-        elif finger_present:
-            self.screen.show_measurement_guidance(remaining_time)
 
         return True
 
@@ -376,7 +387,7 @@ class HeartRateMeasurementController:
 
 
 class HeartRateScreen(Screen):
-    """Màn hình đo nhịp tim & SpO₂ với controller tách riêng."""
+    """Màn hình đo nhịp tim & SpO2 với controller tách riêng."""
 
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)
@@ -446,7 +457,7 @@ class HeartRateScreen(Screen):
         )
 
         title_label = MDLabel(
-            text="NHỊP TIM & SpO₂",
+            text="NHỊP TIM & SpO2",
             font_style="Subtitle1",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
@@ -551,7 +562,7 @@ class HeartRateScreen(Screen):
 
         spo2_texts = MDBoxLayout(orientation="vertical", spacing=dp(2))
         spo2_label = MDLabel(
-            text="SpO₂",
+            text="SpO2",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
@@ -794,16 +805,22 @@ class HeartRateScreen(Screen):
         """Cập nhật thanh tiến trình và trạng thái."""
         self.progress_bar.value = max(0.0, min(100.0, percent))
         
-        if measurement_status == "paused":
-            self.status_label.text = "⏸️  TẠM DỪNG - Vui lòng đặt lại ngón tay"
+        if measurement_status == "waiting":
+            # Đang chờ ngón tay - KHÔNG hiển thị countdown
+            self.status_label.text = "⏳ Đang chờ ngón tay..."
+        elif measurement_status == "paused":
+            # Mất ngón tay - DỪNG countdown
+            self.status_label.text = f"⏸️  TẠM DỪNG - Còn {remaining_time:.0f}s - Đặt lại ngón tay"
         elif measurement_status == "partial":
-            self.status_label.text = "Đang thu thêm tín hiệu để đảm bảo chính xác"
+            self.status_label.text = "📊 Đang thu thêm tín hiệu để đảm bảo chính xác"
         elif measurement_status == "poor_signal":
-            self.status_label.text = "⚠️  Tín hiệu yếu - Nhấn nhẹ hơn, tránh rung"
+            self.status_label.text = f"⚠️  Tín hiệu yếu - Nhấn nhẹ hơn - Còn {remaining_time:.0f}s"
         elif measurement_status == "good" and remaining_time > 0:
             self.status_label.text = f"✓ Tín hiệu ổn định - Còn {remaining_time:.0f}s"
         elif remaining_time > 0:
-            self.status_label.text = f"Đang đo - Còn {remaining_time:.0f}s"
+            self.status_label.text = f"📈 Đang đo - Còn {remaining_time:.0f}s"
+        else:
+            self.status_label.text = "⏱️  Đang xử lý kết quả..."
 
     def show_signal_info(self, quality: float, detection_score: float, amplitude: float, ratio: float) -> None:
         ratio_scaled = ratio * 10000.0
@@ -856,7 +873,7 @@ class HeartRateScreen(Screen):
             self.progress_bar.value = 100.0
             self._style_save_button(True)
             self.logger.info(
-                "Đo nhịp tim thành công (HR=%.1f valid=%s, SpO₂=%.1f valid=%s)",
+                "Đo nhịp tim thành công (HR=%.1f valid=%s, SpO2=%.1f valid=%s)",
                 self.current_hr,
                 hr_valid,
                 self.current_spo2,
@@ -937,13 +954,13 @@ class HeartRateScreen(Screen):
         try:
             self.app_instance.save_measurement_to_database(measurement_data)
             self.logger.info(
-                "Đã lưu kết quả HR/SpO₂: HR=%.1f BPM, SpO₂=%.1f%%",
+                "Đã lưu kết quả HR/SpO2: HR=%.1f BPM, SpO2=%.1f%%",
                 self.current_hr,
                 self.current_spo2,
             )
             self._style_save_button(False)
         except Exception as exc:  # pragma: no cover - safety log
-            self.logger.error("Không thể lưu kết quả HR/SpO₂: %s", exc)
+            self.logger.error("Không thể lưu kết quả HR/SpO2: %s", exc)
 
     # ------------------------------------------------------------------
     # Screen lifecycle

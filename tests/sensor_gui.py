@@ -69,7 +69,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 # ------------------------
-# TIỆN ÍCH
+#TTS
 # ------------------------
 def speak(text: str):
     """Đọc lời nhắc/cảnh báo/kết quả qua loa bằng espeak (offline)."""
