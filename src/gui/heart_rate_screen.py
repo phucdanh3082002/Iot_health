@@ -207,17 +207,6 @@ class HeartRateMeasurementController:
         detection_ratio = float(status.get("finger_signal_ratio", sensor_data.get("finger_signal_ratio", 0.0)) or 0.0)
         measurement_ready = bool(status.get("measurement_ready", sensor_data.get("measurement_ready", False)))
         measurement_status = status.get("status", "idle") or "idle"
-        
-        # DEBUG: Log finger detection state
-        if self.state == self.STATE_WAITING and detection_score > 0:
-            self.logger.debug(
-                "[POLL] state=%s, finger_present=%s, score=%.2f, amp=%.0f, quality=%.0f",
-                self.state,
-                finger_present,
-                detection_score,
-                detection_amp,
-                signal_quality,
-            )
 
         # Hiển thị thông tin tín hiệu (không phụ thuộc state)
         self.screen.show_signal_info(signal_quality, detection_score, detection_amp, detection_ratio)

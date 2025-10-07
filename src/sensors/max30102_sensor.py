@@ -493,10 +493,8 @@ class HRCalculator:
                 snr_score = 100
             
             sqi_scores.append(('SNR', snr_score, 0.40))
-            logger.debug("[SQI] SNR: %.1f dB → score %.1f%%", snr_db if 'snr_db' in locals() else 0, snr_score)
             
-        except Exception as e:
-            logger.debug("[SQI] SNR calculation failed: %s", e)
+        except Exception:
             sqi_scores.append(('SNR', 50, 0.40))
         
         # 2. Perfusion Index Score (30%) - AC/DC ratio
@@ -512,11 +510,8 @@ class HRCalculator:
                 perfusion_score = 0
             
             sqi_scores.append(('Perfusion', perfusion_score, 0.30))
-            logger.debug("[SQI] Perfusion Index: %.2f%% → score %.1f%%", 
-                        perfusion_index if 'perfusion_index' in locals() else 0, perfusion_score)
             
-        except Exception as e:
-            logger.debug("[SQI] Perfusion calculation failed: %s", e)
+        except Exception:
             sqi_scores.append(('Perfusion', 50, 0.30))
         
         # 3. Baseline Stability Score (20%) - Drift rate
@@ -533,10 +528,8 @@ class HRCalculator:
             stability_score = np.clip(100 - (drift_per_sec / 200.0 * 100), 0, 100)
             
             sqi_scores.append(('Stability', stability_score, 0.20))
-            logger.debug("[SQI] Baseline drift: %.1f counts/s → score %.1f%%", drift_per_sec, stability_score)
             
-        except Exception as e:
-            logger.debug("[SQI] Stability calculation failed: %s", e)
+        except Exception:
             sqi_scores.append(('Stability', 50, 0.20))
         
         # 4. Peak Regularity Score (10%) - IBI consistency
@@ -556,19 +549,12 @@ class HRCalculator:
                 regularity_score = 50  # Not enough peaks to judge
             
             sqi_scores.append(('Regularity', regularity_score, 0.10))
-            logger.debug("[SQI] IBI CV: %.1f%% → score %.1f%%", 
-                        cv * 100 if 'cv' in locals() else 0, regularity_score)
             
-        except Exception as e:
-            logger.debug("[SQI] Regularity calculation failed: %s", e)
+        except Exception:
             sqi_scores.append(('Regularity', 50, 0.10))
         
         # Calculate weighted average
         total_sqi = sum(score * weight for name, score, weight in sqi_scores)
-        
-        logger.debug("[SQI] Total: %.1f%% (SNR:%.0f PI:%.0f Stab:%.0f Reg:%.0f)", 
-                    total_sqi, 
-                    sqi_scores[0][1], sqi_scores[1][1], sqi_scores[2][1], sqi_scores[3][1])
         
         return float(total_sqi)
 
@@ -579,6 +565,10 @@ class HRCalculator:
         red_data: np.ndarray,
         sample_rate: int,
     ) -> Tuple[float, bool, float, bool]:
+        # Import logger at method level to avoid scope issues
+        import logging
+        logger = logging.getLogger(__name__)
+        
         if ir_data.size < cls.BUFFER_SIZE or red_data.size < cls.BUFFER_SIZE:
             return -999.0, False, -999.0, False
 
@@ -613,8 +603,6 @@ class HRCalculator:
             
         except Exception as exc:
             # Fallback to original data if filter fails
-            import logging
-            logger = logging.getLogger(__name__)
             logger.warning("[BPF] Filter thất bại, dùng raw data: %s", exc)
         
         # Convert for peak detection (filtered)
@@ -640,13 +628,6 @@ class HRCalculator:
         min_dist = max(4, int(sample_rate * 0.25))
         ir_valley_locs, n_peaks = cls.find_peaks(x, x.shape[0], n_th, min_dist, cls.MAX_NUM_PEAKS)
         
-        # DEBUG: Log để kiểm tra peak detection
-        import logging
-        logger = logging.getLogger(__name__)
-        if n_peaks == 0:
-            logger.debug("[HRCalc] Không tìm thấy peaks (n_th=%d, min_dist=%d, x_mean=%.1f)", 
-                         n_th, min_dist, np.mean(x))
-
         hr = -999.0
         hr_valid = False
 
@@ -669,31 +650,33 @@ class HRCalculator:
         ratio: List[float] = []  # Changed to float for better precision
         
         # ============================================================
-        # PHASE 2: Advanced Polynomial Detrending for better DC baseline
-        # Instead of linear interpolation per cycle, detrend entire signal
-        # This removes slow drift while preserving AC oscillations
+        # ============================================================
+        # PHASE 2: Advanced Baseline Estimation for SpO₂
+        # CRITICAL: DC baseline = VALLEY (diastole), NOT mean
+        # 
+        # Lỗi trước: percentile filter → baseline quá cao gần peak
+        # Giải pháp: Dùng VALLEY locations để lấy DC baseline
         # ============================================================
         try:
-            # Polynomial detrend order 2 (quadratic) - handles curved baseline drift
-            x_indices = np.arange(len(ir_raw_int))
+            # Baseline = giá trị tại valleys (diastole)
+            # Interpolate giữa các valleys để có baseline liên tục
+            ir_baseline_trend = np.interp(
+                np.arange(len(ir_raw_int)),  # x: all indices
+                ir_valley_locs[:exact_ir_valley_locs_count],  # x_valley: valley indices
+                ir_raw_int[ir_valley_locs[:exact_ir_valley_locs_count]]  # y_valley: IR values at valleys
+            )
             
-            # Fit polynomial to IR channel
-            ir_poly_coeffs = np.polyfit(x_indices, ir_raw_int, 2)
-            ir_baseline_trend = np.polyval(ir_poly_coeffs, x_indices)
-            
-            # Fit polynomial to RED channel
-            red_poly_coeffs = np.polyfit(x_indices, red, 2)
-            red_baseline_trend = np.polyval(red_poly_coeffs, x_indices)
-            
-            logger.debug("[Detrend] IR baseline range: %.0f-%.0f, RED baseline range: %.0f-%.0f",
-                        np.min(ir_baseline_trend), np.max(ir_baseline_trend),
-                        np.min(red_baseline_trend), np.max(red_baseline_trend))
+            red_baseline_trend = np.interp(
+                np.arange(len(red)),
+                ir_valley_locs[:exact_ir_valley_locs_count],  # Same valleys for RED
+                red[ir_valley_locs[:exact_ir_valley_locs_count]]
+            )
             
         except Exception as e:
-            logger.debug("[Detrend] Polynomial fit failed, using mean baseline: %s", e)
-            # Fallback to simple mean baseline
-            ir_baseline_trend = np.full(len(ir_raw_int), np.mean(ir_raw_int))
-            red_baseline_trend = np.full(len(red), np.mean(red))
+            # Fallback: use minimum value as baseline
+            logger.warning("[Baseline] Interpolation failed, using min: %s", e)
+            ir_baseline_trend = np.full(len(ir_raw_int), float(np.min(ir_raw_int)))
+            red_baseline_trend = np.full(len(red), float(np.min(red)))
 
         for k in range(exact_ir_valley_locs_count - 1):
             valley_start = ir_valley_locs[k]
@@ -717,8 +700,7 @@ class HRCalculator:
             red_peak_value = red[red_peak_idx]
             
             # ============================================================
-            # PHASE 2: Use polynomial baseline instead of linear interpolation
-            # This accounts for curved drift across multiple heartbeats
+            # PHASE 2: Use moving baseline for accurate DC estimation
             # ============================================================
             ir_dc_at_peak = float(ir_baseline_trend[ir_peak_idx])
             red_dc_at_peak = float(red_baseline_trend[red_peak_idx])
@@ -727,15 +709,19 @@ class HRCalculator:
             ir_ac = float(ir_peak_value) - ir_dc_at_peak
             red_ac = float(red_peak_value) - red_dc_at_peak
             
+            # Debug: Log first cycle to verify baseline
+            if k == 0:
+                logger.debug("[SpO2 Cycle 0] IR: peak=%d, baseline=%.1f, AC=%.1f | RED: peak=%d, baseline=%.1f, AC=%.1f",
+                            ir_peak_value, ir_dc_at_peak, ir_ac,
+                            red_peak_value, red_dc_at_peak, red_ac)
+            
             # Validate AC values (must be positive and significant)
             if ir_ac <= 0 or red_ac <= 0:
-                logger.debug("[SpO2] Bỏ qua cycle %d: AC không hợp lệ (IR_AC=%.1f, RED_AC=%.1f)", 
-                             k, ir_ac, red_ac)
+                logger.debug("[SpO2 Reject] Cycle %d: AC không hợp lệ (IR_AC=%.1f, RED_AC=%.1f)", k, ir_ac, red_ac)
                 continue
             
             if ir_dc_at_peak <= 0 or red_dc_at_peak <= 0:
-                logger.debug("[SpO2] Bỏ qua cycle %d: DC không hợp lệ (IR_DC=%.1f, RED_DC=%.1f)", 
-                             k, ir_dc_at_peak, red_dc_at_peak)
+                logger.debug("[SpO2 Reject] Cycle %d: DC không hợp lệ (IR_DC=%.1f, RED_DC=%.1f)", k, ir_dc_at_peak, red_dc_at_peak)
                 continue
             
             # Calculate R-value = (AC_red/DC_red) / (AC_ir/DC_ir)
@@ -750,13 +736,14 @@ class HRCalculator:
                 # Values outside indicate measurement error
                 if 0.4 <= r_value <= 2.0:
                     ratio.append(r_value)
-                    logger.debug("[SpO2] Cycle %d: R=%.3f (RED: AC=%.1f DC=%.1f, IR: AC=%.1f DC=%.1f)", 
-                                 k, r_value, red_ac, red_dc_at_peak, ir_ac, ir_dc_at_peak)
+                    if k == 0:
+                        logger.debug("[SpO2 Cycle 0] R-value=%.3f ACCEPTED", r_value)
                 else:
-                    logger.debug("[SpO2] Bỏ qua cycle %d: R=%.3f ngoài khoảng 0.4-2.0", k, r_value)
+                    logger.debug("[SpO2 Reject] Cycle %d: R=%.3f ngoài range 0.4-2.0", k, r_value)
 
         if not ratio:
-            logger.debug("[HRCalc] Không có ratio hợp lệ (peaks=%d)", n_peaks)
+            logger.warning("[SpO2 FAIL] Không có R-value hợp lệ sau %d cycles (peaks=%d)", 
+                          exact_ir_valley_locs_count - 1, n_peaks)
             return hr, hr_valid, spo2, spo2_valid
 
         # Use median R-value for robustness against outliers
@@ -1176,11 +1163,6 @@ class MAX30102Sensor(BaseSensor):
         if sample_count <= 0:
             self._update_status_no_samples()
             return self._build_payload(0)
-
-        # Log để kiểm tra data flow
-        if sample_count > 0:
-            self.logger.debug("[Data Flow] Đọc được %d samples, window fill=%.1f%%", 
-                              sample_count, self.window.fill_ratio() * 100)
         
         self.window.add_samples(ir_samples, red_samples)
         self.measurement.readings_count += sample_count
@@ -1384,15 +1366,6 @@ class MAX30102Sensor(BaseSensor):
                 self._finger_confirm_frames,
             )
             self.finger.absent_frames = 0
-            # DEBUG: Log hysteresis progress khi đang chờ confirm
-            if not previous_state and self.finger.present_frames < self._finger_confirm_frames:
-                self.logger.debug(
-                    "[HYSTERESIS] Detecting... %d/%d frames (score=%.2f, amp=%.0f)",
-                    self.finger.present_frames,
-                    self._finger_confirm_frames,
-                    score,
-                    amplitude,
-                )
         else:
             self.finger.absent_frames = min(
                 self.finger.absent_frames + 1,

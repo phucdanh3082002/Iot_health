@@ -1,25 +1,70 @@
-# Copilot Instructions — IoT Health (RPi + Waveshare 3.5" + MAX98357A + **HX710B**)
+# Copilot Instructions — IoT Health Monitor
 
-## Mục tiêu dự án
+## 🎯 Mục tiêu dự án
 
-Xây dựng hệ thống IoT theo dõi sức khỏe: HR/SpO₂ (**MAX30102**), Nhiệt độ (**MLX90614/GY-906**), **Huyết áp dao động học** (cảm biến 0–40 kPa **với ADC HX710B**), UI Kivy 480×320 trên màn **Waveshare 3.5"**, phát hướng dẫn/kết quả/cảnh báo qua loa **MAX98357A I²S**, đồng bộ qua **MQTT/REST**, lưu **SQLite**, mở rộng AI (anomaly/trend/chat) trên server PC.
-
----
-
-## QUY TẮC BẮT BUỘC
-
-* **KHÔNG** tạo **dummy files**, **sample/mocked data**, asset giả (.wav/.jpg/.json) **khi chưa có yêu cầu**.
-**KHÔNG** tạo các file , script để test các diel đã sửa
-* **KHÔNG** tự ý sinh thêm thư mục hoặc file mới khi yêu cầu sửa; giữ nguyên cấu trúc dự án.
-* **KHÔNG** thay đổi API/public schema (MQTT topics, REST endpoints, DB schema) nếu không có yêu cầu rõ.
-* **KHÔNG** commit secrets (token, mật khẩu). Dùng biến môi trường / file cấu hình hiện có.
-* Tuân thủ **OOP, module hóa**, Python 3.11+, PEP8, logging chuẩn của dự án.
-* Tôn trọng kiến trúc **Hybrid**: Edge (Pi) ổn định; Server (PC) mở rộng.
-* Luôn trả lời tôi bằng tiếng việt, có thể vài từ tiếng anh kỹ thuật nếu cần thiết.
+Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
+- **Sensors**: MAX30102 (HR/SpO₂), MLX90614 (Temperature), HX710B (Blood Pressure)
+- **Display**: Waveshare 3.5" LCD (480×320)
+- **Audio**: MAX98357A I²S (TTS feedback)
+- **Data**: SQLite local + MQTT/REST sync
+- **UI**: Kivy/KivyMD
+- **TTS**: PiperTTS
 
 ---
 
-## Cấu trúc thư mục (giữ nguyên)
+## ⚠️ QUY TẮC BẮT BUỘC
+
+### 1. **Code Quality & Style**
+- ✅ **OOP**: Dùng classes, inheritance, encapsulation
+- ✅ **Comments**: Docstring cho mọi class/method (tiếng Việt hoặc tiếng Anh)
+- ✅ **Organization**: Nhóm methods theo chức năng, thêm comment phân đoạn
+- ✅ **PEP8**: Follow Python style guide
+- ✅ **Type hints**: Dùng typing cho parameters và return values
+
+### 2. **Documentation**
+- ❌ **KHÔNG tạo file .md** (README, CHANGELOG, summary) nếu CHƯA được yêu cầu
+- ❌ **KHÔNG tạo test files** tự động
+- ✅ **Inline comments**: Giải thích logic phức tạp trong code
+- ✅ **Hỏi lại** nếu không hiểu rõ yêu cầu
+
+### 3. **Project Structure**
+- ❌ **KHÔNG tạo dummy/mock data** (.wav, .json, sample files)
+- ❌ **KHÔNG thay đổi cấu trúc thư mục** khi chỉ sửa code
+- ❌ **KHÔNG thay đổi API/schema** (MQTT topics, REST endpoints, DB) mà không hỏi
+- ✅ **Giữ nguyên** file paths, imports, dependencies hiện có
+
+### 4. **Security**
+- ❌ **KHÔNG commit secrets** (passwords, tokens, API keys)
+- ✅ **Dùng** config files hoặc environment variables
+- ✅ **Validate** user inputs
+
+### 5. **Communication**
+- ✅ **Trả lời bằng tiếng Việt** (có thể dùng thuật ngữ tiếng Anh kỹ thuật)
+- ✅ **Hỏi lại** nếu yêu cầu không rõ ràng
+- ✅ **Giải thích** lý do khi đề xuất thay đổi lớn
+- ❌ **KHÔNG giả định** requirements nếu chưa được nói rõ
+
+### 6. **Error Handling**
+- ✅ **Try-except blocks**: Xử lý exceptions properly
+- ✅ **Logging**: Dùng logger thay vì print()
+- ✅ **Graceful degradation**: Fallback khi hardware fail
+- ✅ **Meaningful messages**: Error messages giúp debug
+
+### 7. **Performance**
+- ✅ **Non-blocking**: Không làm treo UI (dùng threads/async khi cần)
+- ✅ **Resource cleanup**: Close files, connections, sensors properly
+- ✅ **Memory efficient**: Tránh memory leaks trong loops
+- ❌ **KHÔNG optimize sớm**: Ưu tiên correctness trước performance
+
+### 8. **Hardware Integration**
+- ✅ **Safe defaults**: Sensor fail → hệ thống vẫn chạy
+- ✅ **Calibration**: Dùng config files cho sensor calibration
+- ✅ **Testing**: Hỏi user test trên hardware thật
+- ❌ **KHÔNG giả định** hardware hoạt động hoàn hảo
+
+---
+
+## 📁 Cấu trúc thư mục (giữ nguyên)
 
 ```
 config/               # app_config.yaml (ngưỡng, mqtt, rest…)
@@ -37,9 +82,10 @@ main.py
 README.md
 requirements.txt
 
+
 ---
 
-## Phần cứng đã chốt
+## 🛠️ Phần cứng đã chốt
 
 * **Raspberry Pi 4B sử dụng pi os wormbook 64 bit**, **Waveshare 3.5" SPI** (fbcp mirror).
 * **Âm thanh**: **MAX98357A I²S** (BCLK=GPIO18, LRCLK=GPIO19, DIN=GPIO21) → loa 3–5 W / 4–8 Ω (BTL OUT+ / OUT−; không nối loa xuống GND).
@@ -66,7 +112,7 @@ requirements.txt
 
 ---
 
-## Yêu cầu kỹ thuật cho **HX710B** (quan trọng)
+## 🔬 Yêu cầu kỹ thuật cho **HX710B** (quan trọng)
 
 * **Không phải I²C**. Giao tiếp kiểu **bit-bang** 2 dây: **DOUT** (data ready) và **SCK** (clock/PD).
 * **Tốc độ lấy mẫu (SPS)**: phụ thuộc chế độ/board; nhiều module nằm khoảng **10–80 SPS**.
@@ -81,7 +127,7 @@ requirements.txt
 
 ---
 
-## Quy trình BP (oscillometric) – ràng buộc cho Copilot
+## 🩺 Quy trình BP (oscillometric) – ràng buộc cho Copilot
 
 * **State machine**: `IDLE → INFLATE → DEFLATE → PROCESS → DONE/ABORT`.
 * **Inflate**: bơm nhanh đến ~160–170 mmHg; **soft-limit 200 mmHg**; luôn cho phép **xả khẩn**.
@@ -96,9 +142,7 @@ requirements.txt
 
 ---
 
-
-
-## Yêu cầu phần mềm (Copilot phải tuân thủ)
+## 💻 Yêu cầu phần mềm (Copilot phải tuân thủ)
 
 1. **GUI Kivy 480×320** (fullscreen borderless): Dashboard (HR/SpO₂/Temp/BP), đo BP, lịch sử, cài đặt; **không block** UI.
 2. **Driver HX710B**: bit-banged, **thread-safe**, non-blocking; API rõ ràng:
@@ -107,14 +151,14 @@ requirements.txt
    * timeout khi không có data-ready; xử lý lỗi gọn.
 3. **Chuyển đổi áp**: lớp xử lý ánh xạ `counts → mmHg` qua **calibration** (offset/slope) lấy từ config; **không hardcode**.
 4. **Thu pha xả**: đảm bảo tần suất đọc theo khả năng HX710B (10–80 SPS), **đo thời gian chuẩn** để tính mmHg/s.
-5. **Cảnh báo**: popup + **TTS** (espeak-ng) qua wrapper hiện có; **debounce** alert.
+5. **Cảnh báo**: popup + **TTS** (PiperTTS)  **debounce** alert.
 6. **MQTT/REST**: dùng client sẵn trong `communication/`; schema/topics **không đổi**.
 7. **SQLite**: ghi `ts, hr, spo2, temp, bp_sys, bp_dia, bp_map, alert`; **không** ghi dữ liệu giả.
 8. **Config**: đọc `config/app_config.yaml`; **không** sinh file cấu hình mới khi chưa yêu cầu.
 
 ---
 
-## Testing Framework (giữ nguyên pattern)
+## 🧪 Testing Framework (giữ nguyên pattern)
 
 * Sử dụng `tests/test_sensors.py` menu-driven interface
 * Hardware validation với I²C scanning
@@ -128,7 +172,7 @@ python tests/test_sensors.py  # Menu option cho HX710B
 
 ---
 
-## Không được làm
+## 🚫 CÁC HÀNH ĐỘNG CẤM TUYỆT ĐỐI
 
 * Không sinh **file giả**, **mẫu dữ liệu**, **test asset**.
 * Không đổi sơ đồ chân I²S/SPI/I²C/HX710B.
@@ -137,7 +181,7 @@ python tests/test_sensors.py  # Menu option cho HX710B
 
 ---
 
-## Tham số cấu hình bắt buộc (thêm vào app_config.yaml)
+## ⚙️ Tham số cấu hình bắt buộc (thêm vào app_config.yaml)
 
 ```yaml
 # Thêm vào sensors section
@@ -166,55 +210,32 @@ sensors:
 
 ---
 
-## Mẫu prompt gợi ý dùng cho Copilot
+## 💬 Workflow khi nhận yêu cầu
 
-* "Implement **HX710B** bit-bang driver inheriting from BaseSensor (DOUT/SCK) in background thread. Use existing callback pattern. **Do not** create test files or mock data."
-* "Add BP deflate controller targeting **2–4 mmHg/s** using existing GPIO patterns; measure pressure change over time based on HX710B samples; keep UI responsive."
-* "Convert HX710B counts to **mmHg** using calibration from app_config.yaml (offset/slope). Follow existing config loading pattern."
-* "Compute oscillometric **envelope** (0.5–5 Hz band) to estimate **MAP**, then **SYS/DIA** via configured fractions; integrate with existing blood_pressure_sensor.py structure."
-* "Wire **TTS** alerts using existing Vietnamese TTS wrapper for overpressure/timeout/leak and final results; add debounce."
-
+1. **Đọc yêu cầu kỹ**: Hiểu đầy đủ trước khi code
+2. **Hỏi lại nếu không rõ**: "Bạn muốn thay đổi X hay Y?"
+3. **Kiểm tra file hiện có**: Đọc code liên quan trước
+4. **Đề xuất giải pháp**: Giải thích approach trước khi implement
+5. **Code theo quy tắc**: OOP, comments, organization
+6. **Test suggestion**: "Hãy test bằng cách..."
+7. **Không tạo docs**: Trừ khi được yêu cầu
 ---
 
-## Import Pattern (tuân thủ)
-
-```python
-# Standard project root path resolution
-import sys
-from pathlib import Path
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-# Import existing modules
-from src.sensors.base_sensor import BaseSensor
-from src.utils.logger import setup_logger
-```
-
----
-
-## Commit message gợi ý
-
-* `feat(hx710b): add non-blocking driver with BaseSensor inheritance, queue-based output`
-* `feat(bp): deflate controller at 3 mmHg/s; compute MAP from envelope using HX710B`
-* `fix(ui): avoid main-thread blocking during BP measurement with existing Kivy patterns`
-* `chore(cfg): add bp.calibration and hx710b config to app_config.yaml (no new files)`
-
----
-
-## Kiểm thử thủ công (không sinh dữ liệu giả)
+## ✅ Kiểm thử thủ công (không sinh dữ liệu giả)
 
 * Dùng phần cứng thật: bơm/van/hx710b/cuff; xác nhận inflate/deflate, an toàn (soft-limit, NO, relief).
 * Test với `tests/test_sensors.py` menu system.
 * Xem log: driver HX710B không timeout quá lâu; tốc độ đọc phù hợp SPS thực.
 * Nghe TTS rõ khi bơm chạy (nguồn sạch, không clip).
-
 ---
 
-## Definition of Done
+## ✨ Definition of Done
 
-* Chạy ổn **với phần cứng thật**; không phụ thuộc dữ liệu giả.
 * Không sinh file rác; repo sạch.
-* UI mượt; driver HX710B bền; an toàn đo (limit/timeout/xả khẩn).
-* MQTT/REST/SQLite đúng schema hiện có; log rõ ràng; không lộ secrets.
+* UI mượt (ví dụ: không lag >100ms trong đo BP; phản hồi touch <50ms); driver HX710B bền; an toàn đo (limit/timeout/xả khẩn).
+* MQTT/REST/SQLite đúng schema hiện có; log đầy đủ cho debug (mức INFO/ERROR với timestamp, context); không lộ secrets.
 * Tuân thủ BaseSensor pattern và callback architecture.
 * Tích hợp với existing testing framework.
+
+## 📅 Review định kỳ
+Cập nhật file README.md khi dự án thay đổi (e.g., thêm sensor mới, thay đổi phần cứng, hoặc yêu cầu mới từ user)
