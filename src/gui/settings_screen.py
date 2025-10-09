@@ -1,65 +1,136 @@
 """
 Settings Screen
-Screen cho cài đặt hệ thống và preferences
+Screen cho cài đặt hệ thống và preferences - Material Design style
 """
 
 from typing import Dict, Any, Optional
 import logging
 from kivy.uix.screenmanager import Screen
-from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.scrollview import ScrollView
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.slider import Slider
-from kivy.uix.switch import Switch
-from kivy.uix.textinput import TextInput
 from kivy.graphics import Color, Rectangle
+from kivy.metrics import dp
+from kivy.core.window import Window
+
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDRectangleFlatIconButton, MDFlatButton
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDLabel, MDIcon
+from kivymd.uix.slider import MDSlider
+from kivymd.uix.textfield import MDTextField
+from kivymd.uix.selectioncontrol import MDSwitch
+from kivymd.uix.dialog import MDDialog
+from kivymd.uix.toolbar import MDTopAppBar
+from kivymd.uix.progressbar import MDProgressBar
 
 
-class SettingSection(BoxLayout):
-    """Widget cho một section settings"""
+# Medical-themed color scheme (đồng nhất với các màn hình khác)
+MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
+MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
+MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
+MED_PRIMARY = (0.12, 0.55, 0.76, 1)
+MED_WARNING = (0.96, 0.4, 0.3, 1)
+TEXT_PRIMARY = (1, 1, 1, 1)
+TEXT_MUTED = (0.78, 0.88, 0.95, 1)
+
+
+class SettingSection(MDCard):
+    """Widget cho một section settings - Material Design style."""
     
-    def __init__(self, title: str, **kwargs):
-        super().__init__(orientation='vertical', spacing=5, **kwargs)
-        
-        # Background
-        with self.canvas.before:
-            Color(0.15, 0.15, 0.2, 1)
-            self.rect = Rectangle(size=self.size, pos=self.pos)
-        self.bind(size=self._update_rect, pos=self._update_rect)
-        
-        # Title
-        title_label = Label(
-            text=title,
-            font_size='16sp',
-            bold=True,
-            size_hint_y=None,
-            height=40,
-            color=(1, 1, 1, 1)
+    def __init__(self, title: str, icon: str = 'cog', **kwargs):
+        # Extract size_hint_y from kwargs if provided, otherwise default to None
+        if 'size_hint_y' not in kwargs:
+            kwargs['size_hint_y'] = None
+            
+        super().__init__(
+            orientation='vertical',
+            padding=(dp(12), dp(10), dp(12), dp(10)),
+            spacing=dp(6),
+            radius=[dp(18)],
+            md_bg_color=MED_CARD_BG,
+            **kwargs
         )
-        self.add_widget(title_label)
+        
+        # Header với icon và title
+        header = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(28),
+            spacing=dp(6),
+        )
+        
+        section_icon = MDIcon(
+            icon=icon,
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(22), dp(22)),
+        )
+        section_icon.icon_size = dp(20)
+        header.add_widget(section_icon)
+        
+        title_label = MDLabel(
+            text=title,
+            font_style='H6',
+            bold=True,
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
+            halign='left',
+            valign='middle',
+        )
+        title_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        header.add_widget(title_label)
+        
+        self.add_widget(header)
         
         # Content container
-        self.content = BoxLayout(orientation='vertical', spacing=5, padding=(10, 5))
+        self.content = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(8),
+            size_hint_y=None,
+        )
+        self.content.bind(minimum_height=self.content.setter('height'))
         self.add_widget(self.content)
     
-    def _update_rect(self, instance, value):
-        self.rect.pos = instance.pos
-        self.rect.size = instance.size
-    
-    def add_setting_item(self, name: str, widget):
-        """Add a setting item to this section"""
-        item_layout = BoxLayout(orientation='horizontal', size_hint_y=None, height=40)
-        
-        # Setting name
-        name_label = Label(
-            text=name,
-            size_hint_x=0.6,
-            color=(0.9, 0.9, 0.9, 1),
-            halign='left'
+    def add_setting_item(self, name: str, widget, subtitle: str = None):
+        """Add a setting item to this section."""
+        item_layout = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(48) if not subtitle else dp(60),
+            spacing=dp(10),
         )
-        name_label.bind(size=name_label.setter('text_size'))
-        item_layout.add_widget(name_label)
+        
+        # Setting name và subtitle
+        text_layout = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(2),
+            size_hint_x=0.6,
+        )
+        
+        name_label = MDLabel(
+            text=name,
+            font_style='Body1',
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
+            halign='left',
+            valign='middle' if not subtitle else 'bottom',
+        )
+        name_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+        text_layout.add_widget(name_label)
+        
+        if subtitle:
+            subtitle_label = MDLabel(
+                text=subtitle,
+                font_style='Caption',
+                theme_text_color='Custom',
+                text_color=TEXT_MUTED,
+                halign='left',
+                valign='top',
+            )
+            subtitle_label.bind(size=lambda lbl, _: setattr(lbl, 'text_size', lbl.size))
+            text_layout.add_widget(subtitle_label)
+        
+        item_layout.add_widget(text_layout)
         
         # Setting widget
         widget.size_hint_x = 0.4
@@ -69,13 +140,11 @@ class SettingSection(BoxLayout):
 
 
 class SettingsScreen(Screen):
-    """
-    Settings screen cho system configuration
-    """
+    """Settings screen cho system configuration - Material Design style."""
     
     def __init__(self, app_instance, **kwargs):
         """
-        Initialize settings screen
+        Initialize settings screen.
         
         Args:
             app_instance: Reference to main application
@@ -88,19 +157,41 @@ class SettingsScreen(Screen):
         # Setting widgets references
         self.setting_widgets = {}
         
+        # Dialog references
+        self.save_dialog = None
+        self.reset_dialog = None
+        
         self._build_layout()
     
     def _build_layout(self):
-        """Build settings layout"""
-        # Main container
-        main_layout = BoxLayout(orientation='vertical', spacing=10, padding=10)
+        """Build settings layout."""
+        # Main container với background color
+        main_layout = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(6),
+            padding=(dp(8), dp(6), dp(8), dp(8)),
+        )
+        
+        with main_layout.canvas.before:
+            Color(*MED_BG_COLOR)
+            self.bg_rect = Rectangle(size=main_layout.size, pos=main_layout.pos)
+        main_layout.bind(size=self._update_bg_rect, pos=self._update_bg_rect)
         
         # Header
         self._create_header(main_layout)
         
         # Scrollable content
-        scroll = ScrollView(size_hint_y=0.85)
-        content = BoxLayout(orientation='vertical', spacing=15, size_hint_y=None)
+        scroll = ScrollView(
+            size_hint_y=0.88,
+            scroll_type=['bars', 'content'],
+            bar_width=dp(8),
+        )
+        content = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(6),
+            size_hint_y=None,
+            padding=(0, dp(4), 0, dp(4)),
+        )
         content.bind(minimum_height=content.setter('height'))
         
         # Settings sections
@@ -117,206 +208,430 @@ class SettingsScreen(Screen):
         
         self.add_widget(main_layout)
     
+    def _update_bg_rect(self, instance, value):
+        """Update background rectangle."""
+        self.bg_rect.pos = instance.pos
+        self.bg_rect.size = instance.size
+    
     def _create_header(self, parent):
-        """Create header with title and back button"""
-        header = BoxLayout(orientation='horizontal', size_hint_y=0.1, spacing=10)
-        
-        # Title
-        title = Label(
-            text='CÀI ĐẶT HỆ THỐNG',
-            font_size='18sp',
-            bold=True,
-            color=(1, 1, 1, 1),
-            size_hint_x=0.8
+        """Create header với MDTopAppBar - Material Design style."""
+        toolbar = MDTopAppBar(
+            title='CÀI ĐẶT HỆ THỐNG',
+            elevation=0,
+            md_bg_color=MED_PRIMARY,
+            specific_text_color=TEXT_PRIMARY,
+            left_action_items=[["arrow-left", lambda _: self._on_back_pressed(None)]],
+            size_hint_y=None,
+            height=dp(50),
         )
-        header.add_widget(title)
-        
-        # Back button
-        back_btn = Button(
-            text='← Quay lại',
-            font_size='14sp',
-            size_hint_x=0.2,
-            background_color=(0.6, 0.6, 0.6, 1)
-        )
-        back_btn.bind(on_press=self._on_back_pressed)
-        header.add_widget(back_btn)
-        
-        parent.add_widget(header)
+        parent.add_widget(toolbar)
     
     def _create_sensor_settings(self, parent):
-        """Create sensor configuration section"""
-        sensor_section = SettingSection('CẢM BIẾN', size_hint_y=None, height=300)
+        """Create sensor configuration section."""
+        sensor_section = SettingSection(
+            'CẢM BIẾN',
+            icon='heart-pulse',
+            size_hint_y=None,
+        )
         
         # MAX30102 settings
-        self.setting_widgets['max30102_enabled'] = Switch(active=True)
-        sensor_section.add_setting_item('Cảm biến nhịp tim', self.setting_widgets['max30102_enabled'])
-        
-        self.setting_widgets['max30102_led_brightness'] = Slider(
-            min=50, max=255, value=127, step=1
+        self.setting_widgets['max30102_enabled'] = MDSwitch()
+        self.setting_widgets['max30102_enabled'].active = True
+        sensor_section.add_setting_item(
+            'Cảm biến nhịp tim',
+            self.setting_widgets['max30102_enabled'],
+            subtitle='MAX30102 (HR/SpO₂)'
         )
-        sensor_section.add_setting_item('Độ sáng LED', self.setting_widgets['max30102_led_brightness'])
+        
+        self.setting_widgets['max30102_led_brightness'] = MDSlider(
+            min=50,
+            max=255,
+            value=127,
+            color=MED_CARD_ACCENT,
+        )
+        sensor_section.add_setting_item(
+            'Độ sáng LED',
+            self.setting_widgets['max30102_led_brightness'],
+            subtitle='50-255'
+        )
         
         # MLX90614 settings
-        self.setting_widgets['mlx90614_enabled'] = Switch(active=True)
-        sensor_section.add_setting_item('Cảm biến nhiệt độ', self.setting_widgets['mlx90614_enabled'])
-        
-        self.setting_widgets['temp_offset'] = Slider(
-            min=-5, max=5, value=0, step=0.1
+        self.setting_widgets['mlx90614_enabled'] = MDSwitch()
+        self.setting_widgets['mlx90614_enabled'].active = True
+        sensor_section.add_setting_item(
+            'Cảm biến nhiệt độ',
+            self.setting_widgets['mlx90614_enabled'],
+            subtitle='MLX90614 IR'
         )
-        sensor_section.add_setting_item('Hiệu chỉnh nhiệt độ (°C)', self.setting_widgets['temp_offset'])
+        
+        self.setting_widgets['temp_offset'] = MDSlider(
+            min=-5,
+            max=5,
+            value=0,
+            color=MED_CARD_ACCENT,
+        )
+        sensor_section.add_setting_item(
+            'Hiệu chỉnh nhiệt độ',
+            self.setting_widgets['temp_offset'],
+            subtitle='±5°C'
+        )
         
         # Blood pressure settings
-        self.setting_widgets['bp_enabled'] = Switch(active=True)
-        sensor_section.add_setting_item('Cảm biến huyết áp', self.setting_widgets['bp_enabled'])
-        
-        self.setting_widgets['bp_max_pressure'] = Slider(
-            min=150, max=250, value=180, step=5
+        self.setting_widgets['bp_enabled'] = MDSwitch()
+        self.setting_widgets['bp_enabled'].active = True
+        sensor_section.add_setting_item(
+            'Cảm biến huyết áp',
+            self.setting_widgets['bp_enabled'],
+            subtitle='HX710B'
         )
-        sensor_section.add_setting_item('Áp suất tối đa (mmHg)', self.setting_widgets['bp_max_pressure'])
         
+        self.setting_widgets['bp_max_pressure'] = MDSlider(
+            min=150,
+            max=250,
+            value=180,
+            color=MED_CARD_ACCENT,
+        )
+        sensor_section.add_setting_item(
+            'Áp suất tối đa',
+            self.setting_widgets['bp_max_pressure'],
+            subtitle='150-250 mmHg'
+        )
+        
+        # Auto-calculate height based on content
+        sensor_section.height = dp(28 + 10 + (6 * 60) + 10)  # header + padding + 6 items + padding
         parent.add_widget(sensor_section)
     
     def _create_display_settings(self, parent):
-        """Create display configuration section"""
-        display_section = SettingSection('HIỂN THỊ', size_hint_y=None, height=200)
+        """Create display configuration section."""
+        display_section = SettingSection(
+            'HIỂN THỊ',
+            icon='monitor-dashboard',
+            size_hint_y=None,
+        )
         
         # Screen brightness
-        self.setting_widgets['screen_brightness'] = Slider(
-            min=10, max=100, value=80, step=5
+        self.setting_widgets['screen_brightness'] = MDSlider(
+            min=10,
+            max=100,
+            value=80,
+            color=MED_CARD_ACCENT,
         )
-        display_section.add_setting_item('Độ sáng màn hình (%)', self.setting_widgets['screen_brightness'])
+        display_section.add_setting_item(
+            'Độ sáng màn hình',
+            self.setting_widgets['screen_brightness'],
+            subtitle='10-100%'
+        )
         
         # Auto screen off
-        self.setting_widgets['auto_screen_off'] = Switch(active=False)
-        display_section.add_setting_item('Tự động tắt màn hình', self.setting_widgets['auto_screen_off'])
+        self.setting_widgets['auto_screen_off'] = MDSwitch()
+        self.setting_widgets['auto_screen_off'].active = False
+        display_section.add_setting_item(
+            'Tự động tắt màn hình',
+            self.setting_widgets['auto_screen_off'],
+            subtitle='Tiết kiệm pin'
+        )
         
         # Update frequency
-        self.setting_widgets['update_freq'] = Slider(
-            min=0.5, max=5, value=1, step=0.5
+        self.setting_widgets['update_freq'] = MDSlider(
+            min=0.5,
+            max=5,
+            value=1,
+            color=MED_CARD_ACCENT,
         )
-        display_section.add_setting_item('Tần suất cập nhật (s)', self.setting_widgets['update_freq'])
+        display_section.add_setting_item(
+            'Tần suất cập nhật',
+            self.setting_widgets['update_freq'],
+            subtitle='0.5-5s'
+        )
         
-        # Language (placeholder)
-        language_btn = Button(
+        # Language button
+        language_btn = MDRectangleFlatIconButton(
             text='Tiếng Việt',
-            background_color=(0.3, 0.5, 0.8, 1)
+            icon='translate',
+            text_color=MED_PRIMARY,
+            line_color=MED_PRIMARY,
+            size_hint_y=None,
+            height=dp(36),
         )
-        display_section.add_setting_item('Ngôn ngữ', language_btn)
+        display_section.add_setting_item(
+            'Ngôn ngữ',
+            language_btn
+        )
         
+        display_section.height = dp(28 + 10 + (4 * 60) + 10)
         parent.add_widget(display_section)
     
     def _create_alert_settings(self, parent):
-        """Create alert configuration section"""
-        alert_section = SettingSection('CẢNH BÁO', size_hint_y=None, height=250)
+        """Create alert configuration section."""
+        alert_section = SettingSection(
+            'CẢNH BÁO',
+            icon='alert-circle',
+            size_hint_y=None,
+        )
         
         # Voice alerts
-        self.setting_widgets['voice_alerts'] = Switch(active=True)
-        alert_section.add_setting_item('Cảnh báo bằng tiếng', self.setting_widgets['voice_alerts'])
+        self.setting_widgets['voice_alerts'] = MDSwitch()
+        self.setting_widgets['voice_alerts'].active = True
+        alert_section.add_setting_item(
+            'Cảnh báo bằng tiếng',
+            self.setting_widgets['voice_alerts'],
+            subtitle='Text-to-Speech'
+        )
         
         # Voice volume
-        self.setting_widgets['voice_volume'] = Slider(
-            min=20, max=100, value=80, step=5
+        self.setting_widgets['voice_volume'] = MDSlider(
+            min=20,
+            max=100,
+            value=80,
+            color=MED_CARD_ACCENT,
         )
-        alert_section.add_setting_item('Âm lượng (%)', self.setting_widgets['voice_volume'])
+        alert_section.add_setting_item(
+            'Âm lượng',
+            self.setting_widgets['voice_volume'],
+            subtitle='20-100%'
+        )
         
         # Heart rate thresholds
-        self.setting_widgets['hr_low_threshold'] = Slider(
-            min=40, max=80, value=60, step=5
+        self.setting_widgets['hr_low_threshold'] = MDSlider(
+            min=40,
+            max=80,
+            value=60,
+            color=MED_CARD_ACCENT,
         )
-        alert_section.add_setting_item('Nhịp tim thấp (bpm)', self.setting_widgets['hr_low_threshold'])
+        alert_section.add_setting_item(
+            'Nhịp tim thấp',
+            self.setting_widgets['hr_low_threshold'],
+            subtitle='40-80 bpm'
+        )
         
-        self.setting_widgets['hr_high_threshold'] = Slider(
-            min=100, max=180, value=120, step=5
+        self.setting_widgets['hr_high_threshold'] = MDSlider(
+            min=100,
+            max=180,
+            value=120,
+            color=MED_CARD_ACCENT,
         )
-        alert_section.add_setting_item('Nhịp tim cao (bpm)', self.setting_widgets['hr_high_threshold'])
+        alert_section.add_setting_item(
+            'Nhịp tim cao',
+            self.setting_widgets['hr_high_threshold'],
+            subtitle='100-180 bpm'
+        )
         
         # Test voice button
-        test_voice_btn = Button(
+        test_voice_btn = MDRectangleFlatIconButton(
             text='Kiểm tra tiếng',
-            background_color=(0.8, 0.6, 0.2, 1)
+            icon='volume-high',
+            text_color=MED_PRIMARY,
+            line_color=MED_PRIMARY,
+            size_hint_y=None,
+            height=dp(36),
         )
         test_voice_btn.bind(on_press=self._test_voice_alerts)
-        alert_section.add_setting_item('Kiểm tra', test_voice_btn)
+        alert_section.add_setting_item(
+            'Kiểm tra hệ thống',
+            test_voice_btn
+        )
         
+        alert_section.height = dp(28 + 10 + (5 * 60) + 10)
         parent.add_widget(alert_section)
     
     def _create_system_settings(self, parent):
-        """Create system configuration section"""
-        system_section = SettingSection('HỆ THỐNG', size_hint_y=None, height=200)
+        """Create system configuration section."""
+        system_section = SettingSection(
+            'HỆ THỐNG',
+            icon='cog-outline',
+            size_hint_y=None,
+        )
         
         # Patient name
-        self.setting_widgets['patient_name'] = TextInput(
+        self.setting_widgets['patient_name'] = MDTextField(
             text='Bệnh nhân',
-            multiline=False,
+            mode='line',
             size_hint_y=None,
-            height=30
+            height=dp(48),
+            hint_text='Nhập tên bệnh nhân',
+            line_color_focus=MED_CARD_ACCENT,
         )
-        system_section.add_setting_item('Tên bệnh nhân', self.setting_widgets['patient_name'])
+        system_section.add_setting_item(
+            'Tên bệnh nhân',
+            self.setting_widgets['patient_name']
+        )
         
-        # Data export
-        export_btn = Button(
+        # Data export button
+        export_btn = MDRectangleFlatIconButton(
             text='Xuất dữ liệu',
-            background_color=(0.2, 0.6, 0.8, 1)
+            icon='download',
+            text_color=MED_PRIMARY,
+            line_color=MED_PRIMARY,
+            size_hint_y=None,
+            height=dp(36),
         )
         export_btn.bind(on_press=self._export_data)
-        system_section.add_setting_item('Dữ liệu', export_btn)
+        system_section.add_setting_item(
+            'Dữ liệu đo lường',
+            export_btn
+        )
         
-        # Sensor calibration
-        calibrate_btn = Button(
+        # Sensor calibration button
+        calibrate_btn = MDRectangleFlatIconButton(
             text='Hiệu chỉnh',
-            background_color=(0.8, 0.3, 0.8, 1)
+            icon='tune',
+            text_color=MED_CARD_ACCENT,
+            line_color=MED_CARD_ACCENT,
+            size_hint_y=None,
+            height=dp(36),
         )
         calibrate_btn.bind(on_press=self._calibrate_sensors)
-        system_section.add_setting_item('Cảm biến', calibrate_btn)
+        system_section.add_setting_item(
+            'Cảm biến',
+            calibrate_btn
+        )
         
-        # System info
-        info_btn = Button(
+        # System info button
+        info_btn = MDRectangleFlatIconButton(
             text='Thông tin',
-            background_color=(0.5, 0.5, 0.5, 1)
+            icon='information',
+            text_color=TEXT_MUTED,
+            line_color=TEXT_MUTED,
+            size_hint_y=None,
+            height=dp(36),
         )
         info_btn.bind(on_press=self._show_system_info)
-        system_section.add_setting_item('Hệ thống', info_btn)
+        system_section.add_setting_item(
+            'Hệ thống',
+            info_btn
+        )
         
+        system_section.height = dp(28 + 10 + (4 * 60) + 10)
         parent.add_widget(system_section)
     
     def _create_action_buttons(self, parent):
-        """Create action buttons"""
-        action_layout = BoxLayout(
-            orientation='horizontal',
-            size_hint_y=0.05,
-            spacing=10
+        """Create action buttons."""
+        action_layout = MDBoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(48),
+            spacing=dp(4),
         )
         
-        # Save button
-        save_btn = Button(
-            text='Lưu cài đặt',
-            font_size='14sp',
-            background_color=(0.2, 0.8, 0.2, 1)
+        # Buttons container
+        buttons_container = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(42),
+            spacing=dp(8),
         )
-        save_btn.bind(on_press=self._save_settings)
-        action_layout.add_widget(save_btn)
         
         # Reset button
-        reset_btn = Button(
+        self.reset_btn = MDRectangleFlatIconButton(
             text='Khôi phục mặc định',
-            font_size='14sp',
-            background_color=(0.8, 0.6, 0.2, 1)
+            icon='restore',
+            text_color=MED_WARNING,
+            line_color=MED_WARNING,
         )
-        reset_btn.bind(on_press=self._reset_settings)
-        action_layout.add_widget(reset_btn)
+        self.reset_btn.bind(on_press=self._show_reset_dialog)
+        buttons_container.add_widget(self.reset_btn)
+        
+        # Save button
+        self.save_btn = MDRectangleFlatIconButton(
+            text='Lưu cài đặt',
+            icon='content-save',
+            text_color=MED_CARD_ACCENT,
+            line_color=MED_CARD_ACCENT,
+        )
+        self.save_btn.bind(on_press=self._show_save_dialog)
+        buttons_container.add_widget(self.save_btn)
+        
+        action_layout.add_widget(buttons_container)
+        
+        # Progress bar for save/reset actions
+        self.action_progress = MDProgressBar(
+            max=100,
+            value=0,
+            color=MED_CARD_ACCENT,
+            size_hint_y=None,
+            height=dp(4),
+        )
+        action_layout.add_widget(self.action_progress)
         
         parent.add_widget(action_layout)
     
     def _on_back_pressed(self, instance):
-        """Handle back button press"""
+        """Handle back button press."""
         if self.changes_made:
             # TODO: Show save confirmation dialog
             pass
         self.app_instance.navigate_to_screen('dashboard')
     
+    def _show_save_dialog(self, instance):
+        """Show save confirmation dialog."""
+        try:
+            if self.save_dialog is None:
+                self.save_dialog = MDDialog(
+                    title="Lưu cài đặt",
+                    text="Bạn có muốn lưu các thay đổi cài đặt?",
+                    buttons=[
+                        MDFlatButton(
+                            text="HỦY",
+                            on_release=lambda x: self.save_dialog.dismiss()
+                        ),
+                        MDFlatButton(
+                            text="LƯU",
+                            text_color=MED_CARD_ACCENT,
+                            on_release=self._confirm_save_settings
+                        ),
+                    ],
+                )
+            
+            self.save_dialog.open()
+            
+        except Exception as e:
+            self.logger.error(f"Error showing save dialog: {e}")
+    
+    def _show_reset_dialog(self, instance):
+        """Show reset confirmation dialog."""
+        try:
+            if self.reset_dialog is None:
+                self.reset_dialog = MDDialog(
+                    title="Khôi phục mặc định",
+                    text="Bạn có chắc chắn muốn khôi phục tất cả cài đặt về giá trị mặc định?",
+                    buttons=[
+                        MDFlatButton(
+                            text="HỦY",
+                            on_release=lambda x: self.reset_dialog.dismiss()
+                        ),
+                        MDFlatButton(
+                            text="KHÔI PHỤC",
+                            text_color=MED_WARNING,
+                            on_release=self._confirm_reset_settings
+                        ),
+                    ],
+                )
+            
+            self.reset_dialog.open()
+            
+        except Exception as e:
+            self.logger.error(f"Error showing reset dialog: {e}")
+    
+    def _confirm_save_settings(self, instance):
+        """Confirm and save settings."""
+        if self.save_dialog:
+            self.save_dialog.dismiss()
+        self._save_settings(instance)
+    
+    def _confirm_reset_settings(self, instance):
+        """Confirm and reset settings."""
+        if self.reset_dialog:
+            self.reset_dialog.dismiss()
+        self._reset_settings(instance)
+    
     def _save_settings(self, instance):
         """Save current settings"""
         try:
+            # Show progress
+            self.action_progress.value = 50
+            self.save_btn.disabled = True
+            self.reset_btn.disabled = True
+            
             # Collect settings from widgets
             settings = {}
             
@@ -348,13 +663,26 @@ class SettingsScreen(Screen):
             
             self.changes_made = False
             
+            # Complete progress
+            self.action_progress.value = 100
+            
+            # Reset UI after short delay
+            from kivy.clock import Clock
+            Clock.schedule_once(lambda dt: self._reset_action_ui(), 1.0)
+            
         except Exception as e:
             self.logger.error(f"Error saving settings: {e}")
             self._play_voice_feedback("Lỗi khi lưu cài đặt")
+            self._reset_action_ui()
     
     def _reset_settings(self, instance):
         """Reset settings to defaults"""
         try:
+            # Show progress
+            self.action_progress.value = 50
+            self.save_btn.disabled = True
+            self.reset_btn.disabled = True
+            
             # Reset all widgets to default values
             self.setting_widgets['max30102_enabled'].active = True
             self.setting_widgets['max30102_led_brightness'].value = 127
@@ -377,8 +705,16 @@ class SettingsScreen(Screen):
             self._play_voice_feedback("Đã khôi phục cài đặt mặc định")
             self.changes_made = True
             
+            # Complete progress
+            self.action_progress.value = 100
+            
+            # Reset UI after short delay
+            from kivy.clock import Clock
+            Clock.schedule_once(lambda dt: self._reset_action_ui(), 1.0)
+            
         except Exception as e:
             self.logger.error(f"Error resetting settings: {e}")
+            self._reset_action_ui()
     
     def _test_voice_alerts(self, instance):
         """Test voice alert system"""
@@ -426,6 +762,15 @@ class SettingsScreen(Screen):
             
         except Exception as e:
             self.logger.error(f"Error playing voice feedback: {e}")
+    
+    def _reset_action_ui(self):
+        """Reset action buttons and progress bar to default state"""
+        try:
+            self.action_progress.value = 0
+            self.save_btn.disabled = False
+            self.reset_btn.disabled = False
+        except Exception as e:
+            self.logger.error(f"Error resetting action UI: {e}")
     
     def load_settings(self):
         """Load settings from configuration"""
