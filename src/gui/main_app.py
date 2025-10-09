@@ -83,7 +83,11 @@ class HealthMonitorApp(MDApp):
         data_update_event: Clock event for data updates
         current_data (Dict): Latest sensor data
     """
-    
+
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(self, config: Dict[str, Any], sensors: Dict = None, database=None, 
                  mqtt_client=None, alert_system=None, **kwargs):
         """
@@ -236,6 +240,10 @@ class HealthMonitorApp(MDApp):
                 normalized[key] = sensor
         return normalized
 
+    # ------------------------------------------------------------------
+    # TTS & Audio Management
+    # ------------------------------------------------------------------
+
     def _init_tts_manager(self) -> Optional[TTSManager]:
         """Khởi tạo bộ quản lý TTS dựa theo cấu hình."""
         try:
@@ -340,7 +348,11 @@ class HealthMonitorApp(MDApp):
         scenario = mapping.get(screen_name)
         if scenario:
             self._speak_scenario(scenario)
-    
+
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
+
     def build(self):
         """
         Build the main application
@@ -380,10 +392,14 @@ class HealthMonitorApp(MDApp):
         # Push an immediate UI refresh so dashboard has latest state
         self.update_displays(0)
 
-        self.logger.info("Health Monitor App initialized successfully")
+        self.logger.info("HealthMonitorApp initialized successfully")
         
         return self.screen_manager
-    
+
+    # ------------------------------------------------------------------
+    # Sensor Management
+    # ------------------------------------------------------------------
+
     def setup_sensor_callbacks(self):
         """Setup callbacks for sensor data updates"""
         try:
@@ -453,7 +469,11 @@ class HealthMonitorApp(MDApp):
             return bool(stopped)
 
         return True
-    
+
+    # ------------------------------------------------------------------
+    # Data Callbacks & Event Handling
+    # ------------------------------------------------------------------
+
     def on_max30102_data(self, sensor_name: str, data: Dict[str, Any]):
         """Handle MAX30102 sensor data updates"""
         try:
@@ -755,7 +775,11 @@ class HealthMonitorApp(MDApp):
             
         except Exception as e:
             self.logger.error(f"Error updating sensor data directly: {e}")
-    
+
+    # ------------------------------------------------------------------
+    # Navigation & Screen Management
+    # ------------------------------------------------------------------
+
     def navigate_to_screen(self, screen_name: str):
         """Navigate to specified screen"""
         try:
@@ -986,7 +1010,11 @@ class HealthMonitorApp(MDApp):
                 self.database.close()
             except Exception as e:
                 self.logger.error(f"Error closing database: {e}")
-    
+
+    # ------------------------------------------------------------------
+    # Application Lifecycle
+    # ------------------------------------------------------------------
+
     def on_start(self):
         """
         Called when application starts

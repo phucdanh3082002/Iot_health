@@ -34,6 +34,10 @@ class TemperatureScreen(Screen):
     Màn hình đo chi tiết cho MLX90614
     """
     
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
+    
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)
         self.app_instance = app_instance
@@ -52,7 +56,11 @@ class TemperatureScreen(Screen):
         self.ambient_temp = 0.0
         
         self._build_layout()
-    
+
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
+
     def _build_layout(self):
         """Build temperature measurement screen"""
         main_layout = MDBoxLayout(
@@ -347,7 +355,11 @@ class TemperatureScreen(Screen):
         control_layout.add_widget(self.save_btn)
 
         parent.add_widget(control_layout)
-    
+
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
+
     def _on_back_pressed(self, instance):
         """Handle back button"""
         if self.measuring:
@@ -396,7 +408,11 @@ class TemperatureScreen(Screen):
         else:
             self.save_btn.text_color = (1, 1, 1, 0.3)
             self.save_btn.line_color = (1, 1, 1, 0.3)
-    
+
+    # ------------------------------------------------------------------
+    # Measurement Control
+    # ------------------------------------------------------------------
+
     def _start_measurement(self):
         """Start temperature measurement"""
         try:
@@ -557,6 +573,10 @@ class TemperatureScreen(Screen):
                 keep_save_state=False,
             )
             return False
+
+    # ------------------------------------------------------------------
+    # Data Processing & Validation
+    # ------------------------------------------------------------------
 
     def _is_valid_object_temp(self, value: float | None) -> bool:
         if value is None:

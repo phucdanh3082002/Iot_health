@@ -20,6 +20,10 @@ class BPMeasurementScreen(Screen):
     Screen cho quá trình đo huyết áp tự động
     """
     
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
+    
     def __init__(self, app_instance, **kwargs):
         """
         Initialize BP measurement screen
@@ -44,6 +48,10 @@ class BPMeasurementScreen(Screen):
         self.diastolic_result = 0
         
         self._build_layout()
+    
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
     
     def _build_layout(self):
         """Build BP measurement layout"""
@@ -354,6 +362,10 @@ class BPMeasurementScreen(Screen):
         control_layout.add_widget(self.save_btn)
         
         parent.add_widget(control_layout)
+
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
     
     def _on_start_stop_pressed(self, instance):
         """Handle start/stop button press"""
@@ -373,6 +385,10 @@ class BPMeasurementScreen(Screen):
         if self.measurement_state != 'idle':
             self.stop_measurement()
         self.app_instance.navigate_to_screen('dashboard')
+    
+    # ------------------------------------------------------------------
+    # Measurement Control
+    # ------------------------------------------------------------------
     
     def start_measurement(self):
         """Start blood pressure measurement process"""
@@ -527,6 +543,10 @@ class BPMeasurementScreen(Screen):
             
         except Exception as e:
             self.logger.error(f"Error handling measurement completion: {e}")
+
+    # ------------------------------------------------------------------
+    # Data Management & Utilities
+    # ------------------------------------------------------------------
     
     def _get_bp_status(self, systolic: float, diastolic: float) -> str:
         """Get blood pressure status"""

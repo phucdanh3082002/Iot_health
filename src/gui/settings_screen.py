@@ -90,7 +90,7 @@ class SettingSection(MDCard):
         )
         self.content.bind(minimum_height=self.content.setter('height'))
         self.add_widget(self.content)
-    
+        self.content.bind(height=lambda instance, value: setattr(self, 'height', value + dp(48)))
     def add_setting_item(self, name: str, widget, subtitle: str = None):
         """Add a setting item to this section."""
         item_layout = MDBoxLayout(
@@ -133,7 +133,14 @@ class SettingSection(MDCard):
         item_layout.add_widget(text_layout)
         
         # Setting widget
-        widget.size_hint_x = 0.4
+        if isinstance(widget, MDSwitch):
+            # MDSwitch should not stretch, keep compact size
+            widget.size_hint_x = None
+            widget.width = dp(40)
+            widget.pos_hint = {'right': 0.85}
+        else:
+            # Other widgets (sliders, textfields, buttons) can stretch
+            widget.size_hint_x = 0.4
         item_layout.add_widget(widget)
         
         self.content.add_widget(item_layout)
@@ -141,6 +148,10 @@ class SettingSection(MDCard):
 
 class SettingsScreen(Screen):
     """Settings screen cho system configuration - Material Design style."""
+    
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
     
     def __init__(self, app_instance, **kwargs):
         """
@@ -162,6 +173,10 @@ class SettingsScreen(Screen):
         self.reset_dialog = None
         
         self._build_layout()
+    
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
     
     def _build_layout(self):
         """Build settings layout."""
@@ -555,6 +570,10 @@ class SettingsScreen(Screen):
         
         parent.add_widget(action_layout)
     
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
+    
     def _on_back_pressed(self, instance):
         """Handle back button press."""
         if self.changes_made:
@@ -623,6 +642,10 @@ class SettingsScreen(Screen):
         if self.reset_dialog:
             self.reset_dialog.dismiss()
         self._reset_settings(instance)
+    
+    # ------------------------------------------------------------------
+    # Settings Management
+    # ------------------------------------------------------------------
     
     def _save_settings(self, instance):
         """Save current settings"""
@@ -716,6 +739,10 @@ class SettingsScreen(Screen):
             self.logger.error(f"Error resetting settings: {e}")
             self._reset_action_ui()
     
+    # ------------------------------------------------------------------
+    # Utilities & Helpers
+    # ------------------------------------------------------------------
+    
     def _test_voice_alerts(self, instance):
         """Test voice alert system"""
         volume = int(self.setting_widgets['voice_volume'].value)
@@ -771,6 +798,10 @@ class SettingsScreen(Screen):
             self.reset_btn.disabled = False
         except Exception as e:
             self.logger.error(f"Error resetting action UI: {e}")
+    
+    # ------------------------------------------------------------------
+    # Screen Lifecycle
+    # ------------------------------------------------------------------
     
     def load_settings(self):
         """Load settings from configuration"""

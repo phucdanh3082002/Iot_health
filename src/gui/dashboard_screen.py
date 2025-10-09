@@ -117,12 +117,20 @@ class FeatureCard(MDCard):
 class DashboardScreen(Screen):
     """Dashboard chính với các chức năng đo và lịch sử."""
 
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)
         self.app_instance = app_instance
         self.logger = logging.getLogger(__name__)
 
         self._build_layout()
+
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
 
     def _build_layout(self):
         main_layout = MDBoxLayout(
@@ -286,6 +294,10 @@ class DashboardScreen(Screen):
 
         parent.add_widget(grid)
 
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
+
     def _on_cardio_pressed(self, *_):
         self.logger.info("Cardio button pressed, navigating to heart rate screen")
         self.app_instance.navigate_to_screen("heart_rate")
@@ -303,6 +315,10 @@ class DashboardScreen(Screen):
     def _on_bp_pressed(self, *_):
         self.logger.info("Blood pressure button pressed, navigating to BP measurement screen")
         self.app_instance.navigate_to_screen("bp_measurement")
+
+    # ------------------------------------------------------------------
+    # Data Management
+    # ------------------------------------------------------------------
 
     def update_data(self, sensor_data: Dict[str, Any]):
         try:
@@ -346,6 +362,10 @@ class DashboardScreen(Screen):
             "sensor_count": 3,
             "active_sensors": 0,
         }
+
+    # ------------------------------------------------------------------
+    # Screen Lifecycle
+    # ------------------------------------------------------------------
 
     def on_enter(self):
         self.logger.info("Dashboard screen entered")

@@ -33,6 +33,10 @@ TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 class PulseAnimation(MDBoxLayout):
     """Widget hoạt họa nhịp tim đơn giản."""
 
+    # ------------------------------------------------------------------
+    # Initialization & Animation Control
+    # ------------------------------------------------------------------
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.orientation = "vertical"
@@ -101,6 +105,10 @@ class HeartRateMeasurementController:
     MINIMUM_MEASUREMENT_TIME = 12.0  # Thời gian tối thiểu để chấp nhận kết quả (80% của 15s)
     FINGER_LOSS_GRACE = 3.0  # Grace period khi mất ngón tay trong lúc đo
     TIMEOUT_MARGIN = 20.0  # Thời gian timeout tổng (15s đo + 5s buffer)
+
+    # ------------------------------------------------------------------
+    # Initialization & State Management
+    # ------------------------------------------------------------------
 
     def __init__(self, screen: "HeartRateScreen", sensor_name: str = "MAX30102") -> None:
         self.screen = screen
@@ -377,6 +385,10 @@ class HeartRateMeasurementController:
 
 class HeartRateScreen(Screen):
     """Màn hình đo nhịp tim & SpO2 với controller tách riêng."""
+
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
 
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)

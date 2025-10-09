@@ -31,6 +31,10 @@ TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 class MeasurementRecord(MDCard):
     """Widget hiển thị một bản ghi đo - Material Design style."""
 
+    # ------------------------------------------------------------------
+    # Initialization & UI Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, record_data: Dict[str, Any], **kwargs):
         super().__init__(
             orientation='vertical',
@@ -198,6 +202,10 @@ class MeasurementRecord(MDCard):
 
         return box
 
+    # ------------------------------------------------------------------
+    # Utilities & Formatting
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _format_timestamp(value: Union[datetime, str, float, int, None]) -> str:
         """Format timestamp hiển thị."""
@@ -263,6 +271,10 @@ class MeasurementRecord(MDCard):
 class HistoryScreen(Screen):
     """Screen hiển thị lịch sử các phép đo - Material Design style."""
 
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
+
     def __init__(self, app_instance, **kwargs):
         """
         Initialize history screen.
@@ -280,6 +292,10 @@ class HistoryScreen(Screen):
         self.filter_buttons = {}
 
         self._build_layout()
+
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
 
     def _build_layout(self):
         """Xây dựng layout chính."""
@@ -434,6 +450,10 @@ class HistoryScreen(Screen):
 
         parent.add_widget(control_layout)
 
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
+
     def _on_back_pressed(self, instance):
         """Xử lý back button press."""
         self.app_instance.navigate_to_screen('dashboard')
@@ -451,6 +471,10 @@ class HistoryScreen(Screen):
 
         self.current_filter = filter_key
         self._load_records()
+
+    # ------------------------------------------------------------------
+    # Data Management
+    # ------------------------------------------------------------------
 
     def _load_records(self):
         """Load records dựa trên current filter."""
