@@ -30,6 +30,8 @@ class MLX90614Sensor(BaseSensor):
         temperature_offset (float): Offset hiệu chỉnh nhiệt độ
     """
     
+    # ==================== INITIALIZATION & SETUP ====================
+    
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize MLX90614 temperature sensor
@@ -93,6 +95,8 @@ class MLX90614Sensor(BaseSensor):
                     pass
                 self.bus = None
             return False
+    
+    # ==================== DATA READING & PROCESSING ====================
     
     def read_raw_data(self) -> Optional[Dict[str, Any]]:
         """
@@ -209,6 +213,8 @@ class MLX90614Sensor(BaseSensor):
             self.logger.error(f"Failed to process MLX90614 data: {e}")
             return None
     
+    # ==================== TEMPERATURE CONVERSION & STATUS ====================
+    
     def _get_temperature_status(self, temperature: float) -> str:
         """
         Determine temperature status based on thresholds
@@ -250,6 +256,8 @@ class MLX90614Sensor(BaseSensor):
         celsius = self.get_celsius()
         return (celsius * 9/5) + 32
     
+    # ==================== CALIBRATION & CONFIGURATION ====================
+    
     def set_measurement_type(self, use_object: bool) -> bool:
         """
         Set measurement type (object or ambient)
@@ -284,6 +292,8 @@ class MLX90614Sensor(BaseSensor):
         except Exception as e:
             self.logger.error(f"Calibration failed: {e}")
         return False
+    
+    # ==================== CLEANUP ====================
     
     def stop(self) -> bool:
         """
@@ -321,6 +331,8 @@ class TemperatureSensor(BaseSensor):
         unit (str): Đơn vị nhiệt độ ("C" hoặc "F")
     """
     
+    # ==================== INITIALIZATION & SETUP ====================
+    
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize temperature sensor
@@ -338,6 +350,8 @@ class TemperatureSensor(BaseSensor):
             bool: True if initialization successful
         """
         pass
+    
+    # ==================== DATA PROCESSING ====================
     
     def read_raw_data(self) -> Optional[Dict[str, Any]]:
         """
@@ -359,6 +373,8 @@ class TemperatureSensor(BaseSensor):
             Dict with 'temperature', 'unit', 'timestamp' or None if error
         """
         pass
+    
+    # ==================== SENSOR-SPECIFIC READING ====================
     
     def _read_ds18b20(self) -> Optional[float]:
         """
@@ -387,6 +403,8 @@ class TemperatureSensor(BaseSensor):
         """
         pass
     
+    # ==================== UTILITY METHODS ====================
+    
     def set_temperature_unit(self, unit: str) -> bool:
         """
         Set temperature unit
@@ -411,6 +429,8 @@ class TemperatureSensor(BaseSensor):
             Converted temperature
         """
         pass
+    
+    # ==================== CALIBRATION & INFO ====================
     
     def get_sensor_info(self) -> Dict[str, Any]:
         """

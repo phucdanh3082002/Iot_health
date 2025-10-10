@@ -133,6 +133,8 @@ class MAX30102Hardware:
 
     DEFAULT_ALMOST_FULL = 0x0F
 
+    # ==================== INITIALIZATION ====================
+    
     def __init__(self, channel: int = 1, address: int = 0x57, logger: Optional[logging.Logger] = None) -> None:
         if smbus is None:
             raise RuntimeError("smbus không khả dụng - không thể giao tiếp MAX30102")
@@ -156,6 +158,8 @@ class MAX30102Hardware:
         time.sleep(0.05)
         self._clear_interrupts()
 
+    # ==================== REGISTER ACCESS ====================
+    
     @staticmethod
     def _closest_supported(value: int, mapping: Dict[int, int]) -> int:
         if value in mapping:
@@ -172,6 +176,8 @@ class MAX30102Hardware:
         except Exception as exc:  # pragma: no cover - defensive
             self.logger.debug("Không thể đọc thanh ghi interrupt: %s", exc)
 
+    # ==================== CONTROL METHODS ====================
+    
     def reset(self) -> None:
         try:
             self._write_reg(REG_MODE_CONFIG, 0x40)
@@ -225,15 +231,8 @@ class MAX30102Hardware:
         self._write_reg(REG_LED2_PA, max(0, min(0xFF, led2_pa)))
         self._write_reg(REG_PILOT_PA, 0x7F)
 
-    def set_led_amplitude(self, led: str, amplitude: int) -> None:
-        amplitude = max(0, min(0xFF, amplitude))
-        if led == "red":
-            self._write_reg(REG_LED1_PA, amplitude)
-        elif led == "ir":
-            self._write_reg(REG_LED2_PA, amplitude)
-        elif led == "pilot":
-            self._write_reg(REG_PILOT_PA, amplitude)
-
+    # ==================== DATA READING ====================
+    
     def get_data_present(self) -> int:
         try:
             read_ptr = self.bus.read_byte_data(self.address, REG_FIFO_RD_PTR)
@@ -327,6 +326,8 @@ class MAX30102Hardware:
 
         return samples
 
+    # ==================== CLEANUP ====================
+    
     def close(self) -> None:
         try:
             if hasattr(self.bus, "close"):
@@ -349,6 +350,8 @@ class MeasurementWindow:
         self.ir: deque[int] = deque(maxlen=self.max_samples)
         self.red: deque[int] = deque(maxlen=self.max_samples)
 
+    # ==================== BUFFER MANAGEMENT ====================
+    
     def reset(self) -> None:
         self.ir.clear()
         self.red.clear()
@@ -358,6 +361,8 @@ class MeasurementWindow:
             self.ir.append(int(ir_val))
             self.red.append(int(red_val))
 
+    # ==================== DATA ACCESS ====================
+    
     def fill_ratio(self) -> float:
         if not self.max_samples:
             return 0.0
@@ -379,6 +384,8 @@ class MeasurementWindow:
         data = list(buffer)[-sample_count:]
         return np.array(data, dtype=np.float64)
 
+    # ==================== QUALITY ESTIMATION ====================
+    
     def estimate_quality(self, channel: str = "ir") -> float:
         """Ước lượng chất lượng tín hiệu dựa trên biên độ AC (peak-to-peak)."""
         buffer = self.ir if channel == "ir" else self.red
@@ -412,6 +419,8 @@ class MeasurementWindow:
         
         return quality
 
+    # ==================== RESAMPLING ====================
+    
     def resample(self, target_rate: int, sample_count: int) -> Tuple[np.ndarray, np.ndarray]:
         if target_rate <= 0 or sample_count <= 0 or not self.ir:
             return np.empty(0), np.empty(0)
@@ -443,6 +452,8 @@ class HRCalculator:
     MA_SIZE = 4
     MAX_NUM_PEAKS = 15
 
+    # ==================== SIGNAL QUALITY ASSESSMENT ====================
+    
     @staticmethod
     def calc_signal_quality_index(
         ir_data: np.ndarray,
@@ -558,6 +569,8 @@ class HRCalculator:
         
         return float(total_sqi)
 
+    # ==================== HEART RATE CALCULATION ====================
+    
     @classmethod
     def calc_hr_and_spo2(
         cls,
@@ -607,7 +620,7 @@ class HRCalculator:
         
         # Convert for peak detection (filtered)
         ir = ir_for_peaks.astype(np.int32)
-        
+
         # Keep RAW data for SpO2 calculation (không filter)
         ir_raw_int = ir_raw.astype(np.int32)
         red = red_raw.astype(np.int32)
@@ -797,6 +810,8 @@ class HRCalculator:
 
         return hr, hr_valid, spo2, spo2_valid
 
+    # ==================== PEAK DETECTION & VALIDATION ====================
+    
     @staticmethod
     def validate_peak_valley_pairs(
         x: np.ndarray,
@@ -1021,6 +1036,8 @@ class MAX30102Sensor(BaseSensor):
     DEFAULT_MEASUREMENT_WINDOW = 8.0  # seconds
     MIN_MEASUREMENT_SECONDS = 3.0  # Giảm xuống 3.0s để bắt đầu tính toán sớm hơn (150 samples @ 50 SPS)
 
+    # ==================== INITIALIZATION & SETUP ====================
+    
     def __init__(self, config: Dict[str, Any]):
         super().__init__("MAX30102", config)
 
@@ -1131,6 +1148,8 @@ class MAX30102Sensor(BaseSensor):
             self.hardware = None
             return False
 
+    # ==================== DATA READING & PROCESSING ====================
+    
     def read_raw_data(self) -> Optional[Dict[str, Any]]:
         if not self.hardware:
             return {"read_size": 0}
@@ -1214,6 +1233,8 @@ class MAX30102Sensor(BaseSensor):
 
         return self._build_payload(sample_count)
 
+    # ==================== MEASUREMENT CONTROL ====================
+    
     def begin_measurement_session(self) -> None:
         self.window.reset()
         self.hr_history.clear()
@@ -1240,6 +1261,8 @@ class MAX30102Sensor(BaseSensor):
         self.session.elapsed = 0.0
         self.measurement.ready = False
 
+    # ==================== BIOMETRIC COMPUTATION ====================
+    
     def _compute_biometrics(self) -> Tuple[float, bool, float, bool]:
         """Tính toán HR và SpO₂ từ dữ liệu cửa sổ."""
         if not self.finger.detected:
@@ -1276,6 +1299,8 @@ class MAX30102Sensor(BaseSensor):
 
         return hr_value, hr_valid, spo2_value, spo2_valid
 
+    # ==================== FINGER DETECTION ====================
+    
     def _detect_finger(self) -> bool:
         """Phát hiện ngón tay với scoring đơn giản và hysteresis."""
         recent_ir = self.window.recent_array(seconds=1.2, channel="ir")
@@ -1302,7 +1327,7 @@ class MAX30102Sensor(BaseSensor):
             # Reset metrics
             self.finger.signal_ratio = 0.0
             self.finger.signal_amplitude = 0.0
-            self.finger.signal_quality = float(self.measurement.signal_quality_ir)
+            self.finger.signal_quality = 0.0
             self.finger.detection_score = 0.0
             return bool(self.finger.detected)
 
@@ -1401,6 +1426,8 @@ class MAX30102Sensor(BaseSensor):
         self.finger.detected = finger_now
         return finger_now
 
+    # ==================== STATUS & VALIDATION ====================
+    
     def _determine_status(self) -> str:
         if not self.finger.detected:
             return "no_finger"
@@ -1498,6 +1525,8 @@ class MAX30102Sensor(BaseSensor):
         # Reset finger detection state
         self.finger.reset()
 
+    # ==================== UTILITY & CONFIGURATION ====================
+    
     def set_led_amplitude(self, red_amplitude: int, ir_amplitude: int) -> bool:
         if not self.hardware:
             return False
@@ -1521,6 +1550,8 @@ class MAX30102Sensor(BaseSensor):
     def validate_spo2(self, spo2: float) -> bool:
         return 70.0 <= spo2 <= 100.0
 
+    # ==================== CLEANUP ====================
+    
     def stop(self) -> bool:
         result = super().stop()
         self.end_measurement_session()

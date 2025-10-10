@@ -25,6 +25,8 @@ class BloodPressureSensor(BaseSensor):
         is_measuring (bool): Trạng thái đang đo
     """
     
+    # ==================== INITIALIZATION & SETUP ====================
+    
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize blood pressure sensor
@@ -43,26 +45,7 @@ class BloodPressureSensor(BaseSensor):
         """
         pass
     
-    def read_raw_data(self) -> Optional[Dict[str, Any]]:
-        """
-        Read raw pressure and oscillation data
-        
-        Returns:
-            Dict with 'pressure' and 'oscillation' values or None if error
-        """
-        pass
-    
-    def process_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Process oscillometric data to calculate BP values
-        
-        Args:
-            raw_data: Raw pressure and oscillation data
-            
-        Returns:
-            Dict with 'systolic', 'diastolic', 'map', 'timestamp' or None if error
-        """
-        pass
+    # ==================== MEASUREMENT CONTROL ====================
     
     def start_measurement(self) -> bool:
         """
@@ -103,6 +86,29 @@ class BloodPressureSensor(BaseSensor):
             
         Returns:
             List of pressure and oscillation data points
+        """
+        pass
+    
+    # ==================== DATA PROCESSING & CALCULATION ====================
+    
+    def read_raw_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Read raw pressure and oscillation data
+        
+        Returns:
+            Dict with 'pressure' and 'oscillation' values or None if error
+        """
+        pass
+    
+    def process_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Process oscillometric data to calculate BP values
+        
+        Args:
+            raw_data: Raw pressure and oscillation data
+            
+        Returns:
+            Dict with 'systolic', 'diastolic', 'map', 'timestamp' or None if error
         """
         pass
     
@@ -168,6 +174,8 @@ class BloodPressureSensor(BaseSensor):
         """
         pass
     
+    # ==================== SAFETY & EMERGENCY ====================
+    
     def _safety_check(self) -> bool:
         """
         Kiểm tra an toàn trước khi đo
@@ -186,6 +194,8 @@ class BloodPressureSensor(BaseSensor):
         """
         pass
     
+    # ==================== CALIBRATION & STATUS ====================
+    
     def calibrate_pressure_sensor(self, reference_pressures: List[float], 
                                  measured_values: List[float]) -> bool:
         """
@@ -193,7 +203,7 @@ class BloodPressureSensor(BaseSensor):
         
         Args:
             reference_pressures: Known reference pressures
-            measured_values: Corresponding measured ADC values
+            measured_values: Corresponding ADC values
             
         Returns:
             bool: True if calibration successful

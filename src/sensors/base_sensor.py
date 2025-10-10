@@ -29,6 +29,8 @@ class BaseSensor(ABC):
         reading_thread (threading.Thread): Thread đọc dữ liệu
     """
     
+    # ==================== INITIALIZATION & SETUP ====================
+    
     def __init__(self, name: str, config: Dict[str, Any]):
         """
         Initialize base sensor
@@ -59,38 +61,32 @@ class BaseSensor(ABC):
         
         self.logger.info(f"Initialized {name} sensor with sample rate {self.sample_rate} Hz")
     
-    @abstractmethod
-    def initialize(self) -> bool:
+    def _validate_config(self, config: Dict[str, Any]) -> bool:
         """
-        Khởi tạo hardware sensor
-        
-        Returns:
-            bool: True nếu khởi tạo thành công
-        """
-        pass
-    
-    @abstractmethod
-    def read_raw_data(self) -> Optional[Dict[str, Any]]:
-        """
-        Đọc dữ liệu thô từ sensor
-        
-        Returns:
-            Dict chứa raw data hoặc None nếu lỗi
-        """
-        pass
-    
-    @abstractmethod
-    def process_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """
-        Xử lý dữ liệu thô thành dữ liệu có nghĩa
+        Validate cấu hình sensor
         
         Args:
-            raw_data: Dữ liệu thô từ sensor
+            config: Dictionary cấu hình
             
         Returns:
-            Dict chứa processed data hoặc None nếu lỗi
+            bool: True nếu config hợp lệ
         """
-        pass
+        required_keys = ['sample_rate']
+        
+        for key in required_keys:
+            if key not in config:
+                self.logger.error(f"Missing required config key: {key}")
+                return False
+                
+        # Validate sample rate
+        sample_rate = config.get('sample_rate', 0)
+        if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
+            self.logger.error(f"Invalid sample_rate: {sample_rate}")
+            return False
+            
+        return True
+    
+    # ==================== LIFECYCLE MANAGEMENT ====================
     
     def start(self) -> bool:
         """
@@ -136,6 +132,41 @@ class BaseSensor(ABC):
         self.logger.info(f"Stopped {self.name} sensor")
         return True
     
+    # ==================== DATA HANDLING ====================
+    
+    @abstractmethod
+    def initialize(self) -> bool:
+        """
+        Khởi tạo hardware sensor
+        
+        Returns:
+            bool: True nếu khởi tạo thành công
+        """
+        pass
+    
+    @abstractmethod
+    def read_raw_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Đọc dữ liệu thô từ sensor
+        
+        Returns:
+            Dict chứa raw data hoặc None nếu lỗi
+        """
+        pass
+    
+    @abstractmethod
+    def process_data(self, raw_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Xử lý dữ liệu thô thành dữ liệu có nghĩa
+        
+        Args:
+            raw_data: Dữ liệu thô từ sensor
+            
+        Returns:
+            Dict chứa processed data hoặc None nếu lỗi
+        """
+        pass
+    
     def get_latest_data(self) -> Optional[Dict[str, Any]]:
         """
         Lấy dữ liệu mới nhất đã xử lý
@@ -146,24 +177,6 @@ class BaseSensor(ABC):
         with self.data_lock:
             return self.latest_data.copy() if self.latest_data else None
     
-    def set_sample_rate(self, rate: float) -> bool:
-        """
-        Thiết lập tần số lấy mẫu
-        
-        Args:
-            rate: Tần số mong muốn (Hz)
-        
-        Returns:
-            bool: True nếu set thành công
-        """
-        if rate <= 0:
-            self.logger.error("Sample rate must be positive")
-            return False
-            
-        self.sample_rate = rate
-        self.logger.info(f"Set {self.name} sample rate to {rate} Hz")
-        return True
-    
     def set_data_callback(self, callback: Callable[[str, Dict[str, Any]], None]):
         """
         Set callback function cho khi có data mới
@@ -172,6 +185,8 @@ class BaseSensor(ABC):
             callback: Function nhận (sensor_name, data) khi có data mới
         """
         self.data_callback = callback
+    
+    # ==================== READING LOOP ====================
     
     def _reading_loop(self):
         """
@@ -241,6 +256,26 @@ class BaseSensor(ABC):
             self.logger.critical(f"{self.name} sensor exceeded max error count, stopping")
             self.is_running = False
     
+    # ==================== UTILITY METHODS ====================
+    
+    def set_sample_rate(self, rate: float) -> bool:
+        """
+        Thiết lập tần số lấy mẫu
+        
+        Args:
+            rate: Tần số mong muốn (Hz)
+        
+        Returns:
+            bool: True nếu set thành công
+        """
+        if rate <= 0:
+            self.logger.error("Sample rate must be positive")
+            return False
+            
+        self.sample_rate = rate
+        self.logger.info(f"Set {self.name} sample rate to {rate} Hz")
+        return True
+    
     def get_sensor_info(self) -> Dict[str, Any]:
         """
         Lấy thông tin sensor
@@ -309,28 +344,3 @@ class BaseSensor(ABC):
             return 'initializing'
         else:
             return 'running'
-    
-    def _validate_config(self, config: Dict[str, Any]) -> bool:
-        """
-        Validate cấu hình sensor
-        
-        Args:
-            config: Dictionary cấu hình
-            
-        Returns:
-            bool: True nếu config hợp lệ
-        """
-        required_keys = ['sample_rate']
-        
-        for key in required_keys:
-            if key not in config:
-                self.logger.error(f"Missing required config key: {key}")
-                return False
-                
-        # Validate sample rate
-        sample_rate = config.get('sample_rate', 0)
-        if not isinstance(sample_rate, (int, float)) or sample_rate <= 0:
-            self.logger.error(f"Invalid sample_rate: {sample_rate}")
-            return False
-            
-        return True
