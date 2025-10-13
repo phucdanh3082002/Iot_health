@@ -492,9 +492,12 @@ class HealthMonitorApp(MDApp):
                 self.current_data['measurement_ready'] = sensor.measurement.ready
                 self.current_data['measurement_elapsed'] = sensor.session.elapsed
                 
-                # Get signal quality metrics
+                # Get signal quality metrics (including new metadata from refactor)
                 self.current_data['signal_quality_ir'] = sensor.measurement.signal_quality_ir
                 self.current_data['signal_quality_red'] = sensor.measurement.signal_quality_red
+                self.current_data['signal_quality_index'] = sensor.measurement.signal_quality_index  # NEW: SQI 0-100
+                self.current_data['spo2_cv'] = sensor.measurement.spo2_cv  # NEW: Coefficient of variation
+                self.current_data['peak_count'] = sensor.measurement.peak_count  # NEW: Number of peaks
                 
                 # Get measurement status from sensor methods
                 hr_status = sensor.get_heart_rate_status() if hasattr(sensor, 'get_heart_rate_status') else 'unknown'
@@ -511,6 +514,7 @@ class HealthMonitorApp(MDApp):
                     'finger_detected': sensor.finger.detected,
                     'signal_quality_ir': sensor.measurement.signal_quality_ir,
                     'signal_quality_red': sensor.measurement.signal_quality_red,
+                    'signal_quality_index': sensor.measurement.signal_quality_index,  # NEW: SQI
                     'buffer_fill': buffer_fill,
                     'readings_count': sensor.measurement.readings_count,
                     'measurement_valid': sensor.measurement.hr_valid and sensor.measurement.spo2_valid,
@@ -523,6 +527,8 @@ class HealthMonitorApp(MDApp):
                     'finger_signal_amplitude': sensor.finger.signal_amplitude,
                     'finger_signal_ratio': sensor.finger.signal_ratio,
                     'finger_signal_quality': sensor.finger.signal_quality,
+                    'spo2_cv': sensor.measurement.spo2_cv,  # NEW: CV for quality tracking
+                    'peak_count': sensor.measurement.peak_count,  # NEW: Peak count
                 }
             else:
                 # Fallback to data from callback if sensor not available
@@ -536,6 +542,9 @@ class HealthMonitorApp(MDApp):
                 self.current_data['measurement_elapsed'] = data.get('measurement_elapsed', 0.0)
                 self.current_data['signal_quality_ir'] = data.get('signal_quality_ir', 0)
                 self.current_data['signal_quality_red'] = data.get('signal_quality_red', 0)
+                self.current_data['signal_quality_index'] = data.get('signal_quality_index', 0.0)  # NEW: SQI
+                self.current_data['spo2_cv'] = data.get('spo2_cv', 0.0)  # NEW: CV
+                self.current_data['peak_count'] = data.get('peak_count', 0)  # NEW: Peak count
 
                 self.current_data['sensor_status']['MAX30102'] = {
                     'status': data.get('status', 'streaming'),
@@ -544,6 +553,7 @@ class HealthMonitorApp(MDApp):
                     'finger_detected': self.current_data['finger_detected'],
                     'signal_quality_ir': data.get('signal_quality_ir', 0),
                     'signal_quality_red': data.get('signal_quality_red', 0),
+                    'signal_quality_index': data.get('signal_quality_index', 0.0),  # NEW: SQI
                     'buffer_fill': data.get('buffer_fill', 0),
                     'measurement_valid': self.current_data['hr_valid'] and self.current_data['spo2_valid'],
                     'window_fill': self.current_data['window_fill'],
@@ -552,6 +562,8 @@ class HealthMonitorApp(MDApp):
                     'measurement_elapsed': self.current_data['measurement_elapsed'],
                     'measurement_duration': data.get('measurement_duration'),
                     'finger_detection_score': data.get('finger_detection_score', 0.0),
+                    'spo2_cv': data.get('spo2_cv', 0.0),  # NEW: CV
+                    'peak_count': data.get('peak_count', 0),  # NEW: Peak count
                     'finger_signal_amplitude': data.get('finger_signal_amplitude', 0.0),
                     'finger_signal_ratio': data.get('finger_signal_ratio', 0.0),
                     'finger_signal_quality': data.get('finger_signal_quality', 0.0),
@@ -714,7 +726,7 @@ class HealthMonitorApp(MDApp):
             if 'MAX30102' in self.sensors and self.sensors['MAX30102']:
                 sensor = self.sensors['MAX30102']
                 if hasattr(sensor, 'is_running') and sensor.is_running:
-                    # TRUY CẬP ĐÚNG SAU REFACTOR
+                    # TRUY CẬP ĐÚNG SAU REFACTOR - Bao gồm metadata mới
                     self.current_data['heart_rate'] = sensor.measurement.heart_rate
                     self.current_data['spo2'] = sensor.measurement.spo2
                     self.current_data['hr_valid'] = sensor.measurement.hr_valid
@@ -725,6 +737,9 @@ class HealthMonitorApp(MDApp):
                     self.current_data['measurement_elapsed'] = sensor.session.elapsed
                     self.current_data['signal_quality_ir'] = sensor.measurement.signal_quality_ir
                     self.current_data['signal_quality_red'] = sensor.measurement.signal_quality_red
+                    self.current_data['signal_quality_index'] = sensor.measurement.signal_quality_index  # NEW: SQI
+                    self.current_data['spo2_cv'] = sensor.measurement.spo2_cv  # NEW: CV
+                    self.current_data['peak_count'] = sensor.measurement.peak_count  # NEW: Peak count
                     
                     # Update status
                     if not sensor.finger.detected:

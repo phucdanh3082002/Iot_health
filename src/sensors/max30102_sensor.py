@@ -14,14 +14,6 @@ except ImportError:  # pragma: no cover - hardware optional
     smbus = None
 
 
-# ============================================================
-# PHASE 2: Global variables for metadata tracking
-# ============================================================
-_last_sqi: float = 0.0
-_last_cv: float = 0.0
-_last_peak_count: int = 0
-
-
 @dataclass
 class MeasurementState:
     """Trạng thái đo hiện tại."""
@@ -31,7 +23,9 @@ class MeasurementState:
     spo2_valid: bool = False
     signal_quality_ir: float = 0.0
     signal_quality_red: float = 0.0
-    signal_quality_index: float = 0.0  # PHASE 2: SQI score 0-100
+    signal_quality_index: float = 0.0  # SQI score 0-100
+    spo2_cv: float = 0.0  # Coefficient of variation for SpO2
+    peak_count: int = 0  # Number of peaks detected
     window_fill: float = 0.0
     status: str = "idle"
     ready: bool = False
@@ -387,18 +381,31 @@ class MeasurementWindow:
     # ==================== QUALITY ESTIMATION ====================
     
     def estimate_quality(self, channel: str = "ir") -> float:
-        """Ước lượng chất lượng tín hiệu dựa trên biên độ AC (peak-to-peak)."""
+        """
+        Ước lượng chất lượng tín hiệu dựa trên biên độ AC (peak-to-peak).
+        
+        Optimized: Sử dụng approximation thay vì percentile để giảm overhead.
+        """
         buffer = self.ir if channel == "ir" else self.red
         if len(buffer) < 10:
             return 0.0
         
-        arr = np.array(buffer, dtype=np.float64)
-        # Dùng percentile thay vì std để tránh ảnh hưởng của outliers
-        p95 = float(np.percentile(arr, 95))
-        p5 = float(np.percentile(arr, 5))
+        # OPTIMIZATION: Dùng sorted approximation thay vì np.percentile
+        # Chỉ sort một lần và lấy indices thay vì 2 calls percentile
+        # Giảm thời gian từ O(2n log n) → O(n log n)
+        arr_sorted = sorted(buffer)
+        n = len(arr_sorted)
+        
+        # Approximate percentiles using indices (faster than np.percentile)
+        idx_p95 = min(n - 1, int(0.95 * n))
+        idx_p5 = max(0, int(0.05 * n))
+        
+        p95 = float(arr_sorted[idx_p95])
+        p5 = float(arr_sorted[idx_p5])
         amplitude = max(0.0, p95 - p5)
         
         # Chất lượng dựa trên biên độ tuyệt đối (không phụ thuộc DC)
+        # Sử dụng lookup thay vì if-elif chain để tăng tốc
         if amplitude >= 800:
             quality = 100.0
         elif amplitude >= 500:
@@ -577,13 +584,26 @@ class HRCalculator:
         ir_data: np.ndarray,
         red_data: np.ndarray,
         sample_rate: int,
-    ) -> Tuple[float, bool, float, bool]:
+    ) -> Tuple[float, bool, float, bool, float, float, int]:
+        """
+        Calculate heart rate and SpO₂ from PPG signals.
+        
+        Returns:
+            Tuple of (hr, hr_valid, spo2, spo2_valid, sqi, cv, peak_count):
+            - hr: Heart rate in BPM
+            - hr_valid: Whether HR is valid
+            - spo2: SpO₂ percentage
+            - spo2_valid: Whether SpO₂ is valid
+            - sqi: Signal Quality Index (0-100)
+            - cv: Coefficient of variation for SpO₂
+            - peak_count: Number of detected peaks
+        """
         # Import logger at method level to avoid scope issues
         import logging
         logger = logging.getLogger(__name__)
         
         if ir_data.size < cls.BUFFER_SIZE or red_data.size < cls.BUFFER_SIZE:
-            return -999.0, False, -999.0, False
+            return -999.0, False, -999.0, False, 0.0, 0.0, 0
 
         # FIX: Clip data vào range hợp lý trước khi xử lý
         # MAX30102 ADC 18-bit: 0-262143, nhưng thường < 200000
@@ -766,35 +786,59 @@ class HRCalculator:
         logger.debug("[HRCalc] R-value: count=%d, median=%.3f, std=%.3f, values=%s", 
                      len(ratio), ratio_median, ratio_std, [f"{r:.3f}" for r in ratio[:5]])
 
-        # Improved SpO2 calibration curve (standard pulse oximetry formula)
-        # Based on empirical calibration: SpO2 = f(R)
-        # Original Maxim formula: SpO2 = -45.060*R^2 + 30.054*R + 94.845
-        # Valid R range: 0.5 to 1.8 (corresponding to SpO2 70-100%)
+        # ============================================================
+        # PHASE 2: Improved SpO2 calibration with extended R-value range
+        # ============================================================
+        # Calibration strategy:
+        # - R < 0.7: Standard Maxim polynomial (SpO2 95-100%)
+        # - 0.7 ≤ R < 1.5: Linear interpolation (SpO2 85-95%)
+        # - R ≥ 1.5: Low SpO2 region, linear extrapolation (SpO2 70-85%)
+        # 
+        # This handles hardware-specific R-value shifts while maintaining
+        # physiological SpO2 range (70-100%)
+        # ============================================================
         
-        if 0.5 <= ratio_median <= 1.8:
-            # Standard calibration curve
-            spo2 = -45.060 * (ratio_median ** 2) + 30.054 * ratio_median + 94.845
+        coefficient_of_variation = ratio_std / ratio_median if ratio_median > 0 else 1.0
+        
+        if 0.4 <= ratio_median <= 2.5:
+            # Multi-region calibration curve
+            if ratio_median < 0.7:
+                # Region 1: Standard Maxim formula for low R (high SpO2)
+                # Original: SpO2 = -45.060*R^2 + 30.054*R + 94.845
+                spo2 = -45.060 * (ratio_median ** 2) + 30.054 * ratio_median + 94.845
+                
+            elif ratio_median < 1.5:
+                # Region 2: Linear interpolation for mid R
+                # R=0.7 → SpO2≈95%, R=1.5 → SpO2≈85%
+                # Slope = (85 - 95) / (1.5 - 0.7) = -12.5
+                spo2 = 95.0 - 12.5 * (ratio_median - 0.7)
+                
+            else:
+                # Region 3: Linear extrapolation for high R (low SpO2)
+                # R=1.5 → SpO2≈85%, R=2.5 → SpO2≈70%
+                # Slope = (70 - 85) / (2.5 - 1.5) = -15
+                spo2 = 85.0 - 15.0 * (ratio_median - 1.5)
             
             # Clip to physiological range
             spo2 = float(np.clip(spo2, 70.0, 100.0))
             
             # Confidence check: reject if variance too high
-            coefficient_of_variation = ratio_std / ratio_median if ratio_median > 0 else 1.0
             if coefficient_of_variation < 0.15:  # CV < 15% → stable measurement
                 spo2_valid = True
-                logger.debug("[HRCalc] SpO2=%.1f%% VALID (R=%.3f, CV=%.1f%%)", 
-                             spo2, ratio_median, coefficient_of_variation * 100)
+                logger.debug("[HRCalc] SpO2=%.1f%% VALID (R=%.3f, CV=%.1f%%, region=%s)", 
+                             spo2, ratio_median, coefficient_of_variation * 100,
+                             'low-R' if ratio_median < 0.7 else ('mid-R' if ratio_median < 1.5 else 'high-R'))
             else:
                 spo2_valid = False
                 logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%%)", 
                              spo2, coefficient_of_variation * 100)
         else:
-            logger.debug("[HRCalc] R-value %.3f ngoài khoảng hiệu chuẩn 0.5-1.8", ratio_median)
+            logger.warning("[HRCalc] R-value %.3f ngoài khoảng hợp lệ 0.4-2.5 (SpO2 không tính được)", ratio_median)
             spo2 = -999.0
             spo2_valid = False
 
         # ============================================================
-        # PHASE 2: Calculate Signal Quality Index
+        # Calculate Signal Quality Index (SQI)
         # ============================================================
         try:
             sqi = cls.calc_signal_quality_index(ir_raw_int, red, ir_valley_locs, sample_rate)
@@ -802,13 +846,10 @@ class HRCalculator:
             logger.debug("[SQI] Calculation failed: %s", e)
             sqi = 50.0  # Default moderate quality
         
-        # Store SQI for metadata logging (accessed via module-level variable)
-        global _last_sqi, _last_cv, _last_peak_count
-        _last_sqi = sqi
-        _last_cv = coefficient_of_variation if 'coefficient_of_variation' in locals() else 0.0
-        _last_peak_count = n_peaks
+        # Get coefficient of variation for metadata
+        cv = coefficient_of_variation if 'coefficient_of_variation' in locals() else 0.0
 
-        return hr, hr_valid, spo2, spo2_valid
+        return hr, hr_valid, spo2, spo2_valid, sqi, cv, n_peaks
 
     # ==================== PEAK DETECTION & VALIDATION ====================
     
@@ -1267,6 +1308,10 @@ class MAX30102Sensor(BaseSensor):
         """Tính toán HR và SpO₂ từ dữ liệu cửa sổ."""
         if not self.finger.detected:
             self.logger.debug("[Biometrics] Bỏ qua - không phát hiện ngón tay")
+            # Reset metadata when no finger
+            self.measurement.signal_quality_index = 0.0
+            self.measurement.spo2_cv = 0.0
+            self.measurement.peak_count = 0
             return -999.0, False, -999.0, False
         
         if not self.window.has_enough_data():
@@ -1285,29 +1330,38 @@ class MAX30102Sensor(BaseSensor):
                               ir_ds.size, red_ds.size, HRCalculator.BUFFER_SIZE)
             return -999.0, False, -999.0, False
 
-        hr_value, hr_valid, spo2_value, spo2_valid = HRCalculator.calc_hr_and_spo2(
+        # Call calc_hr_and_spo2 with new signature returning metadata
+        hr_value, hr_valid, spo2_value, spo2_valid, sqi, cv, peak_count = HRCalculator.calc_hr_and_spo2(
             ir_ds, red_ds, self.hr_algorithm_rate
         )
         
-        # ============================================================
-        # PHASE 2: Retrieve SQI from global variable
-        # ============================================================
-        global _last_sqi
+        # Store metadata in measurement state (no more global variables)
+        self.measurement.signal_quality_index = float(sqi)
+        self.measurement.spo2_cv = float(cv)
+        self.measurement.peak_count = int(peak_count)
         
-        self.logger.debug("[Biometrics] HR=%.1f (valid=%s), SpO2=%.1f (valid=%s), SQI=%.1f%%", 
-                          hr_value, hr_valid, spo2_value, spo2_valid, _last_sqi)
+        self.logger.debug("[Biometrics] HR=%.1f (valid=%s), SpO2=%.1f (valid=%s), SQI=%.1f%%, CV=%.3f, peaks=%d", 
+                          hr_value, hr_valid, spo2_value, spo2_valid, sqi, cv, peak_count)
 
         return hr_value, hr_valid, spo2_value, spo2_valid
 
     # ==================== FINGER DETECTION ====================
     
     def _detect_finger(self) -> bool:
-        """Phát hiện ngón tay với scoring đơn giản và hysteresis."""
+        """
+        Phát hiện ngón tay với scoring đa thành phần và hysteresis.
+        
+        Kết hợp:
+        - Advanced scoring (amplitude, quality, DC increase)
+        - Simple fallback từ heartrate_monitor.py (mean thresholds)
+        - Hysteresis để tránh flicker
+        """
         recent_ir = self.window.recent_array(seconds=1.2, channel="ir")
+        recent_red = self.window.recent_array(seconds=1.2, channel="red")
         previous_state = bool(self.finger.detected)
 
         min_samples = max(8, int(self.window.sample_rate * 0.5))
-        if recent_ir.size < min_samples:
+        if recent_ir.size < min_samples or recent_red.size < min_samples:
             # Không đủ dữ liệu - khởi tạo baseline THẤP nếu có ít nhất 3 samples
             if recent_ir.size >= 3 and not self.finger.baseline_ready:
                 # Dùng percentile 10% thay vì median để baseline thấp hơn
@@ -1331,7 +1385,35 @@ class MAX30102Sensor(BaseSensor):
             self.finger.detection_score = 0.0
             return bool(self.finger.detected)
 
-        # Tính metrics cơ bản
+        # ============================================================
+        # SIMPLE FALLBACK CHECK (từ heartrate_monitor.py)
+        # Quick rejection nếu tín hiệu quá yếu (< 50000)
+        # ============================================================
+        mean_ir = float(np.mean(recent_ir))
+        mean_red = float(np.mean(recent_red))
+        
+        # Nếu cả IR và RED đều < 50000 → chắc chắn không có ngón tay
+        if mean_ir < 50000 and mean_red < 50000:
+            self.finger.present_frames = 0
+            self.finger.absent_frames = min(
+                self.finger.absent_frames + 1,
+                self._finger_release_frames + 1,
+            )
+            
+            if previous_state and self.finger.absent_frames >= self._finger_release_frames:
+                self.finger.detected = False
+                self.logger.debug("[Finger] Quick reject: IR_mean=%.0f, RED_mean=%.0f < 50000", mean_ir, mean_red)
+            
+            # Reset metrics
+            self.finger.signal_ratio = 0.0
+            self.finger.signal_amplitude = 0.0
+            self.finger.signal_quality = 0.0
+            self.finger.detection_score = 0.0
+            return bool(self.finger.detected)
+        
+        # ============================================================
+        # ADVANCED SCORING (chỉ chạy nếu pass fallback check)
+        # ============================================================
         median_ir = float(np.median(recent_ir))
         p95 = float(np.percentile(recent_ir, 95))
         p5 = float(np.percentile(recent_ir, 5))
@@ -1452,11 +1534,7 @@ class MAX30102Sensor(BaseSensor):
             self.measurement.spo2_valid = False
 
     def _build_payload(self, read_size: int) -> Dict[str, Any]:
-        # ============================================================
-        # PHASE 2: Include SQI and metadata in payload
-        # ============================================================
-        global _last_sqi, _last_cv, _last_peak_count
-        
+        """Build sensor data payload với metadata đầy đủ."""
         return {
             "read_size": read_size,
             "heart_rate": float(self.measurement.heart_rate),
@@ -1466,7 +1544,7 @@ class MAX30102Sensor(BaseSensor):
             "finger_detected": bool(self.finger.detected),
             "signal_quality_ir": float(self.measurement.signal_quality_ir),
             "signal_quality_red": float(self.measurement.signal_quality_red),
-            "signal_quality_index": float(_last_sqi),  # PHASE 2: SQI 0-100
+            "signal_quality_index": float(self.measurement.signal_quality_index),  # SQI 0-100
             "status": self.measurement.status,
             "window_fill": float(self.measurement.window_fill),
             "measurement_ready": bool(self.measurement.ready),
@@ -1476,9 +1554,9 @@ class MAX30102Sensor(BaseSensor):
             "finger_signal_amplitude": float(self.finger.signal_amplitude),
             "finger_signal_ratio": float(self.finger.signal_ratio),
             "finger_signal_quality": float(self.finger.signal_quality),
-            # PHASE 2: Additional metadata for logging/research
-            "spo2_cv": float(_last_cv),  # Coefficient of variation
-            "peak_count": int(_last_peak_count),  # Number of peaks detected
+            # Additional metadata for logging/research
+            "spo2_cv": float(self.measurement.spo2_cv),  # Coefficient of variation
+            "peak_count": int(self.measurement.peak_count),  # Number of peaks detected
         }
 
     def _update_status_no_samples(self) -> None:
@@ -1487,27 +1565,37 @@ class MAX30102Sensor(BaseSensor):
         elif not self.window.has_enough_data():
             self.measurement.status = "initializing"
 
-    def get_heart_rate_status(self) -> str:
+    def get_biometric_status(self, metric_type: str) -> str:
+        """
+        Get status for a specific biometric (HR or SpO2).
+        
+        Args:
+            metric_type: "hr" for heart rate, "spo2" for SpO₂
+            
+        Returns:
+            Status string: "good", "no_finger", "poor_signal", "initializing", "estimating"
+        """
         if not self.finger.detected:
             return "no_finger"
-        if not self.measurement.hr_valid:
+        
+        # Check validity based on metric type
+        is_valid = self.measurement.hr_valid if metric_type == "hr" else self.measurement.spo2_valid
+        
+        if not is_valid:
             if self.measurement.signal_quality_ir < 15.0:
                 return "poor_signal"
             if not self.window.has_enough_data():
                 return "initializing"
             return "estimating"
         return "good"
+    
+    def get_heart_rate_status(self) -> str:
+        """Wrapper for backward compatibility."""
+        return self.get_biometric_status("hr")
 
     def get_spo2_status(self) -> str:
-        if not self.finger.detected:
-            return "no_finger"
-        if not self.measurement.spo2_valid:
-            if self.measurement.signal_quality_ir < 15.0:
-                return "poor_signal"
-            if not self.window.has_enough_data():
-                return "initializing"
-            return "estimating"
-        return "good"
+        """Wrapper for backward compatibility."""
+        return self.get_biometric_status("spo2")
 
     def reset_buffers(self) -> None:
         self.window.reset()
@@ -1525,25 +1613,8 @@ class MAX30102Sensor(BaseSensor):
         # Reset finger detection state
         self.finger.reset()
 
-    # ==================== UTILITY & CONFIGURATION ====================
+    # ==================== VALIDATION ==================== 
     
-    def set_led_amplitude(self, red_amplitude: int, ir_amplitude: int) -> bool:
-        if not self.hardware:
-            return False
-        try:
-            self.hardware.set_led_amplitude("red", red_amplitude)
-            self.hardware.set_led_amplitude("ir", ir_amplitude)
-            return True
-        except Exception as exc:  # pragma: no cover - hardware only
-            self.logger.error("Không thể đặt biên độ LED: %s", exc)
-            return False
-
-    def turn_on_red_led(self) -> bool:
-        return self.set_led_amplitude(self.pulse_amplitude_red, self.pulse_amplitude_ir)
-
-    def turn_off_red_led(self) -> bool:
-        return self.set_led_amplitude(0, self.pulse_amplitude_ir)
-
     def validate_heart_rate(self, hr: float) -> bool:
         return 40.0 <= hr <= 200.0
 

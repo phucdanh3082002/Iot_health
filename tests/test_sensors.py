@@ -1,646 +1,509 @@
-#!/usr/bin/env python3
 """
-Test Suite for IoT Health Monitoring Sensors
-Comprehensive testing program for MAX30102, MLX90614, and other sensors
+Test Sensors - Menu-driven interface for hardware validation and calibration.
+
+Supports I²C scanning, sensor testing, and calibration data collection.
+Follows BaseSensor pattern and non-blocking design.
 """
+
 import sys
-import os
 import time
-import threading
-import signal
-import yaml
-from pathlib import Path
-from typing import Dict, Any, Optional
 import logging
+from typing import Dict, Any, Optional, List
+from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-# Import sensor modules
-from src.sensors.max30102_sensor import MAX30102Sensor
-from src.sensors.mlx90614_sensor import MLX90614Sensor
-from src.sensors.blood_pressure_sensor import BloodPressureSensor
-from src.utils.logger import setup_logger
+# Import sensor classes
+try:
+    from src.sensors.max30102_sensor import MAX30102Sensor
+    from src.sensors.mlx90614_sensor import MLX90614Sensor
+    from src.sensors.base_sensor import BaseSensor
+except ImportError as e:
+    logging.error(f"Could not import sensor classes: {e}")
+    MAX30102Sensor = None
+    MLX90614Sensor = None
+    BaseSensor = None
 
-class SensorTestSuite:
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/home/pi/Desktop/IoT_health/logs/test_sensors.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class SensorTester:
     """
-    Comprehensive test suite for all IoT health monitoring sensors
+    Menu-driven tester for sensors with calibration support.
+    
+    Provides options for I²C scanning, sensor testing, and calibration data collection.
     """
     
     def __init__(self):
-        """Initialize test suite"""
-        self.logger = logging.getLogger("TestSuite")
-        self.logger.setLevel(logging.INFO)
+        # Sửa type hint để tránh lỗi "Variable not allowed in type expression"
+        # Dùng Any vì BaseSensor có thể là None nếu import fail
+        self.sensors: Dict[str, Any] = {}
+        self.config = self._load_config()
         
-        # Create console handler if not exists
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            handler.setFormatter(formatter)
-            self.logger.addHandler(handler)
-        
-        self.config = self.load_config()
-        self.sensors = {}
-        self.test_running = False
-        self.test_threads = []
-        
-        # Register signal handler for clean shutdown
-        signal.signal(signal.SIGINT, self.signal_handler)
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        
-    def load_config(self) -> Dict[str, Any]:
-        """Load configuration from app_config.yaml"""
+    def _load_config(self) -> Dict[str, Any]:
+        """Load sensor config from app_config.yaml."""
         try:
-            config_path = project_root / "config" / "app_config.yaml"
-            with open(config_path, 'r', encoding='utf-8') as f:
+            import yaml
+            config_path = project_root / 'config' / 'app_config.yaml'
+            with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
-            self.logger.info(f"Configuration loaded from {config_path}")
-            return config
+            return config.get('sensors', {})
         except Exception as e:
-            self.logger.error(f"Failed to load configuration: {e}")
+            logger.error(f"Failed to load config: {e}")
             return {}
     
-    def signal_handler(self, signum, frame):
-        """Handle interrupt signals for clean shutdown"""
-        self.logger.info(f"Received signal {signum}, shutting down...")
-        self.stop_all_tests()
-        sys.exit(0)
-    
-    def stop_all_tests(self):
-        """Stop all running tests and sensors"""
-        self.test_running = False
-        
-        # Stop all sensors
-        for sensor_name, sensor in self.sensors.items():
-            try:
-                if sensor and hasattr(sensor, 'stop'):
-                    sensor.stop()
-                    self.logger.info(f"Stopped {sensor_name} sensor")
-            except Exception as e:
-                self.logger.error(f"Error stopping {sensor_name}: {e}")
-        
-        # Wait for test threads to complete
-        for thread in self.test_threads:
-            if thread.is_alive():
-                thread.join(timeout=2)
-    
-    def print_menu(self):
-        """Print main test menu"""
-        print("\n" + "="*60)
-        print("🏥 IoT HEALTH MONITORING - SENSOR TEST SUITE")
-        print("="*60)
-        print("1. 🫀 Test MAX30102 (Heart Rate & SpO2)")
-        print("2. 🌡️  Test MLX90614 (Temperature)")
-        print("3. 🩸 Test Blood Pressure System")
-        print("4. 🔍 I2C Device Scan")
-        print("5. 📊 Real-time Monitoring Dashboard")
-        print("6. 🧪 Hardware Validation Tests")
-        print("7. 📈 Sensor Performance Analysis")
-        print("8. 🔧 Sensor Configuration Test")
-        print("9. 💾 Data Logging Test")
-        print("0. ❌ Exit")
-        print("="*60)
-    
-    def test_max30102_comprehensive(self):
-        """Comprehensive MAX30102 sensor test"""
-        print("\n🫀 MAX30102 COMPREHENSIVE TEST")
-        print("-" * 40)
-        
-        try:
-            # Initialize sensor
-            max30102_config = self.config.get('sensors', {}).get('max30102', {})
-            sensor = MAX30102Sensor(max30102_config)
-            self.sensors['max30102'] = sensor
-            
-            # Test 1: Hardware initialization
-            print("🔧 Testing hardware initialization...")
-            if not sensor.initialize():
-                print("❌ Hardware initialization failed!")
-                return False
-            print("✅ Hardware initialized successfully")
-            
-            # Test 2: Start sensor
-            print("🚀 Starting sensor...")
-            if not sensor.start():
-                print("❌ Sensor start failed!")
-                return False
-            print("✅ Sensor started successfully")
-            
-            # Test 3: LED configuration test
-            print("💡 Testing LED configuration...")
-            led_test_passed = self.test_max30102_leds(sensor)
-            
-            # Test 4: Real-time data collection
-            print("📊 Starting real-time data collection...")
-            print("📌 Place your finger on the sensor and keep it steady")
-            print("⏱️  Data collection will run for 30 seconds")
-            print("🛑 Press Ctrl+C to stop early")
-            
-            self.test_running = True
-            data_collection_thread = threading.Thread(
-                target=self.max30102_data_collection,
-                args=(sensor, 30)
-            )
-            data_collection_thread.start()
-            self.test_threads.append(data_collection_thread)
-            
-            # Wait for data collection to complete
-            data_collection_thread.join()
-            
-            # Test 5: Signal quality assessment
-            print("📈 Assessing signal quality...")
-            self.assess_max30102_signal_quality(sensor)
-            
-            # Test 6: Measurement validation
-            print("🔍 Validating measurements...")
-            self.validate_max30102_measurements(sensor)
-            
-            print("✅ MAX30102 comprehensive test completed")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"MAX30102 test failed: {e}")
-            print(f"❌ Test failed: {e}")
-            return False
-        finally:
-            if 'max30102' in self.sensors and self.sensors['max30102']:
-                self.sensors['max30102'].stop()
-    
-    def test_max30102_leds(self, sensor: MAX30102Sensor) -> bool:
-        """Test MAX30102 LED functionality"""
-        try:
-            print("  🔴 Testing RED LED...")
-            if sensor.set_led_amplitude(0x7F, 0x00):  # RED only
-                time.sleep(2)
-                print("  ✅ RED LED test passed")
-            else:
-                print("  ❌ RED LED test failed")
-                return False
-            
-            print("  🔵 Testing IR LED...")
-            if sensor.set_led_amplitude(0x00, 0x7F):  # IR only
-                time.sleep(2)
-                print("  ✅ IR LED test passed")
-            else:
-                print("  ❌ IR LED test failed")
-                return False
-            
-            print("  🟣 Testing both LEDs...")
-            if sensor.set_led_amplitude(0x7F, 0x7F):  # Both LEDs
-                time.sleep(2)
-                print("  ✅ Both LEDs test passed")
-            else:
-                print("  ❌ Both LEDs test failed")
-                return False
-            
-            return True
-            
-        except Exception as e:
-            print(f"  ❌ LED test failed: {e}")
-            return False
-    
-    def max30102_data_collection(self, sensor: MAX30102Sensor, duration: int):
-        """Collect and display MAX30102 data in real-time"""
-        start_time = time.time()
-        sample_count = 0
-        valid_readings = 0
-        
-        print(f"\n{'Time':<8} {'HR':<6} {'SpO2':<6} {'Finger':<8} {'Status':<15} {'Quality':<8}")
-        print("-" * 65)
-        
-        while self.test_running and (time.time() - start_time) < duration:
-            try:
-                # Get sensor data through callback mechanism
-                if hasattr(sensor, 'heart_rate') and hasattr(sensor, 'spo2'):
-                    elapsed = int(time.time() - start_time)
-                    hr = sensor.heart_rate
-                    spo2 = sensor.spo2
-                    finger = "YES" if sensor.finger_detected else "NO"
-                    status = getattr(sensor, 'status', 'Unknown')
-                    quality = f"{sensor.signal_quality_ir:.1f}" if hasattr(sensor, 'signal_quality_ir') else "N/A"
-                    
-                    print(f"{elapsed:>3}s     {hr:>5.1f} {spo2:>5.1f}  {finger:<8} {status:<15} {quality:<8}")
-                    
-                    sample_count += 1
-                    if sensor.hr_valid or sensor.spo2_valid:
-                        valid_readings += 1
-                
-                time.sleep(1)
-                
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                self.logger.error(f"Data collection error: {e}")
-                break
-        
-        self.test_running = False
-        print(f"\n📊 Data Collection Summary:")
-        print(f"   Total samples: {sample_count}")
-        print(f"   Valid readings: {valid_readings}")
-        print(f"   Success rate: {(valid_readings/max(sample_count,1)*100):.1f}%")
-    
-    def assess_max30102_signal_quality(self, sensor: MAX30102Sensor):
-        """Assess MAX30102 signal quality"""
-        try:
-            stability = sensor.get_measurement_stability()
-            
-            print("  📈 Signal Quality Assessment:")
-            print(f"     HR Stability: {stability.get('hr_stability', 0):.2f}")
-            print(f"     SpO2 Stability: {stability.get('spo2_stability', 0):.2f}")
-            print(f"     IR Signal Quality: {sensor.signal_quality_ir:.1f}")
-            print(f"     RED Signal Quality: {sensor.signal_quality_red:.1f}")
-            
-            # Overall quality assessment
-            avg_quality = (sensor.signal_quality_ir + sensor.signal_quality_red) / 2
-            if avg_quality > 80:
-                print("  ✅ Excellent signal quality")
-            elif avg_quality > 60:
-                print("  ⚠️  Good signal quality")
-            elif avg_quality > 40:
-                print("  ⚠️  Fair signal quality - consider repositioning finger")
-            else:
-                print("  ❌ Poor signal quality - check sensor placement")
-                
-        except Exception as e:
-            print(f"  ❌ Signal quality assessment failed: {e}")
-    
-    def validate_max30102_measurements(self, sensor: MAX30102Sensor):
-        """Validate MAX30102 measurements"""
-        try:
-            hr = sensor.heart_rate
-            spo2 = sensor.spo2
-            
-            print("  🔍 Measurement Validation:")
-            
-            # Heart rate validation
-            hr_status = sensor.get_heart_rate_status()
-            hr_valid = sensor.validate_heart_rate(hr)
-            print(f"     Heart Rate: {hr:.1f} BPM - {hr_status} ({'Valid' if hr_valid else 'Invalid'})")
-            
-            # SpO2 validation  
-            spo2_status = sensor.get_spo2_status()
-            spo2_valid = sensor.validate_spo2(spo2)
-            print(f"     SpO2: {spo2:.1f}% - {spo2_status} ({'Valid' if spo2_valid else 'Invalid'})")
-            
-            # Overall assessment
-            if hr_valid and spo2_valid:
-                print("  ✅ All measurements are valid")
-            elif hr_valid or spo2_valid:
-                print("  ⚠️  Some measurements are valid")
-            else:
-                print("  ❌ Measurements need improvement")
-                
-        except Exception as e:
-            print(f"  ❌ Measurement validation failed: {e}")
-    
-    def test_mlx90614(self):
-        """Test MLX90614 temperature sensor"""
-        print("\n🌡️ MLX90614 TEMPERATURE SENSOR TEST")
-        print("-" * 40)
-        
-        try:
-            # Initialize sensor
-            mlx_config = self.config.get('sensors', {}).get('mlx90614', {})
-            sensor = MLX90614Sensor(mlx_config)
-            self.sensors['mlx90614'] = sensor
-            
-            # Test initialization
-            print("🔧 Testing sensor initialization...")
-            if not sensor.initialize():
-                print("❌ Sensor initialization failed!")
-                return False
-            print("✅ Sensor initialized successfully")
-            
-            # Start sensor
-            print("🚀 Starting sensor...")
-            if not sensor.start():
-                print("❌ Sensor start failed!")
-                return False
-            print("✅ Sensor started successfully")
-            
-            # Collect temperature data
-            print("📊 Collecting temperature data for 15 seconds...")
-            print("📌 Point sensor towards your forehead")
-            
-            self.test_running = True
-            start_time = time.time()
-            
-            print(f"\n{'Time':<8} {'Object':<8} {'Ambient':<8} {'Status':<15}")
-            print("-" * 45)
-            
-            while self.test_running and (time.time() - start_time) < 15:
-                try:
-                    elapsed = int(time.time() - start_time)
-                    obj_temp = getattr(sensor, 'object_temperature', 0)
-                    amb_temp = getattr(sensor, 'ambient_temperature', 0)
-                    status = getattr(sensor, 'status', 'Unknown')
-                    
-                    print(f"{elapsed:>3}s     {obj_temp:>6.2f}°C {amb_temp:>6.2f}°C {status:<15}")
-                    
-                    time.sleep(1)
-                    
-                except KeyboardInterrupt:
-                    break
-                except Exception as e:
-                    self.logger.error(f"Temperature reading error: {e}")
-                    break
-            
-            print("✅ MLX90614 test completed")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"MLX90614 test failed: {e}")
-            print(f"❌ Test failed: {e}")
-            return False
-        finally:
-            if 'mlx90614' in self.sensors and self.sensors['mlx90614']:
-                self.sensors['mlx90614'].stop()
-    
-    def scan_i2c_devices(self):
-        """Scan for I2C devices"""
-        print("\n🔍 I2C DEVICE SCAN")
-        print("-" * 30)
-        
+    def scan_i2c(self) -> None:
+        """Scan I²C bus for connected devices."""
         try:
             import smbus
-            bus = smbus.SMBus(1)  # I2C bus 1
-            
-            devices_found = []
-            expected_devices = {
-                0x57: "MAX30102 (Heart Rate/SpO2)",
-                0x5A: "MLX90614 (Temperature)"
-            }
-            
-            print("Scanning I2C addresses 0x03-0x77...")
-            
+            bus = smbus.SMBus(1)  # I²C bus 1 on Pi
+            logger.info("Scanning I²C bus 1...")
+            found = []
             for addr in range(0x03, 0x78):
                 try:
                     bus.read_byte(addr)
-                    devices_found.append(addr)
-                    device_name = expected_devices.get(addr, "Unknown device")
-                    print(f"✅ Found device at 0x{addr:02X}: {device_name}")
+                    found.append(hex(addr))
                 except:
                     pass
-            
-            if not devices_found:
-                print("❌ No I2C devices found!")
-                print("   Check connections and ensure I2C is enabled")
+            if found:
+                logger.info(f"Found I²C devices: {', '.join(found)}")
             else:
-                print(f"\n📊 Scan complete: {len(devices_found)} device(s) found")
-                
-                # Check for expected devices
-                missing_devices = []
-                for addr, name in expected_devices.items():
-                    if addr not in devices_found:
-                        missing_devices.append(f"0x{addr:02X} ({name})")
-                
-                if missing_devices:
-                    print("⚠️  Missing expected devices:")
-                    for device in missing_devices:
-                        print(f"   - {device}")
-            
-            return len(devices_found) > 0
-            
+                logger.warning("No I²C devices found")
         except ImportError:
-            print("❌ smbus library not available")
-            return False
+            logger.error("smbus not available - install with: pip install smbus2")
         except Exception as e:
-            print(f"❌ I2C scan failed: {e}")
-            return False
+            logger.error(f"I²C scan failed: {e}")
     
-    def real_time_dashboard(self):
-        """Real-time monitoring dashboard"""
-        print("\n📊 REAL-TIME MONITORING DASHBOARD")
-        print("-" * 45)
-        print("🚀 Starting all sensors...")
+    def test_max30102(self) -> None:
+        """Test MAX30102 sensor basic functionality."""
+        if not MAX30102Sensor:
+            logger.error("MAX30102Sensor not available")
+            return
         
         try:
-            # Initialize all sensors
-            sensors_to_start = []
+            sensor = MAX30102Sensor(self.config.get('max30102', {}))
+            sensor.initialize()
+            sensor.begin_measurement_session()
             
-            # MAX30102
-            if self.config.get('sensors', {}).get('max30102', {}).get('enabled', False):
-                max30102 = MAX30102Sensor(self.config['sensors']['max30102'])
-                if max30102.initialize() and max30102.start():
-                    self.sensors['max30102'] = max30102
-                    sensors_to_start.append('MAX30102')
-                    print("✅ MAX30102 started")
+            logger.info("Testing MAX30102 for 10 seconds...")
+            start_time = time.time()
+            while time.time() - start_time < 10:
+                data = sensor.read_raw_data()
+                if data:
+                    logger.info(f"MAX30102 data: {data}")
+                time.sleep(1)
+            
+            sensor.end_measurement_session()  # Fix: Use correct method name
+            logger.info("MAX30102 test completed")
+        except Exception as e:
+            logger.error(f"MAX30102 test failed: {e}")
+    
+    def calibrate_max30102(self) -> None:
+        """
+        Collect calibration data for MAX30102 SpO₂.
+        
+        Runs measurement and collects R-values for manual calibration.
+        User should compare with reference SpO₂ device.
+        
+        IMPORTANT: Measure your actual SpO₂ with a reference pulse oximeter
+        and note the value along with the R-value for calibration curve update.
+        """
+        if not MAX30102Sensor:
+            logger.error("MAX30102Sensor not available")
+            return
+        
+        r_values: List[float] = []
+        
+        # Prompt for reference SpO2 value
+        print("\n" + "="*60)
+        print("MAX30102 SpO₂ Calibration Tool")
+        print("="*60)
+        print("Before starting, please:")
+        print("1. Place finger on MAX30102 sensor")
+        print("2. Measure SpO₂ with reference pulse oximeter")
+        print("3. Enter the reference SpO₂ value below")
+        print("="*60)
+        
+        try:
+            ref_spo2_str = input("Enter reference SpO₂ (70-100%, or press Enter to skip): ").strip()
+            ref_spo2 = None
+            if ref_spo2_str:
+                ref_spo2 = float(ref_spo2_str)
+                if not (70 <= ref_spo2 <= 100):
+                    logger.warning("Invalid SpO₂ value, proceeding without reference")
+                    ref_spo2 = None
                 else:
-                    print("❌ MAX30102 failed to start")
+                    logger.info(f"Reference SpO₂: {ref_spo2:.1f}%")
+        except (ValueError, EOFError):
+            logger.warning("No reference SpO₂ provided, proceeding without reference")
+            ref_spo2 = None
+        
+        try:
+            sensor = MAX30102Sensor(self.config.get('max30102', {}))
+            sensor.initialize()
+            sensor.begin_measurement_session()
             
-            # MLX90614
-            if self.config.get('sensors', {}).get('mlx90614', {}).get('enabled', False):
-                mlx90614 = MLX90614Sensor(self.config['sensors']['mlx90614'])
-                if mlx90614.initialize() and mlx90614.start():
-                    self.sensors['mlx90614'] = mlx90614
-                    sensors_to_start.append('MLX90614')
-                    print("✅ MLX90614 started")
+            logger.info("Collecting MAX30102 calibration data for 30 seconds...")
+            logger.info("Keep finger STILL on sensor for accurate measurement")
+            logger.info("R-values will be logged - note them for calibration curve update")
+            
+            start_time = time.time()
+            while time.time() - start_time < 30:
+                data = sensor.read_raw_data()
+                if data and 'ir' in data and 'red' in data:
+                    # Calculate R-value from IR/RED data
+                    ir_data = data['ir']
+                    red_data = data['red']
+                    
+                    if len(ir_data) > 0 and len(red_data) > 0:
+                        # Simple AC/DC calculation (mean as DC, std as AC approximation)
+                        ir_mean = sum(ir_data) / len(ir_data)
+                        red_mean = sum(red_data) / len(red_data)
+                        
+                        # Avoid division by zero
+                        if ir_mean > 0 and red_mean > 0:
+                            r_val = red_mean / ir_mean  # Simplified R-value
+                            r_values.append(r_val)
+                            logger.info(f"R-value: {r_val:.3f} (IR_mean={ir_mean:.0f}, RED_mean={red_mean:.0f}, count={len(r_values)})")
+                
+                time.sleep(1)
+            
+            sensor.end_measurement_session()
+            
+            if r_values:
+                avg_r = sum(r_values) / len(r_values)
+                median_r = sorted(r_values)[len(r_values) // 2]
+                std_r = (sum((r - avg_r) ** 2 for r in r_values) / len(r_values)) ** 0.5
+                cv_r = (std_r / avg_r * 100) if avg_r > 0 else 0
+                
+                print("\n" + "="*60)
+                print("CALIBRATION RESULTS")
+                print("="*60)
+                logger.info(f"Collected {len(r_values)} R-values")
+                logger.info(f"Average R-value: {avg_r:.3f}")
+                logger.info(f"Median R-value: {median_r:.3f}")
+                logger.info(f"Standard deviation: {std_r:.3f} (CV={cv_r:.1f}%)")
+                logger.info(f"R-value range: {min(r_values):.3f} - {max(r_values):.3f}")
+                
+                if ref_spo2 is not None:
+                    print("="*60)
+                    logger.info(f"Reference SpO₂: {ref_spo2:.1f}%")
+                    logger.info(f"R-value at SpO₂={ref_spo2:.1f}%: {median_r:.3f}")
+                    print("="*60)
+                    logger.info("ACTION REQUIRED: Update calibration curve in max30102_sensor.py")
+                    logger.info(f"Add calibration point: R={median_r:.3f} → SpO₂={ref_spo2:.1f}%")
                 else:
-                    print("❌ MLX90614 failed to start")
+                    print("="*60)
+                    logger.warning("No reference SpO₂ provided - cannot update calibration curve")
+                    logger.info("Please re-run with reference pulse oximeter for accurate calibration")
+                
+                print("="*60)
+            else:
+                logger.warning("No R-values collected - check sensor connection or finger placement")
+                
+        except Exception as e:
+            logger.error(f"MAX30102 calibration failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def collect_reference_spo2(self) -> None:
+        """
+        Collect SpO₂ reference data for calibration curve update.
+        
+        This creates calibration points (R-value, SpO₂) that can be used
+        to update the calibration curve in max30102_sensor.py.
+        
+        Process:
+        1. Measure SpO₂ with reference pulse oximeter
+        2. Enter reference SpO₂ value
+        3. Place finger on MAX30102 sensor
+        4. Collect R-values for 30 seconds
+        5. Save calibration point to file
+        """
+        if not MAX30102Sensor:
+            logger.error("MAX30102Sensor not available")
+            return
+        
+        # Check if calibration data file exists
+        calib_file = project_root / 'data' / 'spo2_calibration_points.csv'
+        
+        print("\n" + "="*70)
+        print("SpO₂ REFERENCE DATA COLLECTION")
+        print("="*70)
+        print("This will create calibration points for accurate SpO₂ measurement.")
+        print("You need a reference pulse oximeter (standard medical device).")
+        print("")
+        print("STEPS:")
+        print("1. Measure your SpO₂ with reference device")
+        print("2. Enter the reference SpO₂ value below")
+        print("3. Place SAME finger on MAX30102 sensor")
+        print("4. Keep finger STILL for 30 seconds")
+        print("5. Calibration point will be saved")
+        print("="*70)
+        
+        # Get reference SpO2
+        try:
+            ref_spo2_str = input("Enter reference SpO₂ (70-100%): ").strip()
+            ref_spo2 = float(ref_spo2_str)
+            if not (70 <= ref_spo2 <= 100):
+                logger.error("SpO₂ must be between 70-100%")
+                return
+        except (ValueError, EOFError):
+            logger.error("Invalid SpO₂ value")
+            return
+        
+        logger.info(f"Reference SpO₂: {ref_spo2:.1f}%")
+        
+        # Confirm finger placement
+        input("Press Enter when finger is placed on MAX30102 sensor...")
+        
+        r_values: List[float] = []
+        
+        try:
+            sensor = MAX30102Sensor(self.config.get('max30102', {}))
+            sensor.initialize()
+            sensor.begin_measurement_session()
             
-            if not sensors_to_start:
-                print("❌ No sensors available for monitoring")
+            logger.info("Collecting R-values for 30 seconds...")
+            logger.info("Keep finger COMPLETELY STILL for accurate calibration")
+            
+            start_time = time.time()
+            while time.time() - start_time < 30:
+                data = sensor.read_raw_data()
+                if data and 'ir' in data and 'red' in data:
+                    ir_data = data['ir']
+                    red_data = data['red']
+                    
+                    if len(ir_data) > 0 and len(red_data) > 0:
+                        ir_mean = sum(ir_data) / len(ir_data)
+                        red_mean = sum(red_data) / len(red_data)
+                        
+                        if ir_mean > 0 and red_mean > 0:
+                            r_val = red_mean / ir_mean
+                            r_values.append(r_val)
+                            logger.info(f"R-value: {r_val:.3f} (count={len(r_values)})")
+                
+                time.sleep(1)
+            
+            sensor.end_measurement_session()
+            
+            if not r_values:
+                logger.error("No R-values collected - check sensor connection")
                 return
             
-            # Start monitoring
-            print(f"\n📈 Monitoring {len(sensors_to_start)} sensor(s)")
-            print("📌 Place finger on MAX30102 and point MLX90614 to forehead")
-            print("🛑 Press Ctrl+C to stop monitoring")
+            # Calculate statistics
+            avg_r = sum(r_values) / len(r_values)
+            median_r = sorted(r_values)[len(r_values) // 2]
+            std_r = (sum((r - avg_r) ** 2 for r in r_values) / len(r_values)) ** 0.5
+            cv_r = (std_r / avg_r * 100) if avg_r > 0 else 0
             
-            self.test_running = True
-            start_time = time.time()
+            # Save calibration point
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # Print header
-            header = f"{'Time':<8}"
-            if 'MAX30102' in sensors_to_start:
-                header += f" {'HR':<6} {'SpO2':<6} {'Finger':<8}"
-            if 'MLX90614' in sensors_to_start:
-                header += f" {'Temp':<7}"
-            print(f"\n{header}")
-            print("-" * len(header))
+            # Create data directory if not exists
+            calib_file.parent.mkdir(exist_ok=True)
             
-            while self.test_running:
-                try:
-                    elapsed = int(time.time() - start_time)
-                    row = f"{elapsed:>3}s    "
-                    
-                    # MAX30102 data
-                    if 'max30102' in self.sensors:
-                        sensor = self.sensors['max30102']
-                        hr = getattr(sensor, 'heart_rate', 0)
-                        spo2 = getattr(sensor, 'spo2', 0)
-                        finger = "YES" if getattr(sensor, 'finger_detected', False) else "NO"
-                        row += f" {hr:>5.1f} {spo2:>5.1f}  {finger:<8}"
-                    
-                    # MLX90614 data
-                    if 'mlx90614' in self.sensors:
-                        sensor = self.sensors['mlx90614']
-                        temp = getattr(sensor, 'object_temperature', 0)
-                        row += f" {temp:>6.2f}°C"
-                    
-                    print(row)
-                    time.sleep(2)
-                    
-                except KeyboardInterrupt:
-                    break
-                except Exception as e:
-                    self.logger.error(f"Dashboard error: {e}")
-                    break
+            # Check if file exists to determine if we need header
+            file_exists = calib_file.exists()
             
-            print("\n📊 Real-time monitoring stopped")
-            
-        except Exception as e:
-            self.logger.error(f"Dashboard failed: {e}")
-            print(f"❌ Dashboard failed: {e}")
-        finally:
-            self.test_running = False
-    
-    def hardware_validation(self):
-        """Hardware validation tests"""
-        print("\n🧪 HARDWARE VALIDATION TESTS")
-        print("-" * 35)
-        
-        validation_results = {}
-        
-        # Test 1: I2C bus functionality
-        print("1️⃣ Testing I2C bus functionality...")
-        i2c_result = self.scan_i2c_devices()
-        validation_results['i2c'] = i2c_result
-        
-        # Test 2: GPIO availability (if needed for future sensors)
-        print("\n2️⃣ Testing GPIO availability...")
-        gpio_result = self.test_gpio_availability()
-        validation_results['gpio'] = gpio_result
-        
-        # Test 3: System resources
-        print("\n3️⃣ Testing system resources...")
-        resource_result = self.test_system_resources()
-        validation_results['resources'] = resource_result
-        
-        # Summary
-        print(f"\n📊 VALIDATION SUMMARY")
-        print("-" * 25)
-        passed = sum(1 for result in validation_results.values() if result)
-        total = len(validation_results)
-        
-        for test, result in validation_results.items():
-            status = "✅ PASS" if result else "❌ FAIL"
-            print(f"   {test.upper()}: {status}")
-        
-        print(f"\n🎯 Overall: {passed}/{total} tests passed")
-        
-        if passed == total:
-            print("✅ All hardware validation tests passed!")
-        else:
-            print("⚠️  Some hardware validation tests failed")
-            print("   Please check hardware connections and system configuration")
-    
-    def test_gpio_availability(self) -> bool:
-        """Test GPIO availability"""
-        try:
-            # Check if GPIO is available
-            import RPi.GPIO as GPIO
-            GPIO.setmode(GPIO.BCM)
-            print("   ✅ GPIO library available")
-            GPIO.cleanup()
-            return True
-        except ImportError:
-            print("   ❌ RPi.GPIO library not available")
-            return False
-        except Exception as e:
-            print(f"   ❌ GPIO test failed: {e}")
-            return False
-    
-    def test_system_resources(self) -> bool:
-        """Test system resources"""
-        try:
-            import psutil
-            
-            # Check CPU usage
-            cpu_percent = psutil.cpu_percent(interval=1)
-            print(f"   📊 CPU Usage: {cpu_percent:.1f}%")
-            
-            # Check memory usage
-            memory = psutil.virtual_memory()
-            print(f"   💾 Memory Usage: {memory.percent:.1f}%")
-            
-            # Check available space
-            disk = psutil.disk_usage('/')
-            print(f"   💿 Disk Usage: {disk.percent:.1f}%")
-            
-            # All good if CPU < 80%, Memory < 80%, Disk < 90%
-            if cpu_percent < 80 and memory.percent < 80 and disk.percent < 90:
-                print("   ✅ System resources OK")
-                return True
-            else:
-                print("   ⚠️  High system resource usage detected")
-                return False
+            with open(calib_file, 'a') as f:
+                if not file_exists:
+                    f.write("# SpO₂ Calibration Points\n")
+                    f.write("# Format: timestamp,reference_spo2,r_median,r_avg,r_std,cv_percent,count\n")
                 
-        except ImportError:
-            print("   ⚠️  psutil not available, skipping resource check")
-            return True
-        except Exception as e:
-            print(f"   ❌ Resource test failed: {e}")
-            return False
-    
-    def run_tests(self):
-        """Main test runner"""
-        print("🏥 IoT Health Monitoring - Sensor Test Suite")
-        print("=" * 50)
-        
-        while True:
-            try:
-                self.print_menu()
-                choice = input("\n👉 Select test option (0-9): ").strip()
-                
-                if choice == '0':
-                    print("\n👋 Exiting test suite...")
-                    self.stop_all_tests()
-                    break
-                elif choice == '1':
-                    self.test_max30102_comprehensive()
-                elif choice == '2':
-                    self.test_mlx90614()
-                elif choice == '3':
-                    print("\n🩸 Blood pressure test not yet implemented")
-                elif choice == '4':
-                    self.scan_i2c_devices()
-                elif choice == '5':
-                    self.real_time_dashboard()
-                elif choice == '6':
-                    self.hardware_validation()
-                elif choice == '7':
-                    print("\n📈 Performance analysis not yet implemented")
-                elif choice == '8':
-                    print("\n🔧 Configuration test not yet implemented")
-                elif choice == '9':
-                    print("\n💾 Data logging test not yet implemented")
+                f.write(f"{timestamp},{ref_spo2:.1f},{median_r:.4f},{avg_r:.4f},{std_r:.4f},{cv_r:.2f},{len(r_values)}\n")
+            
+            print("\n" + "="*70)
+            print("CALIBRATION POINT SAVED")
+            print("="*70)
+            logger.info(f"Reference SpO₂: {ref_spo2:.1f}%")
+            logger.info(f"R-value (median): {median_r:.4f}")
+            logger.info(f"R-value (avg): {avg_r:.4f}")
+            logger.info(f"R-value stability: CV={cv_r:.2f}% ({len(r_values)} samples)")
+            logger.info(f"Saved to: {calib_file}")
+            print("="*70)
+            
+            # Show current calibration curve prediction
+            if 0.4 <= median_r <= 2.5:
+                if median_r < 0.7:
+                    predicted = -45.060 * (median_r ** 2) + 30.054 * median_r + 94.845
+                elif median_r < 1.5:
+                    predicted = 95.0 - 12.5 * (median_r - 0.7)
                 else:
-                    print("❌ Invalid option. Please select 0-9.")
+                    predicted = 85.0 - 15.0 * (median_r - 1.5)
                 
-                if choice != '0':
-                    input("\n📌 Press Enter to continue...")
+                predicted = max(70.0, min(100.0, predicted))
+                
+                print("CURRENT CALIBRATION PREDICTION:")
+                logger.info(f"Predicted SpO₂: {predicted:.1f}% (vs reference {ref_spo2:.1f}%)")
+                logger.info(f"Difference: {predicted - ref_spo2:.1f}%")
+                
+                if abs(predicted - ref_spo2) > 5:
+                    print("⚠️  LARGE DIFFERENCE - Calibration curve needs update!")
+                    logger.warning("Calibration curve may need adjustment for this R-value range")
+                else:
+                    print("✅ Good match - Current calibration is reasonable")
+            else:
+                logger.warning(f"R-value {median_r:.3f} outside calibration range")
+            
+            print("="*70)
+            print("NEXT STEPS:")
+            print("1. Repeat with different SpO₂ levels (exercise, breath holding, etc.)")
+            print("2. Collect 5-10 calibration points across SpO₂ range 80-100%")
+            print("3. Run calibration curve fitting script (to be implemented)")
+            print("4. Update max30102_sensor.py with new calibration curve")
+            print("="*70)
+            
+        except Exception as e:
+            logger.error(f"Reference data collection failed: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def show_calibration_points(self) -> None:
+        """
+        Display current SpO₂ calibration points and statistics.
+        """
+        calib_file = project_root / 'data' / 'spo2_calibration_points.csv'
+        
+        if not calib_file.exists():
+            logger.info("No calibration points found")
+            logger.info(f"File location: {calib_file}")
+            logger.info("Use option 5 to collect reference data first")
+            return
+        
+        try:
+            points = []
+            with open(calib_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or not line:
+                        continue
+                    parts = line.split(',')
+                    if len(parts) >= 3:
+                        timestamp = parts[0]
+                        ref_spo2 = float(parts[1])
+                        r_median = float(parts[2])
+                        points.append((timestamp, ref_spo2, r_median))
+            
+            if not points:
+                logger.info("No valid calibration points found")
+                return
+            
+            print("\n" + "="*80)
+            print("CURRENT SpO₂ CALIBRATION POINTS")
+            print("="*80)
+            print(f"{'Timestamp':<20} {'Ref SpO₂':<10} {'R-value':<10} {'Predicted':<10} {'Diff':<8}")
+            print("-" * 80)
+            
+            total_diff = 0
+            for timestamp, ref_spo2, r_val in points:
+                # Calculate current prediction
+                if r_val < 0.7:
+                    predicted = -45.060 * (r_val ** 2) + 30.054 * r_val + 94.845
+                elif r_val < 1.5:
+                    predicted = 95.0 - 12.5 * (r_val - 0.7)
+                else:
+                    predicted = 85.0 - 15.0 * (r_val - 1.5)
+                
+                predicted = max(70.0, min(100.0, predicted))
+                diff = predicted - ref_spo2
+                total_diff += abs(diff)
+                
+                print(f"{timestamp:<20} {ref_spo2:<10.1f} {r_val:<10.3f} {predicted:<10.1f} {diff:<8.1f}")
+            
+            avg_error = total_diff / len(points)
+            print("-" * 80)
+            logger.info(f"Total points: {len(points)}")
+            logger.info(f"Average absolute error: {avg_error:.1f}%")
+            
+            if avg_error > 3:
+                print("⚠️  HIGH ERROR - Calibration curve needs improvement!")
+                logger.warning("Consider collecting more points or adjusting calibration curve")
+            else:
+                print("✅ Good calibration accuracy")
+            
+            print("="*80)
+            
+        except Exception as e:
+            logger.error(f"Failed to read calibration points: {e}")
+    
+    def test_mlx90614(self) -> None:
+        """Test MLX90614 sensor basic functionality."""
+        if not MLX90614Sensor:
+            logger.error("MLX90614Sensor not available")
+            return
+        
+        try:
+            sensor = MLX90614Sensor(self.config.get('mlx90614', {}))
+            sensor.initialize()
+            
+            logger.info("Testing MLX90614 for 10 seconds...")
+            start_time = time.time()
+            while time.time() - start_time < 10:
+                data = sensor.read_raw_data()
+                if data:
+                    logger.info(f"MLX90614 data: {data}")
+                time.sleep(1)
+            
+            sensor.close()
+            logger.info("MLX90614 test completed")
+        except Exception as e:
+            logger.error(f"MLX90614 test failed: {e}")
+    
+    def run_menu(self) -> None:
+        """Run interactive menu for sensor testing."""
+        while True:
+            print("\n=== Sensor Test Menu ===")
+            print("1. Scan I²C bus")
+            print("2. Test MAX30102")
+            print("3. Calibrate MAX30102 (collect R-values)")
+            print("4. Test MLX90614")
+            print("5. Collect SpO₂ Reference Data (with reference device)")
+            print("6. Show Calibration Points")
+            print("7. Exit")
+            
+            try:
+                choice = input("Select option (1-7): ").strip()
+                
+                if choice == '1':
+                    self.scan_i2c()
+                elif choice == '2':
+                    self.test_max30102()
+                elif choice == '3':
+                    self.calibrate_max30102()
+                elif choice == '4':
+                    self.test_mlx90614()
+                elif choice == '5':
+                    self.collect_reference_spo2()
+                elif choice == '6':
+                    self.show_calibration_points()
+                elif choice == '7':
+                    logger.info("Exiting sensor tester")
+                    break
+                else:
+                    print("Invalid choice")
                     
             except KeyboardInterrupt:
-                print("\n\n🛑 Test interrupted by user")
-                self.stop_all_tests()
+                logger.info("Interrupted by user")
                 break
             except Exception as e:
-                self.logger.error(f"Test runner error: {e}")
-                print(f"❌ Error: {e}")
-                input("\n📌 Press Enter to continue...")
-
+                logger.error(f"Menu error: {e}")
 
 def main():
-    """Main function"""
-    print("🚀 Starting IoT Health Sensor Test Suite...")
-    
-    test_suite = SensorTestSuite()
-    test_suite.run_tests()
-    
-    print("👋 Test suite finished. Goodbye!")
+    """Main entry point."""
+    tester = SensorTester()
+    tester.run_menu()
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

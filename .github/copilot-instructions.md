@@ -9,7 +9,7 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 - **Data**: SQLite local + MQTT/REST sync
 - **UI**: Kivy/KivyMD
 - **TTS**: PiperTTS
-
+- **TTS**: pi os bookworm 64 bit
 ---
 
 ## ⚠️ QUY TẮC BẮT BUỘC
@@ -87,7 +87,7 @@ requirements.txt
 
 ## 🛠️ Phần cứng đã chốt
 
-* **Raspberry Pi 4B sử dụng pi os wormbook 64 bit**, **Waveshare 3.5" SPI** (fbcp mirror).
+* **Raspberry Pi 4B sử dụng pi os bookworm 64 bit**, **Waveshare 3.5" SPI** (fbcp mirror).
 * **Âm thanh**: **MAX98357A I²S** (BCLK=GPIO18, LRCLK=GPIO19, DIN=GPIO21) → loa 3–5 W / 4–8 Ω (BTL OUT+ / OUT−; không nối loa xuống GND).
 * **Cảm biến**:
   * **MAX30102 (I²C 0x57)**: HR/SpO₂.

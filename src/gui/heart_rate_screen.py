@@ -210,14 +210,17 @@ class HeartRateMeasurementController:
         finger_present = bool(status.get("finger_detected", sensor_data.get("finger_detected", False)))
         window_fill = float(status.get("window_fill", sensor_data.get("window_fill", 0.0)) or 0.0)
         signal_quality = float(status.get("signal_quality_ir", sensor_data.get("signal_quality_ir", 0.0)) or 0.0)
+        signal_quality_index = float(status.get("signal_quality_index", sensor_data.get("signal_quality_index", 0.0)) or 0.0)  # NEW: SQI
         detection_score = float(status.get("finger_detection_score", sensor_data.get("finger_detection_score", 0.0)) or 0.0)
         detection_amp = float(status.get("finger_signal_amplitude", sensor_data.get("finger_signal_amplitude", 0.0)) or 0.0)
         detection_ratio = float(status.get("finger_signal_ratio", sensor_data.get("finger_signal_ratio", 0.0)) or 0.0)
+        spo2_cv = float(status.get("spo2_cv", sensor_data.get("spo2_cv", 0.0)) or 0.0)  # NEW: CV
+        peak_count = int(status.get("peak_count", sensor_data.get("peak_count", 0)) or 0)  # NEW: Peak count
         measurement_ready = bool(status.get("measurement_ready", sensor_data.get("measurement_ready", False)))
         measurement_status = status.get("status", "idle") or "idle"
 
-        # Hiển thị thông tin tín hiệu (không phụ thuộc state)
-        self.screen.show_signal_info(signal_quality, detection_score, detection_amp, detection_ratio)
+        # Hiển thị thông tin tín hiệu (không phụ thuộc state) - Bao gồm SQI và metadata
+        self.screen.show_signal_info(signal_quality, signal_quality_index, detection_score, detection_amp, detection_ratio, spo2_cv, peak_count)
 
         hr_valid = bool(sensor_data.get("hr_valid"))
         spo2_valid = bool(sensor_data.get("spo2_valid"))
@@ -823,12 +826,42 @@ class HeartRateScreen(Screen):
         else:
             self.status_label.text = "⏱️  Đang xử lý kết quả..."
 
-    def show_signal_info(self, quality: float, detection_score: float, amplitude: float, ratio: float) -> None:
+    def show_signal_info(
+        self, 
+        quality: float, 
+        sqi: float,  # NEW: Signal Quality Index
+        detection_score: float, 
+        amplitude: float, 
+        ratio: float,
+        cv: float = 0.0,  # NEW: Coefficient of variation
+        peak_count: int = 0  # NEW: Number of peaks
+    ) -> None:
+        """
+        Hiển thị thông tin tín hiệu chi tiết bao gồm metadata mới.
+        
+        Args:
+            quality: Signal quality IR (0-100%)
+            sqi: Signal Quality Index from HR calculation (0-100)
+            detection_score: Finger detection score
+            amplitude: Signal amplitude
+            ratio: AC/DC ratio
+            cv: Coefficient of variation for SpO2
+            peak_count: Number of detected peaks
+        """
         ratio_scaled = ratio * 10000.0
-        self.signal_label.text = (
-            f"Chất lượng tín hiệu: {quality:.0f}%\n"
-            f"Điểm nhận diện: {detection_score:.2f} | Biên độ: {amplitude:.0f} | AC/DC×1e4: {ratio_scaled:.1f}"
-        )
+        
+        # Line 1: Basic quality metrics
+        line1 = f"Chất lượng IR: {quality:.0f}% | SQI: {sqi:.0f}%"
+        
+        # Line 2: Detection metrics
+        line2 = f"Phát hiện: {detection_score:.2f} | Biên độ: {amplitude:.0f} | AC/DC×1e4: {ratio_scaled:.1f}"
+        
+        # Line 3: Advanced metrics (chỉ hiển thị khi có data)
+        if peak_count > 0 or cv > 0:
+            line3 = f"Peaks: {peak_count} | CV: {cv:.3f}"
+            self.signal_label.text = f"{line1}\n{line2}\n{line3}"
+        else:
+            self.signal_label.text = f"{line1}\n{line2}"
 
     def update_live_metrics(
         self,
