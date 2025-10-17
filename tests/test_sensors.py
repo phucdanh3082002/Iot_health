@@ -18,12 +18,14 @@ if str(project_root) not in sys.path:
 
 # Import sensor classes
 try:
-    from src.sensors.max30102_sensor import MAX30102Sensor
+    from src.sensors.max30102_sensor import MAX30102Sensor, HRCalculator
     from src.sensors.mlx90614_sensor import MLX90614Sensor
     from src.sensors.base_sensor import BaseSensor
+    import numpy as np
 except ImportError as e:
     logging.error(f"Could not import sensor classes: {e}")
     MAX30102Sensor = None
+    HRCalculator = None
     MLX90614Sensor = None
     BaseSensor = None
 
@@ -119,8 +121,8 @@ class SensorTester:
         IMPORTANT: Measure your actual SpO₂ with a reference pulse oximeter
         and note the value along with the R-value for calibration curve update.
         """
-        if not MAX30102Sensor:
-            logger.error("MAX30102Sensor not available")
+        if not MAX30102Sensor or not HRCalculator:
+            logger.error("MAX30102Sensor or HRCalculator not available")
             return
         
         r_values: List[float] = []
@@ -158,24 +160,51 @@ class SensorTester:
             logger.info("Keep finger STILL on sensor for accurate measurement")
             logger.info("R-values will be logged - note them for calibration curve update")
             
+            # Accumulate data for HRCalculator (needs at least BUFFER_SIZE = 100 samples)
+            accumulated_ir = []
+            accumulated_red = []
+            sample_rate = self.config.get('max30102', {}).get('sample_rate', 50)
+            
             start_time = time.time()
             while time.time() - start_time < 30:
                 data = sensor.read_raw_data()
                 if data and 'ir' in data and 'red' in data:
-                    # Calculate R-value from IR/RED data
-                    ir_data = data['ir']
-                    red_data = data['red']
+                    ir_samples = data['ir']
+                    red_samples = data['red']
                     
-                    if len(ir_data) > 0 and len(red_data) > 0:
-                        # Simple AC/DC calculation (mean as DC, std as AC approximation)
-                        ir_mean = sum(ir_data) / len(ir_data)
-                        red_mean = sum(red_data) / len(red_data)
+                    if ir_samples and red_samples:
+                        accumulated_ir.extend(ir_samples)
+                        accumulated_red.extend(red_samples)
                         
-                        # Avoid division by zero
-                        if ir_mean > 0 and red_mean > 0:
-                            r_val = red_mean / ir_mean  # Simplified R-value
-                            r_values.append(r_val)
-                            logger.info(f"R-value: {r_val:.3f} (IR_mean={ir_mean:.0f}, RED_mean={red_mean:.0f}, count={len(r_values)})")
+                        logger.debug(f"Accumulated samples: IR={len(accumulated_ir)}, RED={len(accumulated_red)}")
+                        
+                        # When we have enough samples, calculate HR and SpO2
+                        if len(accumulated_ir) >= 100 and len(accumulated_red) >= 100:
+                            # Use the last 100 samples for calculation
+                            ir_data = np.array(accumulated_ir[-100:])
+                            red_data = np.array(accumulated_red[-100:])
+                            
+                            # Calculate HR and SpO2 using the same algorithm as GUI
+                            hr, hr_valid, spo2, spo2_valid, sqi, cv, peak_count, current_r_values = HRCalculator.calc_hr_and_spo2(
+                                ir_data, red_data, sample_rate=sample_rate
+                            )
+                            
+                            # Log measurement results
+                            logger.info(f"Measurement: HR={hr:.1f} BPM (valid={hr_valid}), "
+                                      f"SpO2={spo2:.1f}% (valid={spo2_valid}), "
+                                      f"SQI={sqi:.1f}%, CV={cv:.1f}%, peaks={peak_count}")
+                            
+                            # Use R-values from HRCalculator for calibration
+                            if current_r_values:
+                                r_median = float(np.median(current_r_values))
+                                for r_val in current_r_values:
+                                    r_values.append(r_val)
+                                logger.info(f"R-values: median={r_median:.3f}, count={len(current_r_values)}, "
+                                          f"range=[{min(current_r_values):.3f}-{max(current_r_values):.3f}]")
+                            
+                            # Reset accumulation for next measurement window
+                            accumulated_ir = accumulated_ir[-50:]  # Keep some overlap
+                            accumulated_red = accumulated_red[-50:]
                 
                 time.sleep(1)
             
@@ -278,21 +307,49 @@ class SensorTester:
             logger.info("Collecting R-values for 30 seconds...")
             logger.info("Keep finger COMPLETELY STILL for accurate calibration")
             
+            # Accumulate data for HRCalculator (needs at least BUFFER_SIZE = 100 samples)
+            accumulated_ir = []
+            accumulated_red = []
+            sample_rate = self.config.get('max30102', {}).get('sample_rate', 50)
+            
             start_time = time.time()
             while time.time() - start_time < 30:
                 data = sensor.read_raw_data()
                 if data and 'ir' in data and 'red' in data:
-                    ir_data = data['ir']
-                    red_data = data['red']
+                    ir_samples = data['ir']
+                    red_samples = data['red']
                     
-                    if len(ir_data) > 0 and len(red_data) > 0:
-                        ir_mean = sum(ir_data) / len(ir_data)
-                        red_mean = sum(red_data) / len(red_data)
+                    if ir_samples and red_samples:
+                        accumulated_ir.extend(ir_samples)
+                        accumulated_red.extend(red_samples)
                         
-                        if ir_mean > 0 and red_mean > 0:
-                            r_val = red_mean / ir_mean
-                            r_values.append(r_val)
-                            logger.info(f"R-value: {r_val:.3f} (count={len(r_values)})")
+                        logger.debug(f"Accumulated samples: IR={len(accumulated_ir)}, RED={len(accumulated_red)}")
+                        
+                        # When we have enough samples, calculate HR and SpO2
+                        if len(accumulated_ir) >= 100 and len(accumulated_red) >= 100:
+                            # Use the last 100 samples for calculation
+                            ir_data = np.array(accumulated_ir[-100:])
+                            red_data = np.array(accumulated_red[-100:])
+                            
+                            # Calculate HR and SpO2 using the same algorithm as GUI
+                            hr, hr_valid, spo2, spo2_valid, sqi, cv, peak_count, current_r_values = HRCalculator.calc_hr_and_spo2(
+                                ir_data, red_data, sample_rate=sample_rate
+                            )
+                            
+                            # Log measurement results
+                            logger.info(f"Measurement: HR={hr:.1f} BPM (valid={hr_valid}), "
+                                      f"SpO2={spo2:.1f}% (valid={spo2_valid}), "
+                                      f"SQI={sqi:.1f}%, CV={cv:.1f}%, peaks={peak_count}")
+                            
+                            # Use R-values from HRCalculator for calibration
+                            if current_r_values:
+                                for r_val in current_r_values:
+                                    r_values.append(r_val)
+                                logger.info(f"R-values collected: {len(current_r_values)} (total={len(r_values)})")
+                            
+                            # Reset accumulation for next measurement window
+                            accumulated_ir = accumulated_ir[-50:]  # Keep some overlap
+                            accumulated_red = accumulated_red[-50:]
                 
                 time.sleep(1)
             

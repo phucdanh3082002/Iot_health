@@ -168,12 +168,156 @@ python main.py
 - [ ] Security hardening
 - [ ] Clinical validation
 
-## Cấu hình
+### Phase 4 - Optimization
+- [ ] Performance tuning
+- [ ] Security hardening
+- [ ] Clinical validation
 
-### Sensors
-- MAX30102: I2C address 0x57, INT pin GPIO4
-- DS18B20: 1-Wire GPIO17
-- Blood Pressure: MPX2050 + ADS1115
+## Cấu hình Hardware
+
+### 1. Sơ đồ khối & chức năng
+
+* **Raspberry Pi 4B (3.3 V, logic):**
+  Điều khiển bơm/van qua **optocoupler 4N35** (cách ly), đọc áp suất từ **HX710B (24-bit)**.
+* **Miền công suất 6 V (cách ly Pi):**
+  **4N35 → MOSFET N (IRLZ44N/FQP30N06L)** đóng/ngắt **bơm 6 V** & **van xả 6 V**.
+  Có **diode flyback SS14**, **tụ lọc tổng 1000 µF + 100 nF** và **tụ cục bộ sát bơm**.
+* **Khí nén:** Bơm → **van 1 chiều (→ cuff)** → T → cuff & nhánh cảm biến → **van xả** ra môi trường; **van relief (250–300 mmHg)** (khuyên dùng).
+
+### 2. Mapping chân GPIO (BCM) – phiên bản mới
+
+| Khối            | Tín hiệu            |       GPIO (BCM) | Ghi chú                         |
+| --------------- | ------------------- | ---------------: | ------------------------------- |
+| **Bơm (Q1)**    | Điều khiển LED 4N35 |       **GPIO26** | Output, mặc định LOW            | 
+| **Van xả (Q2)** | Điều khiển LED 4N35 |       **GPIO16** | Output, mặc định LOW            |
+| **HX710B**      | OUT (data ready)    |        **GPIO6** | Input (có thể dùng pull-up nhẹ) |
+| **HX710B**      | SCK (clock)         |        **GPIO5** | Output                          |
+| **HX710B**      | VCC/GND             | **3V3 / GND Pi** | Cùng miền 3.3 V với Pi          |
+
+> Miền **6 V công suất** (bơm/van/MOSFET) **không** nối GND với Pi (đã cách ly qua 4N35).
+> Chỉ riêng **HX710B** là chung GND với Pi.
+
+### 3. Đi dây điện – chuẩn kỹ thuật
+
+#### 3.1 Cách ly điều khiển (mỗi kênh bơm/van)
+
+* **GPIO → R_LED 330 Ω → 4N35 pin1 (Anode); 4N35 pin2 (Cathode) → GND Pi.**
+* **4N35 pin5 (Collector) → +6 V BUS** ; **pin4 (Emitter) → R_gate 100–220 Ω → Gate MOSFET**.
+* **Gate MOSFET → R_pull-down 68–150 kΩ → GND6** (mặc định OFF).
+
+#### 3.2 MOSFET & tải
+
+* **MOSFET (mặt chữ): G–D–S.**
+  **S → GND6**, **D → cực "−" của tải** (bơm/van), **cực "+" tải → +6 V BUS**.
+* **Diode SS14:** **Cathode (vạch trắng) → +6 V BUS**, **Anode → nút Drain/tải −**.
+* **Tụ:** **1000 µF // 100 nF** tại **BUS 6 V**; (khuyên) **470–1000 µF // 100 nF** **sát cọc bơm** (nếu dây dài).
+
+#### 3.3 HX710B (3.3 V domain)
+
+* **VCC → 3V3**, **GND → GND Pi**, **OUT → GPIO6**, **SCK → GPIO5**, **100 nF (104)** sát **VCC–GND** của module.
+* Ống khí cảm biến **ngắn & kín**.
+
+### 4. Khí nén – đúng chiều
+
+* **Bơm OUT → van 1 chiều (mũi tên hướng → cuff) → T → cuff**
+* Nhánh **T → cổng cảm biến HX710B** (ống ngắn).
+* **Cuff → van xả JQF1-6A** ra môi trường.
+* **Relief 250–300 mmHg** song song cuff (khuyến nghị an toàn cứng).
+
+### 5. Sơ đồ tổng thể (Mermaid – mapping mới)
+
+```mermaid
+graph TD
+    subgraph Pi["Raspberry Pi 4B (3.3 V logic)"]
+      P_GPIO27["GPIO27 → Bơm (LED 4N35)"]
+      P_GPIO16["GPIO16 → Van (LED 4N35)"]
+      P_GPIO6["GPIO6 ← HX710B OUT"]
+      P_GPIO5["GPIO5 → HX710B SCK"]
+      P_3V3["3V3"]
+      P_GND["GND Pi"]
+    end
+
+    subgraph HX["HX710B (3.3 V domain)"]
+      HX_VCC["VCC ← 3V3"]
+      HX_GND["GND ← GND Pi"]
+      HX_OUT["OUT → GPIO6"]
+      HX_SCK["SCK ← GPIO5"]
+      HX_CAP["100 nF (104) sát VCC–GND"]
+    end
+
+    subgraph Power6V["BUS 6 V (cách ly)"]
+      BUS["+6 V BUS"]
+      GND6["GND6"]
+      Cbulk["1000 µF // 100 nF tại BUS"]
+    end
+
+    subgraph PumpCh["Kênh Bơm 6 V"]
+      O1["4N35 (Pump)\npin1←GPIO27 qua 330Ω; pin2→GND Pi\npin5←+6V; pin4→R_gate→Gate Q1"]
+      Q1["MOSFET N Q1 (IRLZ44N/FQP30N06L)\nG-D-S (S→GND6)"]
+      D1["SS14: Cathode(vạch)→+6V; Anode→nút Drain"]
+      Pump["+ Bơm: (+)→+6V; (−)→Drain"]
+      Rpd1["Gate→100 kΩ→GND6"]
+      Cnear["(Khuyên) 470–1000 µF // 100 nF sát bơm"]
+    end
+
+    subgraph ValveCh["Kênh Van 6 V"]
+      O2["4N35 (Valve)\npin1←GPIO16 qua 330Ω; pin2→GND Pi\npin5←+6V; pin4→R_gate→Gate Q2"]
+      Q2["MOSFET N Q2 (IRLZ44N/FQP30N06L)\nG-D-S (S→GND6)"]
+      D2["SS14: Cathode(vạch)→+6V; Anode→nút Drain"]
+      Valve["Van 6 V: 1 dây→+6V; 1 dây→Drain"]
+      Rpd2["Gate→100 kΩ→GND6"]
+      Cv0["100 nF sát cuộn van"]
+    end
+
+    subgraph Air["Khí nén"]
+      BPUMP["Bơm OUT → Van 1 chiều (→) → T → Cuff"]
+      Sense["T → Ống ngắn → HX710B"]
+      Vent["Cuff → Van xả → môi trường"]
+      Relief["(Khuyên) Relief 250–300 mmHg song song cuff"]
+    end
+
+    %% Wiring
+    P_3V3 --> HX_VCC
+    P_GND --> HX_GND
+    P_GPIO6 --> HX_OUT
+    P_GPIO5 --> HX_SCK
+    HX_VCC --- HX_CAP
+    HX_GND --- HX_CAP
+
+    BUS --- Cbulk
+    BUS --> O1
+    BUS --> O2
+
+    O1 --> Q1
+    O2 --> Q2
+    Q1 --> D1 --> BUS
+    Q2 --> D2 --> BUS
+    Pump --> Q1
+    Valve --> Q2
+    Cnear --- BUS
+    Cnear --- GND6
+    Cv0 --- BUS
+    Cv0 --- GND6
+```
+
+### 6. Kiểm tra trước khi cấp điện (tối quan trọng)
+
+1. **Điện trở & diode:**
+   Gate↔GND6 đo ~**68–150 kΩ**; **diode SS14** đo chiều thuận ~0.2–0.4 V, nghịch **không dẫn**; **vạch trắng** về **+6 V**.
+2. **Tụ hóa:** **"+" → +6 V**, **"−" → GND6** (thân tụ vạch dấu "−").
+3. **4N35:** LED đúng cực (**pin1 Anode**, **pin2 Cathode**); transistor **pin5 → +6 V**, **pin4 → Gate qua 100–220 Ω**.
+4. **Nguồn:** Cấp **6 V** cho khối công suất (**Pi chưa cấp**) → bơm/van **không tự chạy**. Sau đó cấp **5 V** cho Pi.
+
+## Cấu hình Sensors
+
+### Sensors Configuration
+- **MAX30102**: I2C address 0x57, INT pin GPIO4 (HR/SpO2 sensor)
+- **MLX90614**: I2C address 0x5A (temperature sensor)
+- **HX710B**: GPIO5 (SCK), GPIO6 (DOUT) - Blood pressure sensor
+- **Blood Pressure Control**:
+  - Pump: GPIO26 (via 4N35 optocoupler)
+  - Valve: GPIO16 (via 4N35 optocoupler)
+  - Power: 6V BUS (isolated from Pi)
 
 ### Display
 - SPI LCD 3.5": /dev/fb1, resolution 480x320

@@ -43,9 +43,9 @@ sensors:
     
   blood_pressure:
     enabled: true
-    pressure_sensor: "MPX2050"
-    pump_gpio: 18
-    valve_gpio: 19
+    pressure_sensor: "HX710B"
+    pump_gpio: 26  # Updated: GPIO26 for pump control via 4N35
+    valve_gpio: 16  # Updated: GPIO16 for valve control via 4N35
     inflate_target_mmhg: 165
     max_pressure: 180  # mmHg
     safety_pressure: 200  # mmHg
@@ -55,9 +55,9 @@ sensors:
       dia_frac: 0.8
 
   hx710b:
-    enabled: false
-    gpio_dout: 17
-    gpio_sck: 27
+    enabled: true  # Updated: Enable HX710B sensor
+    gpio_dout: 6   # Updated: GPIO6 for HX710B data output
+    gpio_sck: 5    # Updated: GPIO5 for HX710B clock
     sps_hint: 50
     calibration:
       offset_counts: 0
