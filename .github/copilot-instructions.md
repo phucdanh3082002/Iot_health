@@ -22,7 +22,7 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 - ✅ **Type hints**: Dùng typing cho parameters và return values
 
 ### 2. **Documentation**
-- ❌ **KHÔNG tạo file .md** (README, CHANGELOG, summary) nếu CHƯA được yêu cầu
+- ❌ **KHÔNG tạo file .md** (summary documentation,README, CHANGELOG, summary) nếu CHƯA được yêu cầu
 - ❌ **KHÔNG tạo test files** tự động
 - ✅ **Inline comments**: Giải thích logic phức tạp trong code
 - ✅ **Hỏi lại** nếu không hiểu rõ yêu cầu
@@ -95,18 +95,17 @@ requirements.txt
   * **Huyết áp**: Cảm biến 0–40 kPa **+ HX710B (24-bit, 2 dây DOUT/SCK, không I²C)**.
 * **Khí nén**: Cuff; **bơm 5/12 V**; **van xả NO**; **van relief ~300 mmHg**.
 * **Driver công suất**: MOSFET + diode flyback + opto; nguồn riêng cho bơm/van; GND chung.
-
 ---
 
 ## Gợi ý chân GPIO (tham khảo, không thay nếu chưa có yêu cầu)
 
 | Khối      | Tín hiệu           | GPIO (Pin)                    |
 | --------- | ------------------ | ----------------------------- |
-| HX710B    | DOUT (in)          | GPIO17 (11)                   |
-| HX710B    | SCK  (out)         | GPIO27 (13)                   |
+| HX710B    | DOUT (in)          | GPIO17 (6)                   |
+| HX710B    | SCK  (out)         | GPIO5 (5)                    |
 | I²S       | BCLK / LRCLK / DIN | 18 (12) / 19 (35) / 21 (40)   |
 | I²C       | SDA / SCL          | 2 (3) / 3 (5)                 |
-| Bơm / Van | EN                 | GPIO bất kỳ → (opto) → MOSFET |
+| Bơm / Van | EN                 | Bơm (GPIO 26), Van (GPIO 16) → (opto) → MOSFET |
 
 > HX710B **cấp 3.3 V** để tương thích mức logic GPIO. DOUT có thể cần pull-up nếu board không tích hợp.
 
@@ -127,20 +126,6 @@ requirements.txt
 
 ---
 
-## 🩺 Quy trình BP (oscillometric) – ràng buộc cho Copilot
-
-* **State machine**: `IDLE → INFLATE → DEFLATE → PROCESS → DONE/ABORT`.
-* **Inflate**: bơm nhanh đến ~160–170 mmHg; **soft-limit 200 mmHg**; luôn cho phép **xả khẩn**.
-* **Deflate**: xả đều ~**2–4 mmHg/s** (điều khiển van bằng PWM/chu kỳ mở–đóng); **ghi áp liên tục** từ HX710B.
-* **Process**:
-  * Detrend áp nền giảm; **BPF 0.5–5 Hz** (nhẹ, biên độ không méo).
-  * Tính **envelope** (ví dụ Hilbert/peak-to-peak window).
-  * **MAP** tại biên độ cực đại; **SYS/DIA** từ **tỷ lệ** so với A_max (hệ số nằm trong config, hiệu chuẩn theo máy tham chiếu).
-* **An toàn**:
-  * Quá áp/timeout/rò khí → **ngắt bơm + mở van** ngay; log + alert.
-  * **Van NO** + **van relief** là lớp bảo vệ cứng (phần mềm luôn nhường ưu tiên an toàn).
-
----
 
 ## 💻 Yêu cầu phần mềm (Copilot phải tuân thủ)
 
@@ -157,18 +142,6 @@ requirements.txt
 8. **Config**: đọc `config/app_config.yaml`; **không** sinh file cấu hình mới khi chưa yêu cầu.
 
 ---
-
-## 🧪 Testing Framework (giữ nguyên pattern)
-
-* Sử dụng `tests/test_sensors.py` menu-driven interface
-* Hardware validation với I²C scanning
-* Không tạo mock data hoặc dummy files
-* Test với phần cứng thật: HX710B DOUT/SCK, bơm/van
-
-```bash
-# Test HX710B driver
-python tests/test_sensors.py  # Menu option cho HX710B
-```
 
 ---
 
@@ -188,9 +161,9 @@ python tests/test_sensors.py  # Menu option cho HX710B
 sensors:
   hx710b:
     enabled: true
-    gpio_dout: 17
-    gpio_sck: 27
-    sps_hint: 50  # Expected samples per second
+    gpio_dout: 6    # BCM GPIO6
+    gpio_sck: 5     # BCM GPIO5
+    sps_hint: 50    # Expected samples per second
     calibration:
       offset_counts: 0      # Zero offset
       slope_mmhg_per_count: 0.001  # Conversion factor
@@ -201,8 +174,8 @@ sensors:
     inflate_target_mmhg: 165
     deflate_rate_mmhg_s: 3.0
     max_pressure_mmhg: 200
-    pump_gpio: 18
-    valve_gpio: 19
+    pump_gpio: 26    # BCM GPIO26 via optocoupler
+    valve_gpio: 16   # BCM GPIO16 via optocoupler
     ratio:
       sys_frac: 0.5   # SYS at 50% of max amplitude
       dia_frac: 0.8   # DIA at 80% of max amplitude

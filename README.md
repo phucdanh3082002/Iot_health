@@ -229,7 +229,7 @@ python main.py
 ```mermaid
 graph TD
     subgraph Pi["Raspberry Pi 4B (3.3 V logic)"]
-      P_GPIO27["GPIO27 → Bơm (LED 4N35)"]
+      P_GPIO26["GPIO26 → Bơm (LED 4N35)"]
       P_GPIO16["GPIO16 → Van (LED 4N35)"]
       P_GPIO6["GPIO6 ← HX710B OUT"]
       P_GPIO5["GPIO5 → HX710B SCK"]
@@ -252,7 +252,7 @@ graph TD
     end
 
     subgraph PumpCh["Kênh Bơm 6 V"]
-      O1["4N35 (Pump)\npin1←GPIO27 qua 330Ω; pin2→GND Pi\npin5←+6V; pin4→R_gate→Gate Q1"]
+      O1["4N35 (Pump)\npin1←GPIO26 qua 330Ω; pin2→GND Pi\npin5←+6V; pin4→R_gate→Gate Q1"]
       Q1["MOSFET N Q1 (IRLZ44N/FQP30N06L)\nG-D-S (S→GND6)"]
       D1["SS14: Cathode(vạch)→+6V; Anode→nút Drain"]
       Pump["+ Bơm: (+)→+6V; (−)→Drain"]

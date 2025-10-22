@@ -87,7 +87,7 @@ sensors:
     valve_is_no: true
   hx710b:
     calibration:
-      offset_counts: 1227539
+      offset_counts: 1282031
       slope_mmhg_per_count: -0.33557046979865773
     enabled: true
     gpio_dout: 6
