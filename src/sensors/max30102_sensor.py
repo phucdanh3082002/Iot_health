@@ -1279,6 +1279,14 @@ class MAX30102Sensor(BaseSensor):
             self.hardware = None
             return False
 
+    def cleanup(self):
+        """
+        Cleanup hardware resources (I2C bus)
+        NOTE: MAX30102 uses I2C bus managed by hardware layer
+        """
+        # I2C bus cleanup handled by hardware layer if needed
+        self.logger.debug("MAX30102 cleanup completed")
+
     # ==================== DATA READING & PROCESSING ====================
     
     def read_raw_data(self) -> Optional[Dict[str, Any]]:

@@ -196,6 +196,9 @@ class HX710B:
         """
         Initialize GPIO pins and wake up HX710B
         
+        Simple initialization matching test.py behavior (which works reliably).
+        HX710B auto-starts conversion after power-up, no special wake sequence needed.
+        
         Returns:
             bool: True if successful
         """
@@ -207,29 +210,40 @@ class HX710B:
             GPIO.setmode(GPIO.BCM)
             GPIO.setwarnings(False)
             
-            # Setup pins
-            GPIO.setup(self.gpio_sck, GPIO.OUT)
+            # Setup pins (SCK must be LOW initially to avoid triggering power-down)
+            GPIO.setup(self.gpio_sck, GPIO.OUT, initial=GPIO.LOW)
             GPIO.setup(self.gpio_dout, GPIO.IN)
             
-            # Initialize SCK low
-            GPIO.output(self.gpio_sck, GPIO.LOW)
-            time.sleep(0.001)  # 1ms settle time
+            # Wait for HX710B to power up and start first conversion
+            # HX710B takes ~400ms after power-on, but be safe with 1 second
+            time.sleep(1.0)
             
-            # Power-up sequence: ensure HX710B is awake
-            # HX710B enters power-down if SCK is HIGH for >60μs
-            # Wake it up by pulsing SCK
-            self.logger.debug("Waking up HX710B...")
-            for _ in range(3):
-                GPIO.output(self.gpio_sck, GPIO.HIGH)
-                time.sleep(0.000001)  # 1μs
-                GPIO.output(self.gpio_sck, GPIO.LOW)
-                time.sleep(0.000001)  # 1μs
+            # First few reads may timeout or return garbage, but they trigger conversion cycle
+            self.logger.debug("Performing wake-up sequence...")
+            self._is_initialized = True  # Set flag BEFORE reads
             
-            # Wait for HX710B to stabilize
-            time.sleep(0.1)  # 100ms settle time
+            wake_success = False
+            for attempt in range(3):
+                dummy_value = self.read_raw()
+                
+                if dummy_value is None:
+                    self.logger.debug(f"Wake-up attempt {attempt+1}/3: timeout")
+                elif dummy_value in [-1, 0, -2, 0x3FFFFF, 0x1FFFFF]:
+                    self.logger.debug(f"Wake-up attempt {attempt+1}/3: garbage ({dummy_value})")
+                else:
+                    self.logger.debug(f"Wake-up attempt {attempt+1}/3: valid ({dummy_value})")
+                    wake_success = True
+                    break
+                
+                time.sleep(0.15)  # Wait 150ms between attempts
             
-            self._is_initialized = True
-            self.logger.info("HX710B initialized successfully")
+            if not wake_success:
+                self.logger.warning("All wake-up reads failed, but continuing anyway")
+            
+            # Extra stabilization time
+            time.sleep(0.2)
+            
+            self.logger.info("HX710B initialized and ready")
             return True
             
         except Exception as e:
@@ -254,11 +268,17 @@ class HX710B:
                 start_time = time.time()
                 timeout_s = self.timeout_ms / 1000.0
                 
+                # Poll with exponential backoff to reduce CPU usage
+                poll_interval = 0.0001  # Start with 100μs
+                max_poll_interval = 0.01  # Max 10ms
+                
                 while GPIO.input(self.gpio_dout) == GPIO.HIGH:
                     if time.time() - start_time > timeout_s:
                         self.logger.warning(f"Timeout waiting for data ready ({self.timeout_ms}ms)")
                         return None
-                    time.sleep(0.0001)  # 100μs poll interval
+                    time.sleep(poll_interval)
+                    # Increase poll interval gradually (reduce CPU usage for slow ADC)
+                    poll_interval = min(poll_interval * 1.5, max_poll_interval)
                 
                 # Read 24 bits (MSB first)
                 # CRITICAL: Must read DOUT AFTER SCK falling edge (per HX710B datasheet)
@@ -282,8 +302,22 @@ class HX710B:
                 GPIO.output(self.gpio_sck, GPIO.LOW)
                 
                 # Convert 24-bit two's complement to signed int
-                if value & 0x800000:  # Negative number
+                if value & 0x800000:  # Negative number (MSB = 1)
                     value -= 0x1000000
+                
+                # Validate reading (detect obvious errors)
+                # Check for saturation: 0x7FFFFF (8388607) or near-max values
+                if abs(value) >= 0x7FFFFF - 100:  # Near saturation
+                    self.logger.warning(f"⚠️  ADC saturation detected: {value} (0x{value & 0xFFFFFF:06X})")
+                    self.logger.warning(f"   This indicates: wiring error, no sensor, or timing desync")
+                    return None
+                
+                # Check for incomplete reads: 0x3FFFFF (4194303, 22-bit), 0x1FFFFF (2097151, 21-bit)
+                # These indicate reading when DOUT not ready (HX710B in power-down)
+                if value in [0x3FFFFF, 0x1FFFFF, -1, 0, -2]:
+                    self.logger.warning(f"⚠️  Invalid ADC value: {value} (0x{value & 0xFFFFFF:06X})")
+                    self.logger.warning(f"   Likely cause: HX710B not ready (DOUT stayed HIGH)")
+                    return None
                 
                 return value
                 

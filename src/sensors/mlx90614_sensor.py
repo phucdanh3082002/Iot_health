@@ -96,6 +96,17 @@ class MLX90614Sensor(BaseSensor):
                 self.bus = None
             return False
     
+    def cleanup(self):
+        """
+        Cleanup I2C bus resources
+        """
+        try:
+            if self.bus:
+                self.bus.close()
+                self.logger.debug("Closed I2C bus")
+        except Exception as e:
+            self.logger.error(f"Error closing I2C bus: {e}")
+    
     # ==================== DATA READING & PROCESSING ====================
     
     def read_raw_data(self) -> Optional[Dict[str, Any]]:
@@ -349,6 +360,10 @@ class TemperatureSensor(BaseSensor):
         Returns:
             bool: True if initialization successful
         """
+        pass
+    
+    def cleanup(self):
+        """Mock cleanup (no hardware resources)"""
         pass
     
     # ==================== DATA PROCESSING ====================
