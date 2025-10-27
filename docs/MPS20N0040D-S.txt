@@ -1,0 +1,75 @@
+﻿Pressure Sensor MPS20N0040D-S  
+ 
+
+ 
+ 
+ 
+Introduction 
+Pressure range :0-5 .8 psi (40kpa); 
+Product Features: 
+Solid, MEMS technology, high reliability 
+Low cost 
+Wide monitoring and control media 
+The application of a wide temperature range 
+Easy to use, choose from a variety of range. Easy to use, easy to install in OEM equipment 
+Application areas: 
+Automotive: tire pressure, car air pump, MAP sensor, diagnostic equipment, automotive sensors. 
+Industry: Air brake switch, portable pressure gauge, such as digital pressure gauge, 
+environmental monitoring, consumer and sports 
+Health care: patient monitoring and diagnostic equipment, such as blood pressure monitors, 
+medical instrumentation and monitoring 
+Range: 40kpa (differential pressure) 
+Output: mV signal 
+Electricity supply: 5VDC or constant current 1Ma 
+Linear accuracy: 0.25% FS 
+  
+Measure the pressure range of 580 PSIG, 40KPaG 
+Max pressure capacity of three times the measuring range 
+Work power supply 5 VDC, 
+Input impedance of 4 - 6 KΩ 
+The output impedance of 4 - 6 KΩ 
+Operating temperature -40 - 85 ° C -40 ° F - +185 ° F 
+Storage Temperature -40 - 125 ° C -40 ° the F - +257 ° F 
+Accessible media, clean, dry, non-corrosive gases 
+Bias voltage ± 25 mV 
+Full-scale output voltage 50 - 100 mV 
+Bridge Resistance to 4 - 6 KΩ 
+Linearity ± 0.3% F.S. 
+Hysteresis ± 0.7% F.S. 
+Bias Temperature coefficient ± 0.08% of F.S. / °c 
+Temperature coefficient of sensitivity -0.21 % FS/ °c 
+ 
+
+ 
+
+
+
+Pressure Sensor MPS20N0040D-S  
+ 
+Circuit 
+ 
+
+ 
+
+Difference Amplifier 
+
+This amplifier uses both inverting and 
+non-inverting inputs with a gain of one to 
+produce an output equal to the difference 
+between the inputs. It is a special case of 
+the differential amplifier. You can also 
+choose the resistances to amplify the 
+difference.  
+
+ 
+
+ 
+
+
+
+Pressure Sensor MPS20N0040D-S  
+ 
+
+ 
+ 
+Dimensions

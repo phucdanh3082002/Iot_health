@@ -1,0 +1,400 @@
+﻿HX710(A/B) 
+
+24-Bit ADC with Built-in Temperature Sensor (HX710A)  
+24-Bit ADC with (DVDD-AVDD) Voltage Difference Detection (HX710B) 
+
+DESCRIPTION FEATURES 
+Based on Avia Semiconductor’s patented •   On-chip temperature measurement (HX701A) 
+
+technology, HX710(A/B) is a precision 24-bit •   DVDD and AVDD supply voltage difference 
+analog-to-digital converter (ADC) with built-in measurement (HX701B) 
+temperature sensor (HX710A) or DVDD, AVDD •   On-chip low noise amplifier with a gain of 128 
+voltage difference detection (HX710B). It’s •   On-chip oscillator requiring no external 
+designed for weigh scales and industrial control component 
+applications to interface directly with a bridge •   On-chip power-on-reset 
+sensor. •   Simple digital control and serial interface: 
+
+The input low-noise amplifier (PGA) has a pin-driven controls, no programming needed 
+fixed gain of 128, corresponding to a full-scale •   Selectable 10SPS or 40SPS output data rate 
+differential input voltage of ±20mV, when a 5V 
+reference voltage is connected to the VREF pin. •   Simultaneous 50 and 60Hz supply rejection 
+On chip oscillator provides the system clock • Current consumption: 
+without any external component. On-chip power-          normal operation < 1.2mA, power down < 1uA 
+on-reset circuitry simplifies digital interface •   Operation supply voltage range: 2.6 ~ 5.5V 
+initialization. There is no programming needed •   Operation temperature range: -40 ~ +85℃ 
+for the internal registers. All controls to the •   8 pin SOP-8 package 
+HX710 are through the pins. 
+
+LED LCD
+L1
+
+Charger Regulator
+
+1u 1u 0.1u
+Battery
+
+VDD
+0.1u
+
+VREF AVDD
+
+Load-cell AGND DVDD
+INN DOUT I/O
+
+200 INP PD_SCK I/O
+0.1u HX710 MCU
+
+200
+
+Fig. 1  Typical weigh scale application block diagram using HX710(a/b)
+ 
+
+Information contained in this document is for design reference only and not a guarantee. Avia Semiconductor reserves the right to modify it without notice. 
+
+Tel: (592) 252-9530 (China)  AVIA SEMICONDUCTOR 
+Email: sales@aviaic.com  www.aviaic.com 
+
+
+
+  HX710(A/B) 
+ 
+Pin Description 
+
+AD Conversion Reference Input VREF 1 8 AVDD Analog Power
+Ground Input AGND 2 7 DVDD Digital Power
+
+Differential Signal Negative Input INN 3 6 DOUT Serial Data Output 
+
+Differential Signal Positive Input INP 4 5 PD_SCK Power Down and Serial Clock Input 
+
+SOP-8 Package
+
+ 
+Pin # Name Function Description 
+
+1 VREF Analog Input Reference input voltage: 1.8 ~ 5.5V ( <=AVDD) 
+2 AGND Ground Analog Ground 
+3 INN Analog Input Differential signal negative input 
+4 INP Analog Input Differential signal positive input 
+5 PD_SCK Digital Input Power down control (high active) and serial clock input 
+6 DOUT Digital Output Serial data output 
+7 DVDD Power Digital supply: 2.6 ~ 5.5V (DVDD >= AVDD) 
+8 AVDD Power Analog supply: 2.6 ~ 5.5V 
+
+Table 1 Pin Description 
+
+AVIA SEMICONDUCTOR  2
+
+
+
+  HX710(A/B) 
+ 
+KEY ELECTRICAL CHARACTERISTICS 
+ 
+
+Parameter Notes MIN TYP MAX UNIT
+Full scale differential 
+input voltage range V(inp)-V(inn)   ±0.0039*VREF   mV 
+Effective-Number-of- Gain=128, Rate=10SPS   19.5   
+Bits (ENBs) (1) Gain=128, Rate=40SPS   18.4   
+Noise-Free Bits (NFBs) Gain=128, Rate=10SPS   17.1   Bits 
+(2) Gain=128, Rate=40SPS   16.0    
+Integral Nonlinearity %of 
+（INL） Differential input, end-point fit  ±0.001  FSR
+Common mode input 
+range  AGND+0.9   AVDD-1.3 V 
+VREF input voltage 
+range  1.8  AVDD  
+Output data rate    10/40   Hz 
+Output data coding 2’s complement 800000   7FFFFF HEX
+Output settling time (3)    400/100   ms 
+
+Input offset   0.01  mV 
+Input referred noise    50   nV(rms)
+
+Temperature drift Input offset   ±15   nV/℃
+ 
+
+  Gain   ±7   ppm/℃
+Input common mode 
+rejection    100   dB 
+Power supply rejection    100   dB 
+
+Power supply voltage DVDD 2.6   5.5 V 
+ 
+
+  AVDD 2.6   5.5 V 
+
+Analog supply current Normal   1100   µA 
+ 
+
+ Power down   0.3    
+
+Normal   100   µA 
+Digital supply current 
+  Power down   0.2    
+
+（1）(2) ENBs = ln(FSR/RMS Noise)/ln(2), NFBs = ln(FSR/Peak-to-Peak Noise)/ln(2). FSR  is full-
+scale input or output. RMS Noise corresponds to input or output RMS noise. Peak-to-Peak Noise 
+corresponds to input or output peak-to-peak noise. 
+（3）Settling time refers to the time from power up, reset, input channel change and gain change to 
+valid stable output data. 
+
+Table 2 Key Electrical Characteristics 
+
+AVIA SEMICONDUCTOR  3
+
+
+
+  HX710(A/B) 
+ 
+
+Analog Input The on chip digital temperature sensor has 
+The differential input is designed to interface significant chip-to-chip variations in offset and 
+
+directly with a bridge sensor’s differential output. gain. When using it for absolute temperature 
+It has a fixed gain of 128. The large gains are readings, these need to be calibrated out. However, 
+needed to accommodate the small output signal if it’s used for temperature related system 
+from the sensor. When a 5V reference is used at performance improvement, it’s not necessary to 
+the VREF pin, the full-scale differential input calibrate out gain and offset.  
+voltage range is ±20mV. 
+
+Serial Interface 
+Power Supply Options Pin PD_SCK and DOUT are used for data 
+
+Digital power supply (DVDD) can be retrieval, input selection, output data rate selection 
+connected directly to AVDD supply. But it should and power down controls. 
+be the same or similar voltage as the MCU power When output data is not ready for retrieval, 
+supply to ensure proper communication with the digital output pin DOUT is high. Serial clock 
+MCU. input PD_SCK should be low. When DOUT goes 
+
+If battery output is directly connected to to low, it indicates data is ready for retrieval. By 
+DVDD pin and a regulator output is used for applying 25~27 positive clock pulses at the 
+AVDD supply, battery output voltage can be PD_SCK pin, data is shifted out from the DOUT 
+detected by detecting the voltage difference output pin. Each PD_SCK pulse shifts out one bit, 
+between DVDD and AVDD pins (HX710B). starting with the MSB bit first, until all 24 bits are 
+
+A/D conversion reference voltage (VREF) shifted out. The 25th pulse at PD_SCK input will 
+should be connected to load-cell’s supply voltage. pull DOUT pin back to high (Fig.2).  
+It can be connected directly to AVDD or through Input selection and output data rate selection is 
+a resistor to reduce the power consumption by the controlled by the number of the input PD_SCK 
+load-cell. pulses (Table 3). PD_SCK clock pulses should not 
+
+be less than 25 or more than 27 within one 
+Clock Source, Output Data Rate and conversion period, to avoid causing serial 
+
+communication error. 
+Format 
+
+PD_SCK Pulses Input Data Rate
+HX710 uses the on-chip oscillator as clock 
+
+source. The nominal output data rate is 10 or 25 Differential input 10 Hz 
+40SPS. 
+
+26 Temperature 
+(HX710A) 40 Hz 
+
+The output 24 bits of data is in 2’s complement 
+format. When input differential signal goes out of 26 DVDD-AVDD 
+
+(HX710B) 40Hz 
+the 24-bit range, the output data will be saturated 
+at 800000h (MIN) or 7FFFFFh (MAX), until the 27 Differential input 40 Hz 
+input signal comes back to the input range. Table 3 Input and Data Rate Selection 
+
+Temperature Measurement 
+HX710A has an on-chip temperature sensor 
+
+that can be used to measure system temperature 
+for temperature related system level compensation. 
+It has an effective 15-bit accuracy. Typical 
+measurement resolution is about 20.4 LSB 
+readings/℃ (15 bits). 
+
+AVIA SEMICONDUCTOR  4
+
+
+
+  HX710(A/B) 
+ 
+
+Current Output Data Next Output Data
+
+One conversion period
+
+DOUT MSB LSB
+
+T2 T3
+T1
+
+Next Conversion：Differential input, 10Hz
+PD_SCK 1 2 3 4 24 25
+
+T4 Next Conversion：Temperature out (HX710A), 40 Hz
+PD_SCK 1 2 3 4 24 25 26 Next Conversion：DVDD-AVDD (HX710B), 40 Hz
+
+PD_SCK 1 2 3 4 24 25 26 27 Next Conversion：Differential input, 40Hz
+
+Fig.2 Data output, input and data rate selection timing and control
+
+ 
+Symbol Note MIN TYP MAX Unit 
+
+T1 DOUT falling edge to PD_SCK rising edge 0.1   　µs 
+T2 PD_SCK rising edge to DOUT data ready   0.1 　µs 
+T3 PD_SCK high time  0.2 1 50 　µs 
+T4 PD_SCK low time 0.2 1  　µs 
+
+Reset and Power-Down When PD_SCK pin changes from low to high 
+When chip is powered up, on-chip power on and stays at high for longer than 60µs, HX710 
+
+rest circuitry will reset the chip. enters power down mode (Fig.3). When PD_SCK 
+Pin PD_SCK input is used to power down the returns to low, chip will return back to the setup 
+
+HX710. When PD_SCK Input is low, chip is in conditions before power down and enter normal 
+normal working mode. operation mode. 
+
+ 
+If PD_SCK pulse number is changed during 
+
+the current conversion period, power down should 
+Power down: be executed after current conversion period is 
+
+completed. This is to ensure the change is saved 
+PD_SCK before power down. When chip returns back to 
+
+normal operation from power down, it will return 
+60µ s Power down Normal to the set up conditions of the last change.   
+
+ 
+Fig.3 Power down control Application Example 
+
+Fig.1 is a typical weigh scale application using 
+HX710(AB).  
+
+AVIA SEMICONDUCTOR  5
+
+
+
+  HX710(A/B) 
+ 
+
+Reference PCB Board Design (Single layer) 
+
+ 
+
+Reference Driver (Assembly) 
+/*------------------------------------------------------------------- 
+Call from ASM:      LCALL   ReaAD  
+Call from C:    extern unsigned long ReadAD(void); 
+                   . 
+                   . 
+                  unsigned long data; 
+            data=ReadAD(); 
+       . 
+       . 
+----------------------------------------------------------------------*/ 
+PUBLIC        ReadAD 
+HX710ROM      segment  code 
+rseg          HX710ROM 
+ 
+sbit   ADDO = P1.5; 
+
+AVIA SEMICONDUCTOR  6
+
+
+
+  HX710(A/B) 
+ 
+sbit   ADSK = P0.0; 
+/*-------------------------------------------------- 
+ OUT:   R4, R5, R6, R7   R7=>LSB 
+---------------------------------------------------*/ 
+ReadAD: 
+    CLR    ADSK              //AD Enable（PD_SCK set low） 
+    SETB   ADDO              //Enable 51CPU I/0 
+    JB     ADDO,$            //AD conversion completed? 
+    MOV    R4,#24 
+ShiftOut:    
+    SETB   ADSK              //PD_SCK set high（positive pulse）  
+    NOP 
+    CLR    ADSK              //PD_SCK set low 
+    MOV    C,ADDO            //read on bit 
+    XCH    A,R7              //move data 
+    RLC    A 
+    XCH    A,R7 
+    XCH    A,R6 
+    RLC    A 
+    XCH    A,R6 
+    XCH    A,R5 
+    RLC    A 
+    XCH    A,R5 
+    DJNZ   R4,ShiftOut        //moved 24BIT? 
+    SETB   ADSK                
+    NOP 
+    CLR    ADSK 
+    RET 
+
+END 
+
+ 
+
+Reference Driver（C） 
+//------------------------------------------------------------------- 
+sbit   ADDO = P1^5; 
+sbit   ADSK = P0^0; 
+unsigned long ReadCount(void){ 
+  unsigned long Count; 
+  unsigned char i; 
+  ADDO=1;            
+  ADSK=0; 
+  Count=0; 
+  while(ADDO); 
+  for (i=0;i<24;i++){ 
+    ADSK=1; 
+    Count=Count<<1; 
+    ADSK=0; 
+    if(ADDO) Count++; 
+  } 
+
+AVIA SEMICONDUCTOR  7
+
+
+
+  HX710(A/B) 
+ 
+  ADSK=1; 
+  Count=Count^0x800000;  
+  ADSK=0; 
+  return(Count); 
+} 
+
+ 
+ 
+
+Package Dimensions 
+
+4.90 5.00
+4.80
+
+4.00
+6.00 6.20 1.27
+
+5.85 3.90 3.80 0.51
+0.38
+
+1.65
+1.25
+
+MAX
+Typ Unit: mm
+
+MIN
+
+SOP-8 Package
+
+ 
+ 
+
+AVIA SEMICONDUCTOR  8

@@ -73,27 +73,29 @@ patient:
   name: Default Patient
 sensors:
   blood_pressure:
-    deflate_rate_mmhg_s: 3.0
     enabled: true
     inflate_target_mmhg: 165
-    max_pressure: 180
-    pressure_sensor: HX710B
+    deflate_rate_mmhg_s: 3.0
+    max_pressure_mmhg: 200
     pump_gpio: 26
-    ratio:
-      dia_frac: 0.8
-      sys_frac: 0.5
-    safety_pressure: 200
     valve_gpio: 16
-    valve_is_no: true
-  hx710b:
-    calibration:
-      offset_counts: 1282031
-      slope_mmhg_per_count: -0.33557046979865773
-    enabled: true
-    gpio_dout: 6
-    gpio_sck: 5
-    sps_hint: 50
-    timeout_ms: 200
+    hx710b:
+      enabled: true
+      gpio_dout: 6
+      gpio_sck: 5
+      mode: 10sps
+      read_timeout_ms: 500
+      calibration:
+        offset_counts: 0
+        slope_mmhg_per_count: 3.576574325561523e-05
+        adc_inverted: false
+    algorithm:
+      sample_rate: 10.0
+      bandpass_low: 0.5
+      bandpass_high: 5.0
+      filter_order: 4
+      sys_ratio: 0.55
+      dia_ratio: 0.8
   max30102:
     adc_range: 4096
     buffer_size: 100
@@ -136,3 +138,52 @@ thresholds:
     critical_min: 35.0
     max: 37.5
     min: 36.0
+bp_advanced:
+  control:
+    inflate_target_mmhg: 165.0
+    inflate_soft_limit_mmhg: 200.0
+    inflate_timeout_s: 25.0
+    inflate_grace_s: 1.5
+    deflate_target_dpdt_mmhg_s: 3.0
+    deflate_pwm_period_s: 0.5
+    deflate_lut:
+    - bin: 160
+      duty: 60
+    - bin: 140
+      duty: 55
+    - bin: 120
+      duty: 52
+    - bin: 100
+      duty: 48
+    - bin: 80
+      duty: 45
+    - bin: 60
+      duty: 42
+    - bin: 40
+      duty: 40
+    deflate_timeout_s: 90.0
+    emergency_overpressure_mmhg: 200.0
+    emergency_no_oscillation_s: 10.0
+    emergency_sensor_timeout_s: 2.0
+    emergency_dpdt_too_fast_mmhg_s: 8.0
+    leak_max_drop_mmhg_per_min: 5.0
+  signal:
+    bpf_low_hz: 0.5
+    bpf_high_hz: 5.0
+    detrend_poly_order: 1
+    envelope_method: hilbert
+    map_search_window:
+    - 0.3
+    - 0.8
+    min_valid_peaks_around_map: 5
+    snr_min_db: 6.0
+    hampel_window_s: 1.2
+    hampel_k: 3.0
+    min_samples_per_bin: 20
+  estimate:
+    sys_frac: 0.55
+    dia_frac: 0.8
+    map_weighted_centering: true
+    quality_rules:
+      reject_if_low_snr: true
+      reject_if_few_peaks: true

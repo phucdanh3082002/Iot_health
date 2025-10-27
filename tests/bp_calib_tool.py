@@ -108,44 +108,50 @@ class ADCCalibrator:
         
         return offset
     
-    def calibrate_span_with_commercial(
+    def calibrate_span_empirical(
         self,
-        pressure_targets: List[float] = [50, 100, 150, 200]
+        num_measurements: int = 10
     ) -> Tuple[float, float]:
         """
-        Span calibration sử dụng máy đo BP thương mại làm reference
+        Span calibration THỰC NGHIỆM - Đo nhiều lần và so sánh với máy thương mại
         
-        Prerequisites:
-        -------------
-        1. Đấu song song: IoT device + máy thương mại vào cùng cuff (qua T-tube)
-        2. Máy thương mại có chế độ hiển thị áp real-time (manual mode)
+        Method:
+        ------
+        1. Đo BP bằng IoT device (ghi counts peak khi SYS)
+        2. Đo BP bằng máy thương mại riêng (nhập SYS làm reference)
+        3. Lặp lại nhiều lần
+        4. Linear regression: SYS_ref vs counts → slope
         
         Workflow:
         --------
-        1. IoT device bơm lên target pressure (auto control)
-        2. Đợi áp ổn định
-        3. User đọc áp từ màn hình máy thương mại
-        4. IoT đọc ADC counts
-        5. Linear regression → slope
+        - Session A: Đo bằng IoT (có counts tại SYS)
+        - Session B: Đo bằng máy TM (có SYS reference)
+        - Ghép cặp theo thời gian gần nhất
+        - Fit: pressure = slope × counts
         
         Args:
-            pressure_targets: Danh sách áp mục tiêu (mmHg)
+            num_measurements: Số lần đo (khuyến nghị ≥10)
         
         Returns:
             (slope_mmhg_per_count, r_squared)
         """
-        self.logger.info("Starting span calibration with commercial device...")
-        self.logger.info("\n⚠️  SETUP REQUIRED:")
-        self.logger.info("   1. Connect IoT device + commercial device to SAME cuff")
-        self.logger.info("      (use T-tube or Y-connector)")
-        self.logger.info("   2. Set commercial device to MANUAL mode")
-        self.logger.info("      (allows reading pressure without auto-deflate)")
-        self.logger.info("   3. Ensure no air leaks at connections")
-        input("\n   Press ENTER when setup is complete...")
+        self.logger.info("Starting EMPIRICAL span calibration...")
+        self.logger.info("\n📋 PHƯƠNG PHÁP:")
+        self.logger.info("   Đo BP nhiều lần bằng cả IoT và máy thương mại")
+        self.logger.info("   → So sánh kết quả → tính slope chính xác")
+        self.logger.info("\n⚠️  YÊU CẦU:")
+        self.logger.info(f"   - Cần ≥{num_measurements} phép đo")
+        self.logger.info("   - Đo xen kẽ: IoT → nghỉ 2 phút → Máy TM → lặp lại")
+        self.logger.info("   - Ngồi yên, thư giãn khi đo")
+        self.logger.info("\n💡 CÁCH HOẠT ĐỘNG:")
+        self.logger.info("   1. Tool sẽ bơm và ghi 'counts tại áp cao nhất'")
+        self.logger.info("   2. Bạn nhập SYS từ máy TM (đo riêng)")
+        self.logger.info("   3. Tool tính: slope = SYS / (counts - offset)")
+        input("\n   Press ENTER khi sẵn sàng...")
         
         # Get current offset
         offset = self.sensor.calibration.get('offset_counts', 0)
-        self.logger.info(f"Using offset: {offset} counts")
+        self.logger.info(f"\n📊 Using offset: {offset} counts")
         
         if GPIO is None:
             self.logger.error("GPIO not available")
@@ -161,30 +167,43 @@ class ADCCalibrator:
         GPIO.setup(pump_gpio, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(valve_gpio, GPIO.OUT, initial=GPIO.LOW)
         
-        pressure_ref = []
-        counts_data = []
+        pressure_ref = []  # SYS from commercial device
+        counts_data = []   # Max counts from IoT (corresponds to SYS)
         
         try:
-            for target in pressure_targets:
+            for i in range(num_measurements):
                 self.logger.info(f"\n{'='*60}")
-                self.logger.info(f"TARGET PRESSURE: ~{target} mmHg")
+                self.logger.info(f"MEASUREMENT {i+1}/{num_measurements}")
                 self.logger.info('='*60)
-                
-                # Step 1: Auto-inflate
-                self.logger.info("Step 1: Auto-inflating cuff...")
-                GPIO.output(valve_gpio, GPIO.LOW)   # Close valve
+
+                # Step 1: Inflate to target (~190 mmHg)
+                self.logger.info("\nStep 1: Auto-inflating to ~190 mmHg...")
+                GPIO.output(valve_gpio, GPIO.HIGH)  # ĐÓNG van NO (HIGH = energize = close)
                 GPIO.output(pump_gpio, GPIO.HIGH)   # Pump ON
                 
-                # Estimate current pressure
-                current_slope = self.sensor.calibration.get('slope_mmhg_per_count', 1e-5)
+                # Track max pressure during inflate
+                current_slope = self.sensor.calibration.get('slope_mmhg_per_count', 3.5e-5)
+                max_counts = 0
+                max_pressure = 0
                 
                 while True:
                     raw = self.sensor.read_raw_data()
                     if raw is not None:
                         approx_pressure = (raw - offset) * current_slope
-                        print(f"   Inflating: {approx_pressure:.1f} mmHg", end='\r')
                         
-                        if approx_pressure >= target - 5:
+                        if raw > max_counts:
+                            max_counts = raw
+                            max_pressure = approx_pressure
+                        
+                        print(f"   Inflating: {approx_pressure:.1f} mmHg (counts: {raw})", end='\r')
+
+                        # Stop at ~190 mmHg
+                        if approx_pressure >= 190:
+                            break
+                        
+                        # Safety: hard limit 250 mmHg
+                        if approx_pressure >= 250:
+                            self.logger.error("⚠️  Emergency stop: pressure too high!")
                             break
                     
                     time.sleep(0.05)
@@ -192,97 +211,91 @@ class ADCCalibrator:
                 print()
                 GPIO.output(pump_gpio, GPIO.LOW)  # Pump OFF
                 
-                # Step 2: Wait stabilization
-                self.logger.info("Step 2: Waiting for pressure stabilization...")
-                time.sleep(2.0)
+                # Step 2: Record max counts
+                self.logger.info(f"\n✅ Max counts during inflate: {max_counts} (≈{max_pressure:.1f} mmHg)")
                 
-                # Step 3: User reads reference
+                # Step 3: Deflate
+                self.logger.info("Step 2: Deflating...")
+                GPIO.output(valve_gpio, GPIO.LOW)   # MỞ van NO (LOW = de-energize = open)
+                time.sleep(15.0)  # Full deflate
+                GPIO.output(valve_gpio, GPIO.HIGH)  # ĐÓNG lại van (sẵn sàng cho lần đo tiếp)
+                
+                # Step 4: User enters reference SYS
                 self.logger.info("\n" + "─"*60)
-                self.logger.info("📱 READ PRESSURE FROM COMMERCIAL DEVICE")
+                self.logger.info("📱 MEASURE WITH COMMERCIAL DEVICE")
                 self.logger.info("─"*60)
+                self.logger.info("   Wait 1-2 minutes, then measure BP with commercial device")
                 
-                pressure_str = input("Enter displayed pressure (mmHg): ").strip()
+                sys_str = input("   Enter SYS from commercial device (mmHg): ").strip()
                 
-                if not pressure_str:
-                    self.logger.warning("⚠️  No input, skipping this point")
+                if not sys_str:
+                    self.logger.warning("⚠️  No input, skipping this measurement")
                     continue
                 
                 try:
-                    pressure_actual = float(pressure_str)
+                    sys_actual = float(sys_str)
                 except ValueError:
                     self.logger.error("❌ Invalid number, skipping")
                     continue
                 
-                # Step 4: Read ADC counts
-                self.logger.info("\nStep 3: Reading ADC counts...")
-                samples = []
+                # Validate
+                if sys_actual < 80 or sys_actual > 220:
+                    self.logger.warning(f"⚠️  Unusual SYS: {sys_actual} mmHg (expected 80-220)")
+                    confirm = input("   Continue anyway? (y/n): ").strip().lower()
+                    if confirm != 'y':
+                        continue
                 
-                for i in range(20):
-                    raw = self.sensor.read_raw_data()
-                    if raw is not None:
-                        samples.append(raw)
-                    time.sleep(0.05)
-                
-                if len(samples) < 15:
-                    self.logger.warning("⚠️  Insufficient ADC samples, skipping")
-                    continue
-                
-                avg_counts = np.median(samples)
-                std_counts = np.std(samples)
-                
+                # Store data
                 self.logger.info(f"\n✅ Data point recorded:")
-                self.logger.info(f"   Reference pressure: {pressure_actual:.1f} mmHg")
-                self.logger.info(f"   ADC counts: {avg_counts:.0f} ± {std_counts:.1f}")
+                self.logger.info(f"   IoT max counts: {max_counts}")
+                self.logger.info(f"   Commercial SYS: {sys_actual:.1f} mmHg")
                 
-                pressure_ref.append(pressure_actual)
-                counts_data.append(avg_counts - offset)
+                pressure_ref.append(sys_actual)
+                counts_data.append(max_counts - offset)  # Offset-corrected
                 
-                # Deflate partially (except last)
-                if target != pressure_targets[-1]:
-                    self.logger.info("\nDeflating partially...")
-                    GPIO.output(valve_gpio, GPIO.HIGH)
-                    time.sleep(3.0)
-                    GPIO.output(valve_gpio, GPIO.LOW)
-            
-            # Full deflate
-            self.logger.info("\nDeflating completely...")
-            GPIO.output(valve_gpio, GPIO.HIGH)
-            time.sleep(5.0)
-            GPIO.output(valve_gpio, GPIO.LOW)
+                # Wait before next measurement
+                if i < num_measurements - 1:
+                    self.logger.info("\n⏱️  Wait 2 minutes before next measurement...")
+                    time.sleep(5)  # Short delay (user can ctrl+c if needed)
             
         except KeyboardInterrupt:
-            self.logger.warning("\n⚠️  Calibration interrupted")
-            GPIO.output(pump_gpio, GPIO.LOW)
-            GPIO.output(valve_gpio, GPIO.HIGH)
-            time.sleep(5.0)
-            return None, None
+            self.logger.warning("\n⚠️  Calibration interrupted by user")
+            GPIO.output(pump_gpio, GPIO.LOW)    # Pump OFF
+            GPIO.output(valve_gpio, GPIO.LOW)   # MỞ van khẩn cấp (xả hết khí)
+            time.sleep(10.0)
+            GPIO.output(valve_gpio, GPIO.HIGH)  # ĐÓNG lại sau khi xả
             
         finally:
-            GPIO.output(pump_gpio, GPIO.LOW)
-            GPIO.output(valve_gpio, GPIO.LOW)
+            GPIO.output(pump_gpio, GPIO.LOW)    # Pump OFF
+            GPIO.output(valve_gpio, GPIO.HIGH)  # ĐÓNG van (trạng thái an toàn)
         
         # Linear regression
         if len(pressure_ref) < 3:
-            self.logger.error("\n❌ Need at least 3 valid points")
+            self.logger.error(f"\n❌ Need at least 3 valid points (have {len(pressure_ref)})")
             return None, None
         
+        # Fit: pressure = slope × counts + intercept
         slope, intercept, r_value, p_value, std_err = stats.linregress(counts_data, pressure_ref)
         r_squared = r_value ** 2
         
         self.logger.info("\n" + "="*60)
-        self.logger.info("✅ SPAN CALIBRATION COMPLETE")
+        self.logger.info("✅ EMPIRICAL SPAN CALIBRATION COMPLETE")
         self.logger.info("="*60)
+        self.logger.info(f"Data points collected: {len(pressure_ref)}")
         self.logger.info(f"slope_mmhg_per_count: {slope:.10e}")
         self.logger.info(f"Intercept: {intercept:.2f} mmHg (should be ~0)")
-        self.logger.info(f"R²: {r_squared:.4f} (should be > 0.98)")
+        self.logger.info(f"R²: {r_squared:.4f} (should be > 0.95)")
+        self.logger.info(f"Std error: {std_err:.2e}")
         self.logger.info("="*60)
         
         # Validate
-        if r_squared < 0.98:
-            self.logger.warning("⚠️  Low R² - check for air leaks or unstable readings")
+        if r_squared < 0.95:
+            self.logger.warning("⚠️  Low R² - measurement variability high")
+            self.logger.warning("   → Try more measurements or check technique")
         
-        if abs(intercept) > 5.0:
-            self.logger.warning(f"⚠️  High intercept ({intercept:.2f}) - re-run zero calibration")
+        if abs(intercept) > 10.0:
+            self.logger.warning(f"⚠️  High intercept ({intercept:.2f})")
+            self.logger.warning("   → May need to re-run zero calibration")
         
         # Plot
         self._plot_calibration(counts_data, pressure_ref, slope, intercept)
@@ -558,8 +571,8 @@ def main():
                 continue
             
             # Span
-            print("\n--- Span Calibration ---")
-            slope, r2 = calibrator.calibrate_span_with_commercial()
+            print("\n--- Span Calibration (Empirical Method) ---")
+            slope, r2 = calibrator.calibrate_span_empirical()
             
             if slope is None:
                 sensor.stop()
