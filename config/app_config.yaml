@@ -73,29 +73,31 @@ patient:
   name: Default Patient
 sensors:
   blood_pressure:
-    deflate_rate_mmhg_s: 3.0
     enabled: true
     inflate_target_mmhg: 165
-    max_pressure: 180
-    pressure_sensor: HX710B
+    deflate_rate_mmhg_s: 3.0
+    max_pressure_mmhg: 200
     pump_gpio: 26
-    ratio:
-      dia_frac: 0.8
-      sys_frac: 0.5
-    safety_pressure: 200
     valve_gpio: 16
-    valve_is_no: true
-  hx710b:
-    calibration:
-      slope_mmhg_per_count: 9.536743e-06
-      adc_inverted: false
-      sps_mode: '10'
-      offset_counts: 1287983
-    enabled: true
-    gpio_dout: 6
-    gpio_sck: 5
-    sps_hint: 10.0
-    timeout_ms: 500
+    # HX710B ADC configuration (nested)
+    hx710b:
+      enabled: true
+      gpio_dout: 6
+      gpio_sck: 5
+      mode: '10sps'
+      read_timeout_ms: 500
+      calibration:
+        offset_counts: 1287983
+        slope_mmhg_per_count: 9.536743e-06
+        adc_inverted: false
+    # Signal processing algorithm configuration
+    algorithm:
+      sample_rate: 10.0          # Hz (HX710B SPS)
+      bandpass_low: 0.5          # Hz (pulse frequency low cutoff)
+      bandpass_high: 5.0         # Hz (pulse frequency high cutoff)
+      filter_order: 4            # Butterworth filter order
+      sys_ratio: 0.55            # SYS at 55% of max envelope amplitude
+      dia_ratio: 0.80            # DIA at 80% of max envelope amplitude
   max30102:
     adc_range: 4096
     buffer_size: 100
@@ -138,7 +140,12 @@ thresholds:
     critical_min: 35.0
     max: 37.5
     min: 36.0
-bp:
+
+# ==================== ADVANCED BP CONFIG (OPTIONAL) ====================
+# Section này chứa config nâng cao cho đo huyết áp (PWM control, advanced signal processing)
+# Hiện tại BloodPressureSensor sử dụng config đơn giản từ sensors.blood_pressure
+# Có thể mở rộng sau để tích hợp PWM control và thuật toán xử lý tín hiệu nâng cao
+bp_advanced:
   control:
     inflate_target_mmhg: 165.0
     inflate_soft_limit_mmhg: 200.0
