@@ -86,7 +86,7 @@ sensors:
       mode: 10sps
       read_timeout_ms: 500
       calibration:
-        offset_counts: 1357387
+        offset_counts: 1300885
         slope_mmhg_per_count: 3.5765743256e-05
         adc_inverted: false
     algorithm:

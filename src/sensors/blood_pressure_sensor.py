@@ -154,7 +154,8 @@ class BPSafetyMonitor:
     ANALYZE_TIMEOUT_S = 10
     
     # Detection thresholds
-    LEAK_THRESHOLD_MMHG_S = 10.0    # Pressure drop > 10 mmHg/s
+    LEAK_THRESHOLD_MMHG_S = 20.0    # Pressure drop > 20 mmHg/s (using average rate over 1s window)
+    LEAK_GRACE_PERIOD_S = 3.0        # Skip leak detection for first 3s of deflation
     NOISE_THRESHOLD = 0.3            # High-freq noise level
     
     def __init__(self, logger: logging.Logger):
@@ -165,14 +166,24 @@ class BPSafetyMonitor:
         self._last_pressure: Optional[float] = None
         self._last_pressure_time: Optional[float] = None
         
+        # Leak detection: Sử dụng buffer để tính average rate (giảm nhiễu)
+        self._pressure_history: List[float] = []
+        self._time_history: List[float] = []
+        self._history_window = 10  # Số samples để tính average (1 giây @ 10 SPS)
+        
         # Statistics
         self.warning_count = 0
         self.emergency_count = 0
     
     def start_phase(self, phase: BPState):
-        """Bắt đầu phase mới (reset timer)"""
+        """Bắt đầu phase mới (reset timer + pressure tracking)"""
         self._phase_start_time = time.time()
-        self.logger.debug(f"Safety monitor: Started {phase.value} phase")
+        # Reset leak detection state để tránh false positive từ phase trước
+        self._last_pressure = None
+        self._last_pressure_time = None
+        self._pressure_history.clear()
+        self._time_history.clear()
+        self.logger.debug(f"Safety monitor: Started {phase.value} phase (leak detection reset)")
     
     def check_pressure_limit(self, pressure: float) -> Tuple[bool, str]:
         """
@@ -219,26 +230,53 @@ class BPSafetyMonitor:
         """
         Phát hiện rò rỉ khí (pressure drop quá nhanh)
         
+        Method:
+        -------
+        - Sử dụng sliding window (10 samples) để tính average deflate rate
+        - Giảm false positive do nhiễu hoặc dao động oscillometric ngắn hạn
+        - Grace period 3s để van cơ học đóng hoàn toàn
+        
         Returns:
             (no_leak, message)
         """
-        if self._last_pressure is None or self._last_pressure_time is None:
-            self._last_pressure = pressure
-            self._last_pressure_time = timestamp
-            return True, "OK"
+        # Thêm vào history
+        self._pressure_history.append(pressure)
+        self._time_history.append(timestamp)
         
-        dt = timestamp - self._last_pressure_time
-        if dt < 0.01:  # Ignore too-fast updates
-            return True, "OK"
+        # Giữ tối đa N samples trong window
+        if len(self._pressure_history) > self._history_window:
+            self._pressure_history.pop(0)
+            self._time_history.pop(0)
         
-        dp = self._last_pressure - pressure
-        rate = dp / dt  # mmHg/s
+        # Cần ít nhất 2 samples để tính rate
+        if len(self._pressure_history) < 2:
+            return True, "OK (initializing)"
         
-        self._last_pressure = pressure
-        self._last_pressure_time = timestamp
+        # Grace period: Skip leak detection trong giây đầu
+        if self._phase_start_time is not None:
+            elapsed_since_phase_start = timestamp - self._phase_start_time
+            if elapsed_since_phase_start < self.LEAK_GRACE_PERIOD_S:
+                return True, f"OK (grace period: {elapsed_since_phase_start:.1f}s)"
         
-        if rate > self.LEAK_THRESHOLD_MMHG_S:
-            return False, f"Leak detected: pressure drop {rate:.1f} mmHg/s"
+        # Tính average deflate rate từ first → last sample trong window
+        dt = self._time_history[-1] - self._time_history[0]
+        
+        if dt < 0.5:  # Window quá ngắn (< 0.5s), chưa đủ tin cậy
+            return True, "OK (insufficient data)"
+        
+        dp = self._pressure_history[0] - self._pressure_history[-1]  # Áp giảm
+        avg_rate = dp / dt  # mmHg/s
+        
+        # Log để debug
+        if len(self._pressure_history) == self._history_window:
+            self.logger.debug(
+                f"Leak check: rate={avg_rate:.1f} mmHg/s over {dt:.1f}s "
+                f"({self._pressure_history[0]:.1f} → {self._pressure_history[-1]:.1f} mmHg)"
+            )
+        
+        # Check leak threshold
+        if avg_rate > self.LEAK_THRESHOLD_MMHG_S:
+            return False, f"Leak detected: pressure drop {avg_rate:.1f} mmHg/s (threshold: {self.LEAK_THRESHOLD_MMHG_S})"
         
         return True, "OK"
     
@@ -333,6 +371,14 @@ class OscillometricProcessor:
             pressures_arr = np.array(pressures)
             timestamps_arr = np.array(timestamps)
             
+            # Calculate ACTUAL sample rate from data
+            if len(timestamps) > 1:
+                total_duration = timestamps_arr[-1] - timestamps_arr[0]
+                actual_sample_rate = len(timestamps) / total_duration
+                self.logger.info(f"Actual sample rate: {actual_sample_rate:.1f} SPS (config: {self.sample_rate} SPS)")
+                # Use actual sample rate for filtering
+                self.sample_rate = actual_sample_rate
+            
             # Step 1: Detrend (remove DC ramp)
             pressure_detrended = detrend(pressures_arr, type='linear')
             
@@ -342,12 +388,37 @@ class OscillometricProcessor:
             # Step 3: Extract envelope
             envelope = self._extract_envelope(oscillations)
             
+            # Log signal quality
+            osc_peak_to_peak = np.max(oscillations) - np.min(oscillations)
+            env_peak_to_peak = np.max(envelope) - np.min(envelope)
+            self.logger.info(
+                f"Signal quality: "
+                f"Oscillations P-P={osc_peak_to_peak:.3f}, "
+                f"Envelope P-P={env_peak_to_peak:.3f}"
+            )
+            
             # Step 4: Find MAP (max envelope amplitude)
             map_idx = np.argmax(envelope)
             map_pressure = pressures_arr[map_idx]
             map_amplitude = envelope[map_idx]
             
-            self.logger.debug(f"MAP detected: {map_pressure:.1f} mmHg @ idx {map_idx}")
+            self.logger.info(
+                f"MAP detected: {map_pressure:.1f} mmHg @ idx {map_idx}/{len(pressures)} "
+                f"(amplitude: {map_amplitude:.3f})"
+            )
+            
+            # Validate signal quality
+            MIN_AMPLITUDE = 0.05  # Minimum envelope amplitude (mmHg)
+            if map_amplitude < MIN_AMPLITUDE:
+                self.logger.error(
+                    f"Oscillometric signal too weak: amplitude {map_amplitude:.3f} < {MIN_AMPLITUDE} mmHg. "
+                    f"Possible causes:\n"
+                    f"  1. Cuff not placed on arm (no pulse detected)\n"
+                    f"  2. Cuff too loose (insufficient arterial compression)\n"
+                    f"  3. Wrong cuff position (not over brachial artery)\n"
+                    f"  4. Patient movement during measurement"
+                )
+                return None
             
             # Step 5: Calculate SYS/DIA (ratio method)
             systolic, diastolic = self._calculate_sys_dia(
@@ -417,6 +488,15 @@ class OscillometricProcessor:
         nyquist = self.sample_rate / 2.0
         low = self.bandpass_low / nyquist
         high = self.bandpass_high / nyquist
+        
+        # Clamp frequencies to valid range (0 < Wn < 1)
+        low = max(0.01, min(low, 0.95))
+        high = max(low + 0.05, min(high, 0.95))  # high phải > low
+        
+        self.logger.debug(
+            f"Bandpass filter: {self.bandpass_low:.1f}-{self.bandpass_high:.1f} Hz "
+            f"(Wn: {low:.3f}-{high:.3f}, Nyquist: {nyquist:.1f} Hz)"
+        )
         
         b, a = butter(self.filter_order, [low, high], btype='band')
         filtered = filtfilt(b, a, signal_data)
@@ -747,16 +827,16 @@ class BPHardwareController:
             self.logger.debug("Pump OFF")
     
     def valve_open(self):
-        """Open deflate valve"""
+        """Open deflate valve (NO valve: LOW = OPEN)"""
         if self._is_initialized and GPIO:
-            GPIO.output(self.valve_gpio, GPIO.HIGH)
-            self.logger.debug("Valve OPEN")
+            GPIO.output(self.valve_gpio, GPIO.LOW)  # NO valve: LOW = open
+            self.logger.debug("Valve OPEN (GPIO LOW)")
     
     def valve_close(self):
-        """Close deflate valve"""
+        """Close deflate valve (NO valve: HIGH = CLOSED)"""
         if self._is_initialized and GPIO:
-            GPIO.output(self.valve_gpio, GPIO.LOW)
-            self.logger.debug("Valve CLOSED")
+            GPIO.output(self.valve_gpio, GPIO.HIGH)  # NO valve: HIGH = closed
+            self.logger.debug("Valve CLOSED (GPIO HIGH)")
     
     def emergency_deflate(self):
         """
@@ -854,9 +934,9 @@ class BloodPressureSensor(BaseSensor):
         
         # ========== MEASUREMENT PARAMETERS ==========
         
-        self.inflate_target = config.get('inflate_target_mmhg', 165.0)
+        self.inflate_target = config.get('inflate_target_mmhg', 190.0)
         self.deflate_rate = config.get('deflate_rate_mmhg_s', 3.0)
-        self.max_pressure = config.get('max_pressure_mmhg', 200.0)
+        self.max_pressure = config.get('max_pressure_mmhg', 250.0)
         
         # ========== STATE MACHINE ==========
         
@@ -1150,6 +1230,10 @@ class BloodPressureSensor(BaseSensor):
         # Pump OFF + Valve CLOSED → rò rỉ tự nhiên qua cuff (~2-3 mmHg/s)
         self.hardware.pump_off()
         self.hardware.valve_close()  # ← QUAN TRỌNG: GIỮ ĐÓNG để passive deflation
+        
+        # Delay 0.5s: Cho van cơ học thời gian đóng hoàn toàn
+        time.sleep(0.5)
+        self.logger.debug("Valve closed - waiting for pressure to stabilize...")
         
         # Start recording
         start_time = time.time()

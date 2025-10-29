@@ -28,7 +28,7 @@ GPIO_VALVE = 16     # van NO (HIGH = đóng)
 PRESSURE_TARGET = 190.0   # mmHg
 PRESSURE_LIMIT = 200.0    # an toàn mềm
 TIMEOUT_S = 25            # timeout bơm
-SLOPE = 3.5765743256e-05     # mmHg/count (theo datasheet)
+SLOPE = 0.000035765743256     # mmHg/count (theo datasheet)
 OFFSET = 1357387          # offset đã hiệu chỉnh
 
 log = logging.getLogger("inflate_control")
