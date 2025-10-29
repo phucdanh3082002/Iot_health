@@ -1,606 +1,577 @@
 """
 Blood Pressure Measurement Screen
-Screen cho quá trình đo huyết áp
+Màn hình đo chi tiết cho huyết áp (oscillometric method)
 """
-
-from typing import Dict, Any, Optional
 import logging
 import time
+from typing import Optional
 from kivy.uix.screenmanager import Screen
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.uix.progressbar import ProgressBar
 from kivy.clock import Clock
-from kivy.graphics import Color, Rectangle
+from kivy.metrics import dp
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.button import MDRaisedButton
+from kivymd.uix.card import MDCard
+from kivymd.uix.label import MDLabel, MDIcon
+from kivymd.uix.progressbar import MDProgressBar
+from kivymd.uix.toolbar import MDTopAppBar
+
+from src.sensors.blood_pressure_sensor import BPState, BloodPressureMeasurement
+from src.utils.tts_manager import ScenarioID
+
+# Medical-themed colors (same as temperature_screen.py)
+MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
+MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
+MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
+MED_PRIMARY = (0.12, 0.55, 0.76, 1)
+MED_WARNING = (0.96, 0.4, 0.3, 1)
+TEXT_PRIMARY = (1, 1, 1, 1)
+TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 
 
 class BPMeasurementScreen(Screen):
     """
-    Screen cho quá trình đo huyết áp tự động
+    Màn hình đo chi tiết huyết áp theo phương pháp oscillometric
+    
+    Features:
+    - Real-time pressure display during inflate/deflate
+    - State-based progress indicators
+    - SYS/DIA/MAP/HR results with AHA color coding
+    - Safety warnings and TTS feedback
     """
     
-    # ------------------------------------------------------------------
-    # Initialization & Lifecycle
-    # ------------------------------------------------------------------
-    
     def __init__(self, app_instance, **kwargs):
-        """
-        Initialize BP measurement screen
-        
-        Args:
-            app_instance: Reference to main application
-        """
         super().__init__(**kwargs)
         self.app_instance = app_instance
         self.logger = logging.getLogger(__name__)
         
         # Measurement state
-        self.measurement_state = 'idle'  # idle, preparing, inflating, measuring, deflating, complete
-        self.measurement_timer = None
-        self.measurement_progress = 0.0
+        self.measuring = False
+        self.current_state = BPState.IDLE
         self.current_pressure = 0.0
-        self.measurement_start_time = 0
-        self.estimated_duration = 60  # seconds
+        self.last_result: Optional[BloodPressureMeasurement] = None
         
-        # Results
-        self.systolic_result = 0
-        self.diastolic_result = 0
+        # UI update scheduler
+        self.update_event = None
+        
+        # TTS state tracking (announce only once per state transition)
+        self._inflate_announced = False
+        self._deflate_announced = False
         
         self._build_layout()
     
-    # ------------------------------------------------------------------
-    # UI Construction & Layout
-    # ------------------------------------------------------------------
-    
     def _build_layout(self):
-        """Build BP measurement layout"""
-        # Main container with background
-        main_layout = BoxLayout(orientation='vertical', spacing=10, padding=15)
+        """Build BP measurement layout - optimized for 480x320"""
+        main_layout = MDBoxLayout(
+            orientation='vertical',
+            md_bg_color=MED_BG_COLOR,
+            spacing=dp(5),
+            padding=dp(5)
+        )
         
-        with main_layout.canvas.before:
-            Color(0.1, 0.1, 0.15, 1)  # Dark blue background
-            self.bg_rect = Rectangle(size=main_layout.size, pos=main_layout.pos)
-        main_layout.bind(size=self._update_bg_rect, pos=self._update_bg_rect)
-        
-        # Header
-        self._create_header(main_layout)
+        # Top bar: Title + Back button (compact)
+        self._create_top_bar(main_layout)
         
         # Main content area
-        content_area = BoxLayout(orientation='vertical', size_hint_y=0.8, spacing=15)
+        content = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(5)
+        )
         
-        # Instruction panel
-        self._create_instruction_panel(content_area)
+        # Row 1: Pressure display + Status
+        self._create_status_row(content)
         
-        # Progress panel
-        self._create_progress_panel(content_area)
+        # Row 2: Results grid (2x2)
+        self._create_results_grid(content)
         
-        # Pressure display
-        self._create_pressure_display(content_area)
+        # Row 3: Progress bar
+        self._create_progress_panel(content)
         
-        # Result panel
-        self._create_result_panel(content_area)
+        main_layout.add_widget(content)
         
-        main_layout.add_widget(content_area)
-        
-        # Control buttons
-        self._create_control_panel(main_layout)
+        # Bottom: Control buttons
+        self._create_control_buttons(main_layout)
         
         self.add_widget(main_layout)
     
-    def _update_bg_rect(self, instance, value):
-        self.bg_rect.pos = instance.pos
-        self.bg_rect.size = instance.size
+    def _create_top_bar(self, parent):
+        """Create header toolbar (same style as temperature_screen)"""
+        toolbar = MDTopAppBar(
+            title='ĐO HUYẾT ÁP',
+            elevation=0,
+            md_bg_color=MED_PRIMARY,
+            specific_text_color=TEXT_PRIMARY,
+            left_action_items=[["arrow-left", lambda _: self._on_back_pressed()]],
+            size_hint_y=None,
+            height=dp(30),
+        )
+        parent.add_widget(toolbar)
     
-    def _create_header(self, parent):
-        """Create header with title and back button"""
-        header = BoxLayout(orientation='horizontal', size_hint_y=0.1, spacing=10)
-        
-        # Title
-        title = Label(
-            text='ĐO HUYẾT ÁP',
-            font_size='20sp',
-            bold=True,
-            color=(1, 1, 1, 1),
-            size_hint_x=0.8
-        )
-        header.add_widget(title)
-        
-        # Back button
-        back_btn = Button(
-            text='← Quay lại',
-            font_size='14sp',
-            size_hint_x=0.2,
-            background_color=(0.6, 0.6, 0.6, 1)
-        )
-        back_btn.bind(on_press=self._on_back_pressed)
-        header.add_widget(back_btn)
-        
-        parent.add_widget(header)
-    
-    def _create_instruction_panel(self, parent):
-        """Create instruction panel"""
-        instruction_container = BoxLayout(
-            orientation='vertical',
-            size_hint_y=0.25,
-            spacing=5
-        )
-        
-        # Background
-        with instruction_container.canvas.before:
-            Color(0.2, 0.2, 0.3, 1)
-            self.instruction_rect = Rectangle(
-                size=instruction_container.size,
-                pos=instruction_container.pos
-            )
-        instruction_container.bind(
-            size=self._update_instruction_rect,
-            pos=self._update_instruction_rect
-        )
-        
-        # Instruction title
-        instruction_title = Label(
-            text='HƯỚNG DẪN',
-            font_size='16sp',
-            bold=True,
-            size_hint_y=0.3,
-            color=(0.9, 0.9, 0.9, 1)
-        )
-        instruction_container.add_widget(instruction_title)
-        
-        # Instruction text
-        self.instruction_label = Label(
-            text='Ngồi thẳng, đặt cánh tay lên bàn\nThư giãn và không nói chuyện\nBấm "Bắt đầu đo" để tiến hành',
-            font_size='12sp',
-            size_hint_y=0.7,
-            color=(0.8, 0.8, 0.8, 1),
-            halign='center'
-        )
-        self.instruction_label.bind(size=self.instruction_label.setter('text_size'))
-        instruction_container.add_widget(self.instruction_label)
-        
-        parent.add_widget(instruction_container)
-    
-    def _update_instruction_rect(self, instance, value):
-        self.instruction_rect.pos = instance.pos
-        self.instruction_rect.size = instance.size
-    
-    def _create_progress_panel(self, parent):
-        """Create progress indicator panel"""
-        progress_container = BoxLayout(
-            orientation='vertical',
-            size_hint_y=0.2,
-            spacing=10
-        )
-        
-        # Progress label
-        self.progress_label = Label(
-            text='Sẵn sàng đo',
-            font_size='14sp',
-            size_hint_y=0.4,
-            color=(1, 1, 1, 1)
-        )
-        progress_container.add_widget(self.progress_label)
-        
-        # Progress bar
-        self.progress_bar = ProgressBar(
-            max=100,
-            value=0,
-            size_hint_y=0.6
-        )
-        progress_container.add_widget(self.progress_bar)
-        
-        parent.add_widget(progress_container)
-    
-    def _create_pressure_display(self, parent):
-        """Create real-time pressure display"""
-        pressure_container = BoxLayout(
-            orientation='vertical',
-            size_hint_y=0.25,
-            spacing=5
-        )
-        
-        # Background
-        with pressure_container.canvas.before:
-            Color(0.15, 0.15, 0.2, 1)
-            self.pressure_rect = Rectangle(
-                size=pressure_container.size,
-                pos=pressure_container.pos
-            )
-        pressure_container.bind(
-            size=self._update_pressure_rect,
-            pos=self._update_pressure_rect
-        )
-        
-        # Pressure label
-        pressure_title = Label(
-            text='ÁP SUẤT HIỆN TẠI',
-            font_size='12sp',
-            size_hint_y=0.3,
-            color=(0.7, 0.7, 0.7, 1)
-        )
-        pressure_container.add_widget(pressure_title)
-        
-        # Pressure value
-        self.pressure_value_label = Label(
-            text='0 mmHg',
-            font_size='24sp',
-            bold=True,
-            size_hint_y=0.7,
-            color=(0, 0.8, 1, 1)  # Cyan color
-        )
-        pressure_container.add_widget(self.pressure_value_label)
-        
-        parent.add_widget(pressure_container)
-    
-    def _update_pressure_rect(self, instance, value):
-        self.pressure_rect.pos = instance.pos
-        self.pressure_rect.size = instance.size
-    
-    def _create_result_panel(self, parent):
-        """Create result display panel"""
-        result_container = BoxLayout(
-            orientation='vertical',
-            size_hint_y=0.3,
-            spacing=5
-        )
-        
-        # Background
-        with result_container.canvas.before:
-            Color(0.1, 0.3, 0.1, 1)  # Dark green background
-            self.result_rect = Rectangle(
-                size=result_container.size,
-                pos=result_container.pos
-            )
-        result_container.bind(
-            size=self._update_result_rect,
-            pos=self._update_result_rect
-        )
-        
-        # Result title
-        result_title = Label(
-            text='KẾT QUẢ ĐO',
-            font_size='14sp',
-            bold=True,
-            size_hint_y=0.2,
-            color=(0.9, 0.9, 0.9, 1)
-        )
-        result_container.add_widget(result_title)
-        
-        # BP values
-        bp_display = BoxLayout(orientation='horizontal', size_hint_y=0.6)
-        
-        # Systolic
-        systolic_layout = BoxLayout(orientation='vertical')
-        systolic_title = Label(
-            text='Tâm thu',
-            font_size='12sp',
-            size_hint_y=0.3,
-            color=(0.8, 0.8, 0.8, 1)
-        )
-        self.systolic_label = Label(
-            text='--',
-            font_size='32sp',
-            bold=True,
-            size_hint_y=0.7,
-            color=(1, 1, 1, 1)
-        )
-        systolic_layout.add_widget(systolic_title)
-        systolic_layout.add_widget(self.systolic_label)
-        bp_display.add_widget(systolic_layout)
-        
-        # Separator
-        separator = Label(
-            text='/',
-            font_size='28sp',
-            size_hint_x=0.2,
-            color=(0.8, 0.8, 0.8, 1)
-        )
-        bp_display.add_widget(separator)
-        
-        # Diastolic
-        diastolic_layout = BoxLayout(orientation='vertical')
-        diastolic_title = Label(
-            text='Tâm trương',
-            font_size='12sp',
-            size_hint_y=0.3,
-            color=(0.8, 0.8, 0.8, 1)
-        )
-        self.diastolic_label = Label(
-            text='--',
-            font_size='32sp',
-            bold=True,
-            size_hint_y=0.7,
-            color=(1, 1, 1, 1)
-        )
-        diastolic_layout.add_widget(diastolic_title)
-        diastolic_layout.add_widget(self.diastolic_label)
-        bp_display.add_widget(diastolic_layout)
-        
-        result_container.add_widget(bp_display)
-        
-        # Status
-        self.bp_status_label = Label(
-            text='Chưa đo',
-            font_size='12sp',
-            size_hint_y=0.2,
-            color=(0.7, 0.7, 0.7, 1)
-        )
-        result_container.add_widget(self.bp_status_label)
-        
-        parent.add_widget(result_container)
-    
-    def _update_result_rect(self, instance, value):
-        self.result_rect.pos = instance.pos
-        self.result_rect.size = instance.size
-    
-    def _create_control_panel(self, parent):
-        """Create control buttons panel"""
-        control_layout = BoxLayout(
-            orientation='horizontal',
-            size_hint_y=0.1,
-            spacing=10
-        )
-        
-        # Start/Stop button
-        self.start_stop_btn = Button(
-            text='Bắt đầu đo',
-            font_size='16sp',
-            background_color=(0.2, 0.8, 0.2, 1)
-        )
-        self.start_stop_btn.bind(on_press=self._on_start_stop_pressed)
-        control_layout.add_widget(self.start_stop_btn)
-        
-        # Save button (initially disabled)
-        self.save_btn = Button(
-            text='Lưu kết quả',
-            font_size='16sp',
-            background_color=(0.6, 0.6, 0.6, 1),
-            disabled=True
-        )
-        self.save_btn.bind(on_press=self._on_save_pressed)
-        control_layout.add_widget(self.save_btn)
-        
-        parent.add_widget(control_layout)
-
-    # ------------------------------------------------------------------
-    # Event Handlers
-    # ------------------------------------------------------------------
-    
-    def _on_start_stop_pressed(self, instance):
-        """Handle start/stop button press"""
-        if self.measurement_state == 'idle':
-            self.start_measurement()
-        else:
-            self.stop_measurement()
-    
-    def _on_save_pressed(self, instance):
-        """Handle save button press"""
-        if self.systolic_result > 0 and self.diastolic_result > 0:
-            self.save_measurement(self.systolic_result, self.diastolic_result)
-            self._play_measurement_audio("Đã lưu kết quả đo huyết áp")
-    
-    def _on_back_pressed(self, instance):
+    def _on_back_pressed(self):
         """Handle back button press"""
-        if self.measurement_state != 'idle':
-            self.stop_measurement()
+        if self.measuring:
+            self._stop_measurement()
         self.app_instance.navigate_to_screen('dashboard')
     
-    # ------------------------------------------------------------------
-    # Measurement Control
-    # ------------------------------------------------------------------
+    def _create_status_row(self, parent):
+        """Create compact status row: Pressure | State"""
+        row = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(70)
+        )
+        
+        # Pressure display (left)
+        pressure_card = MDCard(
+            orientation='vertical',
+            md_bg_color=MED_CARD_BG,
+            padding=dp(8),
+            radius=[dp(8)],
+            size_hint_x=0.5
+        )
+        
+        pressure_card.add_widget(MDLabel(
+            text="Áp suất",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="center",
+            size_hint_y=0.3
+        ))
+        
+        self.pressure_label = MDLabel(
+            text="0",
+            font_style="H5",
+            theme_text_color="Custom",
+            text_color=MED_CARD_ACCENT,
+            halign="center",
+            bold=True,
+            size_hint_y=0.7
+        )
+        pressure_card.add_widget(self.pressure_label)
+        row.add_widget(pressure_card)
+        
+        # State display (right)
+        state_card = MDCard(
+            orientation='vertical',
+            md_bg_color=MED_CARD_BG,
+            padding=dp(8),
+            radius=[dp(8)],
+            size_hint_x=0.5
+        )
+        
+        state_card.add_widget(MDLabel(
+            text="Trạng thái",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="center",
+            size_hint_y=0.3
+        ))
+        
+        self.state_label = MDLabel(
+            text="Chờ đo",
+            font_style="Body1",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            halign="center",
+            size_hint_y=0.7
+        )
+        state_card.add_widget(self.state_label)
+        row.add_widget(state_card)
+        
+        parent.add_widget(row)
     
-    def start_measurement(self):
-        """Start blood pressure measurement process"""
+    def _create_results_grid(self, parent):
+        """Create compact 2x2 grid for SYS/DIA/MAP/HR"""
+        results_card = MDCard(
+            orientation='vertical',
+            md_bg_color=MED_CARD_BG,
+            padding=dp(8),
+            radius=[dp(8)],
+            size_hint_y=None,
+            height=dp(100)
+        )
+        
+        # Title
+        results_card.add_widget(MDLabel(
+            text="Kết quả",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            size_hint_y=0.15
+        ))
+        
+        # 2x2 Grid (compact)
+        grid = MDBoxLayout(orientation='vertical', spacing=dp(3), size_hint_y=0.85)
+        
+        # Row 1: SYS | DIA
+        row1 = MDBoxLayout(orientation='horizontal', spacing=dp(5))
+        row1.add_widget(self._create_compact_result("SYS", "sys_label"))
+        row1.add_widget(self._create_compact_result("DIA", "dia_label"))
+        grid.add_widget(row1)
+        
+        # Row 2: MAP | HR
+        row2 = MDBoxLayout(orientation='horizontal', spacing=dp(5))
+        row2.add_widget(self._create_compact_result("MAP", "map_label"))
+        row2.add_widget(self._create_compact_result("HR", "hr_label"))
+        grid.add_widget(row2)
+        
+        results_card.add_widget(grid)
+        parent.add_widget(results_card)
+    
+    def _create_compact_result(self, label_text, attr_name):
+        """Create compact result item"""
+        container = MDBoxLayout(
+            orientation='horizontal',
+            padding=dp(5),
+            spacing=dp(5)
+        )
+        
+        # Label
+        container.add_widget(MDLabel(
+            text=label_text,
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            size_hint_x=0.3,
+            halign="left"
+        ))
+        
+        # Value
+        value_label = MDLabel(
+            text="--",
+            font_style="H6",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            size_hint_x=0.7,
+            bold=True,
+            halign="right"
+        )
+        setattr(self, attr_name, value_label)
+        container.add_widget(value_label)
+        
+        return container
+    
+    def _create_progress_panel(self, parent):
+        """Create compact progress bar"""
+        progress_card = MDCard(
+            orientation='vertical',
+            md_bg_color=MED_CARD_BG,
+            padding=dp(8),
+            radius=[dp(8)],
+            size_hint_y=None,
+            height=dp(40)
+        )
+        
+        self.progress_bar = MDProgressBar(
+            size_hint_y=1.0,
+            color=MED_CARD_ACCENT
+        )
+        progress_card.add_widget(self.progress_bar)
+        parent.add_widget(progress_card)
+    
+    def _create_control_buttons(self, parent):
+        """Create compact control buttons"""
+        button_layout = MDBoxLayout(
+            orientation='horizontal',
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(45),
+            padding=[0, dp(5), 0, dp(5)]
+        )
+        
+        self.start_btn = MDRaisedButton(
+            text="Bắt đầu",
+            md_bg_color=MED_PRIMARY,
+            on_press=self._start_measurement,
+            size_hint_x=0.4
+        )
+        button_layout.add_widget(self.start_btn)
+        
+        self.stop_btn = MDRaisedButton(
+            text="Dừng",
+            md_bg_color=MED_WARNING,
+            on_press=self._stop_measurement,
+            size_hint_x=0.3,
+            disabled=True
+        )
+        button_layout.add_widget(self.stop_btn)
+        
+        self.save_btn = MDRaisedButton(
+            text="Lưu",
+            md_bg_color=MED_CARD_ACCENT,
+            on_press=self._save_measurement,
+            size_hint_x=0.3,
+            disabled=True
+        )
+        button_layout.add_widget(self.save_btn)
+        
+        parent.add_widget(button_layout)
+    
+    def _start_measurement(self, *args):
+        """Start BP measurement"""
         try:
-            self.measurement_state = 'preparing'
-            self.measurement_start_time = time.time()
-            self.measurement_progress = 0
+            bp_sensor = self.app_instance.sensors.get('BloodPressure')
+            if not bp_sensor:
+                self.logger.error("BloodPressure sensor not available")
+                self._speak_scenario(ScenarioID.SENSOR_FAILURE)
+                return
+            
+            if not self.app_instance.ensure_sensor_started('BloodPressure'):
+                self.logger.error("Failed to start sensor")
+                return
+            
+            self.measuring = True
+            self.last_result = None
             
             # Update UI
-            self.start_stop_btn.text = 'Dừng đo'
-            self.start_stop_btn.background_color = (0.8, 0.2, 0.2, 1)
+            self.start_btn.disabled = True
+            self.stop_btn.disabled = False
             self.save_btn.disabled = True
-            self.save_btn.background_color = (0.6, 0.6, 0.6, 1)
-            
-            # Reset results
-            self.systolic_label.text = '--'
-            self.diastolic_label.text = '--'
-            self.bp_status_label.text = 'Đang chuẩn bị...'
-            
-            # Play audio instruction
-            self._play_measurement_audio("Bắt đầu đo huyết áp. Hãy giữ yên và thở đều")
-            
-            # Start measurement timer
-            self.measurement_timer = Clock.schedule_interval(
-                self._update_measurement_progress, 0.5
-            )
-            
-            self.logger.info("Blood pressure measurement started")
-            
-        except Exception as e:
-            self.logger.error(f"Error starting BP measurement: {e}")
-            self.measurement_state = 'idle'
-    
-    def stop_measurement(self):
-        """Stop blood pressure measurement process"""
-        try:
-            if self.measurement_timer:
-                self.measurement_timer.cancel()
-                self.measurement_timer = None
-            
-            self.measurement_state = 'idle'
-            
-            # Update UI
-            self.start_stop_btn.text = 'Bắt đầu đo'
-            self.start_stop_btn.background_color = (0.2, 0.8, 0.2, 1)
+            self.state_label.text = "Đang chuẩn bị..."
             self.progress_bar.value = 0
-            self.progress_label.text = 'Đã dừng đo'
-            self.pressure_value_label.text = '0 mmHg'
             
-            self._play_measurement_audio("Đã dừng đo huyết áp")
+            # Clear results
+            self.sys_label.text = "--"
+            self.dia_label.text = "--"
+            self.map_label.text = "--"
+            self.hr_label.text = "--"
             
-            self.logger.info("Blood pressure measurement stopped")
+            # Reset TTS announce flags
+            self._inflate_announced = False
+            self._deflate_announced = False
+            
+            # Start measurement
+            bp_sensor.start_measurement(callback=self._on_measurement_complete)
+            
+            # Start UI updates (5Hz)
+            self.update_event = Clock.schedule_interval(self._update_ui, 0.2)
+            
+            # TTS will be announced when sensor enters INFLATING state (in _update_ui)
+            
+            self.logger.info("BP measurement started")
             
         except Exception as e:
-            self.logger.error(f"Error stopping BP measurement: {e}")
+            self.logger.error(f"Error starting: {e}")
+            self._reset_ui()
     
-    def _update_measurement_progress(self, dt):
-        """Update measurement progress"""
+    def _stop_measurement(self, *args):
+        """Emergency stop"""
         try:
-            elapsed = time.time() - self.measurement_start_time
-            progress_percent = min((elapsed / self.estimated_duration) * 100, 100)
+            bp_sensor = self.app_instance.sensors.get('BloodPressure')
+            if bp_sensor and hasattr(bp_sensor, 'stop_measurement'):
+                bp_sensor.stop_measurement()
             
-            self.progress_bar.value = progress_percent
+            self._reset_ui()
+            self._speak_scenario(ScenarioID.SAFETY_EMERGENCY_RELEASE)
+            self.logger.info("BP measurement stopped")
             
-            # Simulate measurement phases
-            if elapsed < 10:
-                self.measurement_state = 'preparing'
-                self.progress_label.text = 'Đang chuẩn bị...'
-                self.current_pressure = 0
-            elif elapsed < 25:
-                self.measurement_state = 'inflating'
-                self.progress_label.text = 'Đang bơm...'
-                # Simulate pressure increase
-                self.current_pressure = min(30 + (elapsed - 10) * 8, 180)
-            elif elapsed < 45:
-                self.measurement_state = 'measuring'
-                self.progress_label.text = 'Đang đo...'
-                # Simulate pressure decrease with oscillations
-                base_pressure = 180 - (elapsed - 25) * 6
-                self.current_pressure = max(base_pressure, 30)
-            elif elapsed < 55:
-                self.measurement_state = 'deflating'
-                self.progress_label.text = 'Đang xả khí...'
-                self.current_pressure = max(30 - (elapsed - 45) * 3, 0)
-            else:
-                # Measurement complete
-                self._handle_measurement_complete()
-                return False  # Stop the timer
+        except Exception as e:
+            self.logger.error(f"Error stopping: {e}")
+    
+    def _update_ui(self, dt):
+        """Update UI with real-time data (called at 5Hz)"""
+        try:
+            bp_sensor = self.app_instance.sensors.get('BloodPressure')
+            if not bp_sensor:
+                return
+            
+            # Get current state from sensor (use method, not property)
+            self.current_state = bp_sensor.get_state()
+            
+            # Get current pressure from sensor buffer (fallback if property doesn't exist)
+            try:
+                # Try to get pressure from buffer (last reading)
+                if hasattr(bp_sensor, 'pressure_buffer') and len(bp_sensor.pressure_buffer) > 0:
+                    self.current_pressure = bp_sensor.pressure_buffer[-1]
+                else:
+                    self.current_pressure = 0.0
+            except (AttributeError, IndexError):
+                self.current_pressure = 0.0
             
             # Update pressure display
-            self.pressure_value_label.text = f"{self.current_pressure:.0f} mmHg"
+            self.pressure_label.text = f"{self.current_pressure:.0f}"
+            
+            # Update state and progress
+            state_map = {
+                BPState.IDLE: ("Chờ đo", 0),
+                BPState.INITIALIZING: ("Khởi động", 5),
+                BPState.INFLATING: ("Đang bơm", 30),
+                BPState.DEFLATING: ("Đang đo", 65),
+                BPState.ANALYZING: ("Phân tích", 90),
+                BPState.COMPLETED: ("Hoàn thành", 100),
+                BPState.ERROR: ("Lỗi", 0),
+                BPState.EMERGENCY_DEFLATE: ("Xả khẩn", 0)
+            }
+            
+            state_text, progress = state_map.get(self.current_state, ("Không rõ", 0))
+            self.state_label.text = state_text
+            self.progress_bar.value = progress
+            
+            # TTS feedback at state transitions (announce only once per state)
+            if self.current_state == BPState.INFLATING:
+                if not self._inflate_announced:
+                    self._speak_scenario(ScenarioID.BP_INFLATE)
+                    self._inflate_announced = True
+                    self.logger.debug("TTS: BP_INFLATE announced")
+            
+            if self.current_state == BPState.DEFLATING:
+                if not self._deflate_announced:
+                    self._speak_scenario(ScenarioID.BP_DEFLATE)
+                    self._deflate_announced = True
+                    self.logger.debug("TTS: BP_DEFLATE announced")
             
         except Exception as e:
-            self.logger.error(f"Error updating measurement progress: {e}")
+            self.logger.error(f"Error updating UI: {e}")
     
-    def _handle_measurement_complete(self):
-        """Handle measurement completion"""
+    def _on_measurement_complete(self, result: BloodPressureMeasurement):
+        """Callback when measurement completes"""
         try:
-            # Simulate realistic BP values (for demo purposes)
-            import random
+            # Stop UI update loop
+            if self.update_event:
+                self.update_event.cancel()
+                self.update_event = None
             
-            # Generate somewhat realistic values
-            base_systolic = random.randint(110, 140)
-            base_diastolic = random.randint(70, 90)
+            self.measuring = False
+            self.last_result = result
             
-            self.systolic_result = base_systolic
-            self.diastolic_result = base_diastolic
+            # Display results
+            self._display_results(result)
             
-            # Update display
-            self.systolic_label.text = str(self.systolic_result)
-            self.diastolic_label.text = str(self.diastolic_result)
-            
-            # Update status and colors
-            status = self._get_bp_status(self.systolic_result, self.diastolic_result)
-            status_colors = {
-                'normal': (0.2, 0.8, 0.2, 1),
-                'high': (1, 0.6, 0, 1),
-                'critical': (1, 0.2, 0.2, 1)
-            }
-            
-            color = status_colors.get(status, (1, 1, 1, 1))
-            self.systolic_label.color = color
-            self.diastolic_label.color = color
-            
-            status_text = {
-                'normal': 'Bình thường',
-                'high': 'Cao',
-                'critical': 'Rất cao'
-            }
-            
-            self.bp_status_label.text = status_text.get(status, 'Hoàn thành')
+            # TTS announcement
+            sys_int = int(round(result.systolic))
+            dia_int = int(round(result.diastolic))
+            self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int)
             
             # Update UI state
-            self.measurement_state = 'complete'
-            self.progress_label.text = 'Hoàn thành'
-            self.progress_bar.value = 100
-            self.pressure_value_label.text = '0 mmHg'
-            
-            # Enable save button
+            self.start_btn.disabled = False
+            self.start_btn.text = "Đo lại"
+            self.stop_btn.disabled = True
             self.save_btn.disabled = False
-            self.save_btn.background_color = (0.2, 0.6, 0.8, 1)
+            self.state_label.text = "Hoàn thành"
+            self.progress_bar.value = 100
+            self.pressure_label.text = "0"
             
-            # Update start button
-            self.start_stop_btn.text = 'Đo lại'
-            self.start_stop_btn.background_color = (0.2, 0.8, 0.2, 1)
-            
-            # Play completion audio
-            audio_msg = f"Đo huyết áp hoàn thành. Kết quả {self.systolic_result} trên {self.diastolic_result}. {status_text.get(status, '')}"
-            self._play_measurement_audio(audio_msg)
-            
-            self.logger.info(f"BP measurement complete: {self.systolic_result}/{self.diastolic_result}")
+            self.logger.info(
+                f"Complete: SYS={result.systolic:.0f} DIA={result.diastolic:.0f} "
+                f"MAP={result.map_value:.0f} HR={result.heart_rate:.0f} "
+                f"Quality={result.quality} Confidence={result.confidence:.2f}"
+            )
             
         except Exception as e:
-            self.logger.error(f"Error handling measurement completion: {e}")
-
-    # ------------------------------------------------------------------
-    # Data Management & Utilities
-    # ------------------------------------------------------------------
+            self.logger.error(f"Error handling completion: {e}")
+            self._reset_ui()
     
-    def _get_bp_status(self, systolic: float, diastolic: float) -> str:
-        """Get blood pressure status"""
-        if systolic >= 160 or diastolic >= 100:
-            return 'critical'
-        elif systolic >= 140 or diastolic >= 90:
-            return 'high'
-        else:
-            return 'normal'
-    
-    def _play_measurement_audio(self, message: str):
-        """Play audio instruction/feedback"""
+    def _display_results(self, result: BloodPressureMeasurement):
+        """Display results with AHA color coding"""
         try:
-            speak_fn = getattr(self.app_instance, 'speak', None)
-            if speak_fn is None:
-                self.logger.warning("TTS engine not available for BP screen")
+            self.sys_label.text = f"{result.systolic:.0f}"
+            self.dia_label.text = f"{result.diastolic:.0f}"
+            self.map_label.text = f"{result.map_value:.0f}"
+            self.hr_label.text = f"{result.heart_rate:.0f}" if result.heart_rate else "--"
+            
+            # AHA color coding
+            sys_val = result.systolic
+            dia_val = result.diastolic
+            
+            if sys_val < 90 or dia_val < 60:
+                color = (0.3, 0.6, 1.0, 1)  # Blue - Low
+            elif sys_val < 120 and dia_val < 80:
+                color = (0.2, 0.8, 0.2, 1)  # Green - Normal
+            elif sys_val < 130 and dia_val < 80:
+                color = (1.0, 0.8, 0.0, 1)  # Yellow - Elevated
+            elif sys_val < 140 or dia_val < 90:
+                color = (1.0, 0.6, 0.0, 1)  # Orange - Stage 1
+            elif sys_val < 180 and dia_val < 120:
+                color = (1.0, 0.3, 0.0, 1)  # Red-Orange - Stage 2
+            else:
+                color = (1.0, 0.0, 0.0, 1)  # Red - Crisis
+            
+            self.sys_label.text_color = color
+            self.dia_label.text_color = color
+            
+        except Exception as e:
+            self.logger.error(f"Error displaying results: {e}")
+    
+    def _save_measurement(self, *args):
+        """Save measurement to database"""
+        try:
+            if not self.last_result:
+                self.logger.warning("No measurement to save")
                 return
-
-            speak_fn(message)
-        except Exception as e:
-            self.logger.error(f"Error playing audio: {e}")
-    
-    def save_measurement(self, systolic: float, diastolic: float):
-        """Save measurement results"""
-        try:
+            
             measurement_data = {
                 'timestamp': time.time(),
-                'systolic': systolic,
-                'diastolic': diastolic,
-                'measurement_type': 'blood_pressure'
+                'systolic': self.last_result.systolic,
+                'diastolic': self.last_result.diastolic,
+                'map_value': self.last_result.map_value,
+                'heart_rate': self.last_result.heart_rate,
+                'measurement_type': 'blood_pressure',
+                'quality': self.last_result.quality,
+                'confidence': self.last_result.confidence
             }
             
-            # Save to app's current data
-            self.app_instance.current_data['blood_pressure_systolic'] = systolic
-            self.app_instance.current_data['blood_pressure_diastolic'] = diastolic
-            
-            # Save to database if available
             self.app_instance.save_measurement_to_database(measurement_data)
             
-            self.logger.info(f"Saved BP measurement: {systolic}/{diastolic}")
+            self.app_instance.current_data['blood_pressure_systolic'] = self.last_result.systolic
+            self.app_instance.current_data['blood_pressure_diastolic'] = self.last_result.diastolic
+            
+            self.save_btn.disabled = True
+            self.logger.info("Measurement saved")
             
         except Exception as e:
-            self.logger.error(f"Error saving measurement: {e}")
+            self.logger.error(f"Error saving: {e}")
+    
+    def _reset_ui(self):
+        """Reset UI to idle state"""
+        self.measuring = False
+        self.current_state = BPState.IDLE
+        self.current_pressure = 0.0
+        
+        if self.update_event:
+            self.update_event.cancel()
+            self.update_event = None
+        
+        self.start_btn.disabled = False
+        self.start_btn.text = "Bắt đầu"
+        self.stop_btn.disabled = True
+        self.save_btn.disabled = True
+        
+        self.state_label.text = "Chờ đo"
+        self.progress_bar.value = 0
+        self.pressure_label.text = "0"
+        
+        # Clear results
+        self.sys_label.text = "--"
+        self.dia_label.text = "--"
+        self.map_label.text = "--"
+        self.hr_label.text = "--"
+        
+        # Reset TTS announce flags
+        self._inflate_announced = False
+        self._deflate_announced = False
+    
+    def _speak_scenario(self, scenario: ScenarioID, **kwargs):
+        """Speak TTS scenario"""
+        try:
+            if hasattr(self.app_instance, '_speak_scenario'):
+                self.app_instance._speak_scenario(scenario, **kwargs)
+        except Exception as e:
+            self.logger.debug(f"TTS not available: {e}")
     
     def on_enter(self):
-        """Called when screen is entered"""
-        self.logger.info("BP measurement screen entered")
-        # Reset to idle state
-        if self.measurement_state != 'idle':
-            self.stop_measurement()
+        """Called when screen entered"""
+        self._reset_ui()
+        self.logger.info("Entered BP measurement screen")
     
     def on_leave(self):
-        """Called when screen is left"""
-        self.logger.info("BP measurement screen left")
-        # Stop any ongoing measurement
-        if self.measurement_state != 'idle':
-            self.stop_measurement()
+        """Called when screen left"""
+        if self.measuring:
+            self._stop_measurement()
+        
+        if self.update_event:
+            self.update_event.cancel()
+            self.update_event = None
+        
+        self.logger.info("Left BP measurement screen")

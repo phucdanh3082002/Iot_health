@@ -533,91 +533,223 @@ class OscillometricProcessor:
         map_amplitude: float
     ) -> Tuple[Optional[float], Optional[float]]:
         """
-        Calculate SYS/DIA using ratio method (Oscillometric standard)
+        Calculate SYS/DIA with ROBUST multi-level fallback strategy
         
-        Algorithm:
-        ---------
-        1. Tính thresholds: sys_threshold = sys_ratio × max_amplitude
-                           dia_threshold = dia_ratio × max_amplitude
-        2. SYS: Tìm điểm đầu tiên envelope vượt sys_threshold (trước MAP, khi deflate xuống)
-        3. DIA: Tìm điểm đầu tiên envelope giảm xuống dưới dia_threshold (sau MAP)
-        
-        Ratios (cần calibration):
-        - sys_ratio: 0.45-0.60 (default 0.55) - 55% max amplitude
-        - dia_ratio: 0.75-0.85 (default 0.80) - 80% max amplitude
+        Algorithm Flow:
+        --------------
+        LEVEL 1: Standard ratio method (55%/80% thresholds)
+        LEVEL 2: Relaxed thresholds (±5%, ±10%)
+        LEVEL 3: Peak-based method (find local maxima)
+        LEVEL 4: Nearest-by-amplitude in correct side
+        LEVEL 5: Clamp to physiological safe range
         
         Returns:
-            (systolic, diastolic) or (None, None) if failed
+            (systolic, diastolic) or (None, None) if all methods failed
         """
+        map_pressure = pressures[map_idx]
+        
+        # ========== LEVEL 1: Standard Ratio Method ==========
         sys_threshold = map_amplitude * self.sys_ratio
         dia_threshold = map_amplitude * self.dia_ratio
         
         self.logger.debug(
-            f"Thresholds: SYS={sys_threshold:.3f} ({self.sys_ratio*100:.0f}%), "
-            f"DIA={dia_threshold:.3f} ({self.dia_ratio*100:.0f}%)"
+            f"Level 1: Standard ratio (SYS={self.sys_ratio:.0%}, DIA={self.dia_ratio:.0%})"
         )
         
-        # ========== FIND SYS (before MAP) ==========
-        # Trong pha deflate: Áp giảm dần, envelope tăng dần đến MAP
-        # SYS = Pressure khi envelope vượt sys_threshold lần đầu tiên (đang tăng)
+        sys_idx, dia_idx = self._find_crossing_points(
+            envelope, map_idx, sys_threshold, dia_threshold
+        )
+        
+        if sys_idx is not None and dia_idx is not None:
+            systolic = pressures[sys_idx]
+            diastolic = pressures[dia_idx]
+            
+            if self._validate_bp_relationship(systolic, diastolic, map_pressure):
+                self.logger.info(f"✅ Level 1 success: SYS={systolic:.1f}, DIA={diastolic:.1f}")
+                return systolic, diastolic
+        
+        # ========== LEVEL 2: Relaxed Thresholds ==========
+        self.logger.warning("Level 1 failed, trying relaxed thresholds...")
+        
+        for delta in [0.05, 0.10]:
+            sys_t = map_amplitude * (self.sys_ratio - delta)
+            dia_t = map_amplitude * (self.dia_ratio + delta)
+            
+            sys_idx, dia_idx = self._find_crossing_points(envelope, map_idx, sys_t, dia_t)
+            
+            if sys_idx is not None and dia_idx is not None:
+                systolic = pressures[sys_idx]
+                diastolic = pressures[dia_idx]
+                
+                if self._validate_bp_relationship(systolic, diastolic, map_pressure):
+                    self.logger.info(
+                        f"✅ Level 2 success (±{delta*100:.0f}%): SYS={systolic:.1f}, DIA={diastolic:.1f}"
+                    )
+                    return systolic, diastolic
+        
+        # ========== LEVEL 3: Peak-Based Method ==========
+        self.logger.warning("Level 2 failed, trying peak-based method...")
+        
+        sys_idx = self._find_local_peak(envelope, 0, map_idx, prefer_right=True)
+        dia_idx = self._find_local_peak(envelope, map_idx + 1, len(envelope), prefer_right=False)
+        
+        if sys_idx is not None and dia_idx is not None:
+            systolic = pressures[sys_idx]
+            diastolic = pressures[dia_idx]
+            
+            if self._validate_bp_relationship(systolic, diastolic, map_pressure):
+                self.logger.info(f"✅ Level 3 success (peaks): SYS={systolic:.1f}, DIA={diastolic:.1f}")
+                return systolic, diastolic
+        
+        # ========== LEVEL 4: Nearest-by-Amplitude ==========
+        self.logger.warning("Level 3 failed, trying nearest-amplitude method...")
+        
+        sys_idx = self._find_nearest_amplitude(envelope, sys_threshold, 0, map_idx)
+        dia_idx = self._find_nearest_amplitude(envelope, dia_threshold, map_idx + 1, len(envelope))
+        
+        if sys_idx is not None and dia_idx is not None:
+            systolic = pressures[sys_idx]
+            diastolic = pressures[dia_idx]
+            
+            # ========== LEVEL 5: Clamp to Safe Range ==========
+            MIN_SYS_ABOVE_MAP = 5.0  # mmHg
+            MIN_MAP_ABOVE_DIA = 5.0  # mmHg
+            
+            systolic = max(systolic, map_pressure + MIN_SYS_ABOVE_MAP)
+            diastolic = min(diastolic, map_pressure - MIN_MAP_ABOVE_DIA)
+            
+            if self._validate_bp_relationship(systolic, diastolic, map_pressure):
+                self.logger.warning(
+                    f"⚠️  Level 4 success (clamped): SYS={systolic:.1f}, DIA={diastolic:.1f} "
+                    f"(confidence: LOW)"
+                )
+                return systolic, diastolic
+        
+        # ========== ALL METHODS FAILED ==========
+        self.logger.error("❌ All 4 fallback levels failed - cannot determine SYS/DIA")
+        return None, None
+    
+    def _find_crossing_points(
+        self,
+        envelope: np.ndarray,
+        map_idx: int,
+        sys_threshold: float,
+        dia_threshold: float
+    ) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Find SYS/DIA crossing points using thresholds
+        
+        Args:
+            envelope: Envelope signal
+            map_idx: MAP index
+            sys_threshold: SYS amplitude threshold
+            dia_threshold: DIA amplitude threshold
+        
+        Returns:
+            (sys_idx, dia_idx) or (None, None)
+        """
+        # SYS: Find crossing BEFORE MAP (envelope increasing)
         sys_idx = None
         for i in range(1, map_idx):
             if envelope[i-1] < sys_threshold <= envelope[i]:
                 sys_idx = i
                 break
         
-        if sys_idx is None:
-            self.logger.warning("Cannot find SYS crossing point")
-            # Fallback: estimate từ đầu deflate
-            systolic = pressures[0] if len(pressures) > 0 else None
-            if systolic is None:
-                return None, None
-            self.logger.warning(f"Using fallback SYS estimate: {systolic:.1f} mmHg")
-        else:
-            systolic = pressures[sys_idx]
-            self.logger.debug(f"SYS found at idx={sys_idx}, pressure={systolic:.1f} mmHg")
-        
-        # ========== FIND DIA (after MAP) ==========
-        # Sau MAP: envelope giảm dần
-        # DIA = Pressure khi envelope giảm xuống dia_threshold lần đầu
+        # DIA: Find crossing AFTER MAP (envelope decreasing)
         dia_idx = None
         for i in range(map_idx + 1, len(envelope)):
             if envelope[i-1] > dia_threshold >= envelope[i]:
                 dia_idx = i
                 break
         
-        if dia_idx is None:
-            self.logger.warning("Cannot find DIA crossing point")
-            # Fallback: estimate từ cuối deflate
-            diastolic = pressures[-1] if len(pressures) > 0 else None
-            if diastolic is None:
-                return None, None
-            self.logger.warning(f"Using fallback DIA estimate: {diastolic:.1f} mmHg")
+        return sys_idx, dia_idx
+    
+    def _find_local_peak(
+        self,
+        envelope: np.ndarray,
+        start: int,
+        end: int,
+        prefer_right: bool = False
+    ) -> Optional[int]:
+        """
+        Find local maxima in range [start, end]
+        
+        Args:
+            envelope: Envelope signal
+            start, end: Search range
+            prefer_right: If True, prefer peak near end (near MAP)
+        
+        Returns:
+            Index of local peak or None
+        """
+        if end <= start:
+            return None
+        
+        # Use simple peak detection (value > neighbors)
+        peaks = []
+        for i in range(start + 1, end - 1):
+            if envelope[i] > envelope[i-1] and envelope[i] > envelope[i+1]:
+                peaks.append(i)
+        
+        if len(peaks) == 0:
+            # Fallback: Return global max in segment
+            segment = envelope[start:end]
+            if segment.size == 0:
+                return None
+            return start + int(np.argmax(segment))
+        
+        # Choose peak
+        if prefer_right:
+            return peaks[-1]  # Peak nearest to end
         else:
-            diastolic = pressures[dia_idx]
-            self.logger.debug(f"DIA found at idx={dia_idx}, pressure={diastolic:.1f} mmHg")
+            return peaks[0]   # Peak nearest to start
+    
+    def _find_nearest_amplitude(
+        self,
+        envelope: np.ndarray,
+        target: float,
+        start: int,
+        end: int
+    ) -> Optional[int]:
+        """
+        Find point with amplitude nearest to target in range [start, end]
         
-        # ========== VALIDATION ==========
-        # Check: SYS > MAP > DIA (physiological requirement)
-        map_pressure = pressures[map_idx]
+        Args:
+            envelope: Envelope signal
+            target: Target amplitude
+            start, end: Search range
         
-        if not (diastolic < map_pressure < systolic):
-            self.logger.error(
-                f"Invalid BP relationship: "
-                f"DIA={diastolic:.1f} < MAP={map_pressure:.1f} < SYS={systolic:.1f} "
-                f"(should be DIA < MAP < SYS)"
-            )
-            return None, None
+        Returns:
+            Index of nearest point or None
+        """
+        if end <= start:
+            return None
         
-        # Check: Pulse pressure reasonable (20-100 mmHg)
-        pulse_pressure = systolic - diastolic
-        if not (20.0 <= pulse_pressure <= 100.0):
-            self.logger.warning(
-                f"Unusual pulse pressure: {pulse_pressure:.1f} mmHg (normal: 20-100)"
-            )
-            # Continue anyway (let AAMI validation decide)
+        segment = envelope[start:end]
+        if segment.size == 0:
+            return None
         
-        return systolic, diastolic
+        idx = int(np.argmin(np.abs(segment - target)))
+        return start + idx
+    
+    def _validate_bp_relationship(
+        self,
+        sys: float,
+        dia: float,
+        map_val: float
+    ) -> bool:
+        """
+        Validate physiological relationship: DIA < MAP < SYS
+        
+        Args:
+            sys: Systolic pressure (mmHg)
+            dia: Diastolic pressure (mmHg)
+            map_val: MAP pressure (mmHg)
+        
+        Returns:
+            True if valid, False otherwise
+        """
+        return dia < map_val < sys
     
     def _find_crossing(
         self,

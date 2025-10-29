@@ -196,24 +196,39 @@ class HealthMonitorApp(MDApp):
             
             # Create Blood Pressure sensor if enabled and HX710B config ready
             bp_config = sensor_configs.get('blood_pressure', {})
-            hx710b_config = sensor_configs.get('hx710b', {})
+            self.logger.debug(f"📊 BP Config check: enabled={bp_config.get('enabled')}, BloodPressureSensor={BloodPressureSensor is not None}")
+            
             if bp_config.get('enabled', False) and BloodPressureSensor:
+                # HX710B config is NESTED inside blood_pressure config
+                hx710b_config = bp_config.get('hx710b', {})
+                
+                # DEBUG: Log config values
+                self.logger.debug(f"BP config keys: {list(bp_config.keys())}")
+                self.logger.debug(f"HX710B config exists: {bool(hx710b_config)}")
+                self.logger.debug(f"HX710B enabled value: {hx710b_config.get('enabled', 'NOT_FOUND')}")
+                
                 if not hx710b_config:
-                    self.logger.warning("HX710B config chưa được định nghĩa - bỏ qua khởi tạo cảm biến huyết áp")
+                    self.logger.warning("HX710B config chưa được định nghĩa trong blood_pressure - bỏ qua khởi tạo")
                 elif not hx710b_config.get('enabled', False):
-                    self.logger.info("HX710B đang bị tắt trong cấu hình - cảm biến huyết áp sẽ không khởi tạo")
+                    self.logger.info(f"HX710B đang bị tắt (enabled={hx710b_config.get('enabled')}) - cảm biến huyết áp sẽ không khởi tạo")
                 else:
                     try:
-                        merged_config = bp_config.copy()
-                        merged_config['hx710b'] = hx710b_config
-                        sensor = BloodPressureSensor(merged_config)
+                        # BP config already contains hx710b nested inside
+                        self.logger.info("🚀 Attempting to create BloodPressure sensor...")
+                        sensor = BloodPressureSensor('BloodPressure', bp_config)
+                        self.logger.info("🔧 BloodPressure sensor object created, calling initialize()...")
                         if sensor.initialize():
                             sensors['BloodPressure'] = sensor
-                            self.logger.info("BloodPressure sensor created and initialized")
+                            self.logger.info("✅ BloodPressure sensor created and initialized successfully")
                         else:
-                            self.logger.warning("BloodPressure sensor failed to initialize")
+                            self.logger.warning("⚠️  BloodPressure sensor.initialize() returned False")
                     except Exception as e:
-                        self.logger.error(f"Error creating BloodPressure sensor: {e}")
+                        self.logger.error(f"❌ Exception creating BloodPressure sensor: {type(e).__name__}: {e}", exc_info=True)
+            else:
+                if not bp_config.get('enabled', False):
+                    self.logger.debug("BloodPressure disabled in config")
+                if not BloodPressureSensor:
+                    self.logger.error("❌ BloodPressureSensor class not imported!")
             
         except Exception as e:
             self.logger.error(f"Error creating sensors from config: {e}")
