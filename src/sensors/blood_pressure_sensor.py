@@ -558,16 +558,17 @@ class OscillometricProcessor:
         )
         
         # ========== FIND SYS (before MAP) ==========
-        # Tìm điểm envelope vượt sys_threshold khi áp giảm (envelope tăng)
-        sys_idx = self._find_crossing(
-            envelope[:map_idx], 
-            sys_threshold, 
-            direction='up'  # Envelope tăng khi áp giảm trong pha deflate
-        )
+        # Trong pha deflate: Áp giảm dần, envelope tăng dần đến MAP
+        # SYS = Pressure khi envelope vượt sys_threshold lần đầu tiên (đang tăng)
+        sys_idx = None
+        for i in range(1, map_idx):
+            if envelope[i-1] < sys_threshold <= envelope[i]:
+                sys_idx = i
+                break
         
         if sys_idx is None:
             self.logger.warning("Cannot find SYS crossing point")
-            # Fallback: estimate từ MAP (rough approximation)
+            # Fallback: estimate từ đầu deflate
             systolic = pressures[0] if len(pressures) > 0 else None
             if systolic is None:
                 return None, None
@@ -577,23 +578,24 @@ class OscillometricProcessor:
             self.logger.debug(f"SYS found at idx={sys_idx}, pressure={systolic:.1f} mmHg")
         
         # ========== FIND DIA (after MAP) ==========
-        # Tìm điểm envelope giảm xuống dưới dia_threshold
-        dia_idx = self._find_crossing(
-            envelope[map_idx:], 
-            dia_threshold, 
-            direction='down'  # Envelope giảm khi áp tiếp tục giảm
-        )
+        # Sau MAP: envelope giảm dần
+        # DIA = Pressure khi envelope giảm xuống dia_threshold lần đầu
+        dia_idx = None
+        for i in range(map_idx + 1, len(envelope)):
+            if envelope[i-1] > dia_threshold >= envelope[i]:
+                dia_idx = i
+                break
         
         if dia_idx is None:
             self.logger.warning("Cannot find DIA crossing point")
-            # Fallback: estimate từ MAP
+            # Fallback: estimate từ cuối deflate
             diastolic = pressures[-1] if len(pressures) > 0 else None
             if diastolic is None:
                 return None, None
             self.logger.warning(f"Using fallback DIA estimate: {diastolic:.1f} mmHg")
         else:
-            diastolic = pressures[map_idx + dia_idx]
-            self.logger.debug(f"DIA found at idx={map_idx + dia_idx}, pressure={diastolic:.1f} mmHg")
+            diastolic = pressures[dia_idx]
+            self.logger.debug(f"DIA found at idx={dia_idx}, pressure={diastolic:.1f} mmHg")
         
         # ========== VALIDATION ==========
         # Check: SYS > MAP > DIA (physiological requirement)
@@ -1556,78 +1558,3 @@ if __name__ == "__main__":
         level=logging.DEBUG,
         format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
     )
-    
-    # Example config
-    test_config = {
-        'enabled': True,
-        'inflate_target_mmhg': 165.0,
-        'deflate_rate_mmhg_s': 3.0,
-        'max_pressure_mmhg': 200.0,
-        'pump_gpio': 26,
-        'valve_gpio': 16,
-        'hx710b': {
-            'enabled': True,
-            'gpio_dout': 6,
-            'gpio_sck': 5,
-            'mode': '10sps',
-            'read_timeout_ms': 1000,
-            'calibration': {
-                'offset_counts': 0,
-                'slope_mmhg_per_count': 9.536743e-06,
-                'adc_inverted': False
-            }
-        },
-        'algorithm': {
-            'sample_rate': 10.0,
-            'bandpass_low': 0.5,
-            'bandpass_high': 5.0,
-            'sys_ratio': 0.55,
-            'dia_ratio': 0.80
-        }
-    }
-    
-    # Create sensor
-    sensor = create_blood_pressure_sensor_from_config(test_config)
-    
-    if sensor:
-        print("Sensor created successfully!")
-        print(f"Info: {sensor.get_sensor_info()}")
-        
-        # Start sensor (initialize hardware)
-        if sensor.start():
-            print("Sensor started!")
-            
-            # Define callback
-            def on_measurement_complete(measurement: BloodPressureMeasurement):
-                print("\n" + "="*60)
-                print("MEASUREMENT COMPLETE")
-                print("="*60)
-                print(f"Systolic:  {measurement.systolic:.1f} mmHg")
-                print(f"Diastolic: {measurement.diastolic:.1f} mmHg")
-                print(f"MAP:       {measurement.map_value:.1f} mmHg")
-                print(f"HR:        {measurement.heart_rate:.1f} BPM")
-                print(f"Quality:   {measurement.quality}")
-                print(f"Confidence: {measurement.confidence:.2f}")
-                print("="*60)
-            
-            # Start measurement
-            print("\nStarting measurement...")
-            sensor.start_measurement(callback=on_measurement_complete)
-            
-            # Wait for completion (or Ctrl+C)
-            try:
-                while sensor.get_state() != BPState.IDLE:
-                    time.sleep(0.5)
-                    state = sensor.get_state()
-                    print(f"State: {state.value}", end='\r')
-            except KeyboardInterrupt:
-                print("\n\nStopping measurement...")
-                sensor.stop_measurement(emergency=True)
-            
-            # Stop sensor
-            sensor.stop()
-            print("Sensor stopped.")
-        else:
-            print("Failed to start sensor")
-    else:
-        print("Failed to create sensor")
