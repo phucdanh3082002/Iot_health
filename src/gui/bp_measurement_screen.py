@@ -83,9 +83,6 @@ class BPMeasurementScreen(Screen):
         # Row 2: Results grid (2x2)
         self._create_results_grid(content)
         
-        # Row 3: Progress bar
-        self._create_progress_panel(content)
-        
         main_layout.add_widget(content)
         
         # Bottom: Control buttons
@@ -130,14 +127,32 @@ class BPMeasurementScreen(Screen):
             size_hint_x=0.5
         )
         
-        pressure_card.add_widget(MDLabel(
-            text="Áp suất",
+        # Title with icon
+        pressure_header = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=0.3,
+            spacing=dp(4)
+        )
+        pressure_icon = MDIcon(
+            icon='gauge',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(18), dp(18))
+        )
+        pressure_icon.icon_size = dp(16)
+        pressure_header.add_widget(pressure_icon)
+        
+        pressure_title = MDLabel(
+            text="Áp suất (mmHg)",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            halign="center",
-            size_hint_y=0.3
-        ))
+            halign="left",
+            valign="center"
+        )
+        pressure_header.add_widget(pressure_title)
+        pressure_card.add_widget(pressure_header)
         
         self.pressure_label = MDLabel(
             text="0",
@@ -160,14 +175,32 @@ class BPMeasurementScreen(Screen):
             size_hint_x=0.5
         )
         
-        state_card.add_widget(MDLabel(
+        # Title with icon
+        state_header = MDBoxLayout(
+            orientation='horizontal',
+            size_hint_y=0.3,
+            spacing=dp(4)
+        )
+        state_icon = MDIcon(
+            icon='heart-pulse',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(18), dp(18))
+        )
+        state_icon.icon_size = dp(16)
+        state_header.add_widget(state_icon)
+        
+        state_title = MDLabel(
             text="Trạng thái",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            halign="center",
-            size_hint_y=0.3
-        ))
+            halign="left",
+            valign="center"
+        )
+        state_header.add_widget(state_title)
+        state_card.add_widget(state_header)
         
         self.state_label = MDLabel(
             text="Chờ đo",
@@ -221,22 +254,49 @@ class BPMeasurementScreen(Screen):
         parent.add_widget(results_card)
     
     def _create_compact_result(self, label_text, attr_name):
-        """Create compact result item"""
+        """Create compact result item with icon"""
         container = MDBoxLayout(
             orientation='horizontal',
             padding=dp(5),
             spacing=dp(5)
         )
         
+        # Icon mapping for each result type
+        icon_map = {
+            "SYS": "arrow-up-bold",      # Systolic - up arrow
+            "DIA": "arrow-down-bold",    # Diastolic - down arrow
+            "MAP": "heart-pulse",        # Mean arterial pressure
+            "HR": "heart-flash"          # Heart rate
+        }
+        
+        # Icon
+        icon = MDIcon(
+            icon=icon_map.get(label_text, "circle"),
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(18), dp(18)),
+            pos_hint={'center_y': 0.5}
+        )
+        icon.icon_size = dp(16)
+        container.add_widget(icon)
+        
+        # Label + Value in vertical layout
+        text_layout = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(2)
+        )
+        
         # Label
-        container.add_widget(MDLabel(
+        label = MDLabel(
             text=label_text,
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            size_hint_x=0.3,
-            halign="left"
-        ))
+            halign="left",
+            valign="bottom"
+        )
+        text_layout.add_widget(label)
         
         # Value
         value_label = MDLabel(
@@ -244,32 +304,16 @@ class BPMeasurementScreen(Screen):
             font_style="H6",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
-            size_hint_x=0.7,
             bold=True,
-            halign="right"
+            halign="left",
+            valign="top"
         )
         setattr(self, attr_name, value_label)
-        container.add_widget(value_label)
+        text_layout.add_widget(value_label)
+        
+        container.add_widget(text_layout)
         
         return container
-    
-    def _create_progress_panel(self, parent):
-        """Create compact progress bar"""
-        progress_card = MDCard(
-            orientation='vertical',
-            md_bg_color=MED_CARD_BG,
-            padding=dp(8),
-            radius=[dp(8)],
-            size_hint_y=None,
-            height=dp(40)
-        )
-        
-        self.progress_bar = MDProgressBar(
-            size_hint_y=1.0,
-            color=MED_CARD_ACCENT
-        )
-        progress_card.add_widget(self.progress_bar)
-        parent.add_widget(progress_card)
     
     def _create_control_buttons(self, parent):
         """Create compact control buttons"""
@@ -330,7 +374,6 @@ class BPMeasurementScreen(Screen):
             self.stop_btn.disabled = False
             self.save_btn.disabled = True
             self.state_label.text = "Đang chuẩn bị..."
-            self.progress_bar.value = 0
             
             # Clear results
             self.sys_label.text = "--"
@@ -407,7 +450,6 @@ class BPMeasurementScreen(Screen):
             
             state_text, progress = state_map.get(self.current_state, ("Không rõ", 0))
             self.state_label.text = state_text
-            self.progress_bar.value = progress
             
             # TTS feedback at state transitions (announce only once per state)
             if self.current_state == BPState.INFLATING:
@@ -426,7 +468,27 @@ class BPMeasurementScreen(Screen):
             self.logger.error(f"Error updating UI: {e}")
     
     def _on_measurement_complete(self, result: BloodPressureMeasurement):
-        """Callback when measurement completes"""
+        """
+        Callback when measurement completes (called from sensor thread)
+        
+        IMPORTANT: This is called from the sensor's worker thread,
+        so we MUST schedule UI updates on the main Kivy thread using Clock.schedule_once
+        """
+        self.logger.info(
+            f"Measurement complete: SYS={result.systolic:.0f} DIA={result.diastolic:.0f} "
+            f"MAP={result.map_value:.0f} HR={result.heart_rate:.0f} "
+            f"Quality={result.quality} Confidence={result.confidence:.2f}"
+        )
+        
+        # Schedule UI update on main thread
+        Clock.schedule_once(lambda dt: self._handle_result_on_main_thread(result), 0)
+    
+    def _handle_result_on_main_thread(self, result: BloodPressureMeasurement):
+        """
+        Handle measurement result on main Kivy thread (safe for UI updates)
+        
+        This is called via Clock.schedule_once from _on_measurement_complete
+        """
         try:
             # Stop UI update loop
             if self.update_event:
@@ -450,18 +512,12 @@ class BPMeasurementScreen(Screen):
             self.stop_btn.disabled = True
             self.save_btn.disabled = False
             self.state_label.text = "Hoàn thành"
-            self.progress_bar.value = 100
             self.pressure_label.text = "0"
             
-            self.logger.info(
-                f"Complete: SYS={result.systolic:.0f} DIA={result.diastolic:.0f} "
-                f"MAP={result.map_value:.0f} HR={result.heart_rate:.0f} "
-                f"Quality={result.quality} Confidence={result.confidence:.2f}"
-            )
-            
         except Exception as e:
-            self.logger.error(f"Error handling completion: {e}")
-            self._reset_ui()
+            self.logger.error(f"Error handling result on main thread: {e}", exc_info=True)
+            # Schedule reset on main thread too
+            Clock.schedule_once(lambda dt: self._reset_ui(), 0)
     
     def _display_results(self, result: BloodPressureMeasurement):
         """Display results with AHA color coding"""
@@ -539,7 +595,6 @@ class BPMeasurementScreen(Screen):
         self.save_btn.disabled = True
         
         self.state_label.text = "Chờ đo"
-        self.progress_bar.value = 0
         self.pressure_label.text = "0"
         
         # Clear results

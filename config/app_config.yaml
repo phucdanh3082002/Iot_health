@@ -30,18 +30,56 @@ audio:
   volume: 80
 communication:
   mqtt:
-    broker_host: localhost
-    broker_port: 1883
-    password: ''
-    qos: 1
-    topic_prefix: health
-    use_tls: false
-    username: ''
+    # Broker connection
+    broker: test.mosquitto.org  # Public test broker (thay bằng broker thật khi deploy)
+    port: 8883  # TLS port (1883 cho non-TLS)
+    keepalive: 60
+    
+    # Authentication
+    username: iot_health_device  # Thay bằng username thật
+    password: ''  # Điền password vào đây hoặc dùng environment variable
+    
+    # Device identification
+    device_id: rpi_bp_001  # Unique device ID
+    
+    # TLS/SSL Security
+    use_tls: true
+    ca_cert: config/certs/ca.crt  # Path đến CA certificate
+    cert_file: config/certs/client.crt  # Client certificate (mutual TLS)
+    key_file: config/certs/client.key  # Client private key
+    
+    # QoS levels per message type
+    qos:
+      vitals: 1  # At least once delivery
+      alerts: 2  # Exactly once delivery (critical)
+      status: 0  # Fire and forget
+      commands: 2  # Exactly once delivery
+    
+    # Reconnection settings
+    reconnect_delay: 5
+    max_reconnect_attempts: 10
+    
+    # Last Will & Testament (offline detection)
+    last_will:
+      topic: iot_health/device/{device_id}/status
+      message: '{"timestamp": {timestamp}, "device_id": "{device_id}", "status": "offline", "reason": "unexpected_disconnect"}'
+      qos: 1
+      retain: true
+    
+    # Topic templates (với placeholders)
+    topics:
+      vitals: iot_health/device/{device_id}/vitals
+      alerts: iot_health/device/{device_id}/alerts
+      status: iot_health/device/{device_id}/status
+      commands: iot_health/patient/{patient_id}/commands
+      predictions: iot_health/patient/{patient_id}/predictions
+  
   rest_api:
     api_version: v1
     server_url: http://localhost:8000
     timeout: 5
     use_https: false
+  
   store_forward:
     enabled: true
     max_queue_size: 1000
