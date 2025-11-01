@@ -125,7 +125,7 @@ sensors:
       read_timeout_ms: 500
       calibration:
         offset_counts: 1300885
-        slope_mmhg_per_count: 3.5765743256e-05
+        slope_mmhg_per_count: 3.529226775615232e-05 #3.5765743256e-05 
         adc_inverted: false
     algorithm:
       sample_rate: 10.0

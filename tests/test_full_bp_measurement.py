@@ -63,7 +63,8 @@ BP_CONFIG = {
         'read_timeout_ms': 1000,
         'calibration': {
             'offset_counts': 1357387,
-            'slope_mmhg_per_count': 3.5765743256e-05,
+            'slope_mmhg_per_count': 3.529226775615232e-05
+,
             'adc_inverted': False
         }
     },
