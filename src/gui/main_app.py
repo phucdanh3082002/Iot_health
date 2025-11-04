@@ -902,35 +902,242 @@ class HealthMonitorApp(MDApp):
         return results
     
     def save_measurement_to_database(self, measurement_data: Dict[str, Any]):
-        """Save measurement data to database"""
+        """
+        Save measurement data to database using DatabaseManager
+        
+        Args:
+            measurement_data: Dictionary containing measurement data
+                Required: timestamp
+                Optional: heart_rate, spo2, temperature, systolic, diastolic, 
+                         signal_quality_index, spo2_cv, peak_count, measurement_elapsed
+        """
         try:
-            if self.database:
-                inserted = False
-                insert_vitals = getattr(self.database, 'insert_vital_signs', None)
-                save_record = getattr(self.database, 'save_health_record', None)
+            # Ưu tiên dùng DatabaseManager nếu có
+            if self.database and hasattr(self.database, 'save_health_record'):
                 try:
-                    if callable(insert_vitals):
-                        insert_vitals(measurement_data)
-                        inserted = True
-                    elif callable(save_record):
-                        save_record(measurement_data)
-                        inserted = True
+                    # Lấy patient_id từ config
+                    patient_id = self.config_data.get('patient', {}).get('id', 'patient_001')
+                    
+                    # Chuẩn bị data theo format của DatabaseManager.save_health_record()
+                    timestamp_value = measurement_data.get('timestamp', time.time())
+                    # Convert timestamp to datetime object if needed
+                    if isinstance(timestamp_value, (int, float)):
+                        timestamp_dt = datetime.fromtimestamp(timestamp_value)
+                    elif isinstance(timestamp_value, datetime):
+                        timestamp_dt = timestamp_value
+                    else:
+                        timestamp_dt = datetime.now()
+                    
+                    health_data = {
+                        'patient_id': patient_id,  # REQUIRED by save_health_record()
+                        'timestamp': timestamp_dt,  # Must be datetime object for SQLAlchemy
+                        'heart_rate': measurement_data.get('heart_rate') or measurement_data.get('hr'),
+                        'spo2': measurement_data.get('spo2'),
+                        'temperature': (
+                            measurement_data.get('temperature') 
+                            or measurement_data.get('temp')
+                            or measurement_data.get('object_temperature')
+                        ),
+                        'systolic_bp': measurement_data.get('systolic') or measurement_data.get('blood_pressure_systolic'),
+                        'diastolic_bp': measurement_data.get('diastolic') or measurement_data.get('blood_pressure_diastolic'),
+                        'mean_arterial_pressure': measurement_data.get('map') or measurement_data.get('map_bp'),
+                    }
+                    
+                    # ============================================================
+                    # PHASE 2: Lưu metadata mới (SQI, CV, peak_count, duration)
+                    # ============================================================
+                    metadata = {}
+                    
+                    # Signal Quality Index (0-100) cho HR measurement
+                    if 'signal_quality_index' in measurement_data:
+                        metadata['signal_quality_index'] = measurement_data['signal_quality_index']
+                    
+                    # Coefficient of Variation cho SpO2 measurement
+                    if 'spo2_cv' in measurement_data:
+                        metadata['spo2_cv'] = measurement_data['spo2_cv']
+                    
+                    # Peak count cho HR measurement
+                    if 'peak_count' in measurement_data:
+                        metadata['peak_count'] = measurement_data['peak_count']
+                    
+                    # Measurement duration (seconds)
+                    if 'measurement_elapsed' in measurement_data or 'measurement_duration' in measurement_data:
+                        metadata['measurement_duration'] = (
+                            measurement_data.get('measurement_elapsed') 
+                            or measurement_data.get('measurement_duration')
+                        )
+                    
+                    # Measurement type để phân biệt nguồn data
+                    if 'measurement_type' in measurement_data:
+                        metadata['measurement_type'] = measurement_data['measurement_type']
+                    
+                    # Ambient temperature (nếu là MLX90614)
+                    if 'ambient_temperature' in measurement_data:
+                        metadata['ambient_temperature'] = measurement_data['ambient_temperature']
+                    
+                    # HR/SpO2 valid flags
+                    if 'hr_valid' in measurement_data:
+                        metadata['hr_valid'] = measurement_data['hr_valid']
+                    if 'spo2_valid' in measurement_data:
+                        metadata['spo2_valid'] = measurement_data['spo2_valid']
+                    
+                    # Thêm metadata vào health_data
+                    if metadata:
+                        health_data['sensor_data'] = metadata  # Lưu metadata vào sensor_data JSON column
+                    
+                    # Gọi DatabaseManager.save_health_record() - CHỈ 1 ARGUMENT
+                    record_id = self.database.save_health_record(health_data)
+                    
+                    if record_id:
+                        self.logger.info(
+                            f"✅ Measurement saved to DatabaseManager (record_id={record_id}, patient={patient_id})"
+                        )
+                        
+                        # Kiểm tra ngưỡng và tạo alert nếu cần
+                        self._check_and_create_alert(patient_id, health_data, record_id)
+                        return
+                    else:
+                        self.logger.warning("DatabaseManager.save_health_record() returned None - falling back to local DB")
+                        
                 except Exception as exc:
-                    self.logger.error("Primary database save failed: %s", exc)
+                    self.logger.error(f"DatabaseManager save failed: {exc}", exc_info=True)
+                    self.logger.warning("Falling back to local vitals.db")
 
-                if inserted:
-                    self.logger.info("Measurement saved to database")
-                    return
-
-                self.logger.warning("Database handler missing insert method; using local fallback")
-
+            # Fallback về SQLite cục bộ nếu DatabaseManager fail hoặc không có
             if self._save_to_local_vitals(measurement_data):
-                self.logger.info("Measurement saved to local vitals.db")
+                self.logger.info("Measurement saved to local vitals.db (fallback)")
             else:
-                self.logger.warning("Unable to persist measurement data")
+                self.logger.error("Unable to persist measurement data to any database")
                 
         except Exception as e:
-            self.logger.error(f"Error saving to database: {e}")
+            self.logger.error(f"Critical error in save_measurement_to_database: {e}", exc_info=True)
+
+    def _check_and_create_alert(self, patient_id: str, health_data: Dict[str, Any], record_id: int):
+        """
+        Kiểm tra ngưỡng và tạo alert tự động nếu vượt threshold
+        
+        Args:
+            patient_id: Patient ID
+            health_data: Health record data
+            record_id: ID của health record vừa lưu
+        """
+        try:
+            if not self.database or not hasattr(self.database, 'get_patient_thresholds'):
+                return
+            
+            # Lấy ngưỡng của patient
+            thresholds = self.database.get_patient_thresholds(patient_id)
+            if not thresholds:
+                self.logger.debug(f"No thresholds found for patient {patient_id}")
+                return
+            
+            alerts = []
+            
+            # Kiểm tra Heart Rate
+            hr = health_data.get('heart_rate')
+            if hr and hr > 0:
+                hr_min = thresholds.get('heart_rate_min', 60)
+                hr_max = thresholds.get('heart_rate_max', 100)
+                if hr < hr_min:
+                    alerts.append({
+                        'type': 'low_heart_rate',
+                        'severity': 'medium',
+                        'message': f'Nhịp tim thấp: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
+                        'value': hr
+                    })
+                elif hr > hr_max:
+                    alerts.append({
+                        'type': 'high_heart_rate',
+                        'severity': 'high',
+                        'message': f'Nhịp tim cao: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
+                        'value': hr
+                    })
+            
+            # Kiểm tra SpO2
+            spo2 = health_data.get('spo2')
+            if spo2 and spo2 > 0:
+                spo2_min = thresholds.get('spo2_min', 95)
+                if spo2 < spo2_min:
+                    severity = 'critical' if spo2 < 90 else 'high'
+                    alerts.append({
+                        'type': 'low_spo2',
+                        'severity': severity,
+                        'message': f'SpO2 thấp: {spo2:.0f}% (ngưỡng tối thiểu: {spo2_min}%)',
+                        'value': spo2
+                    })
+            
+            # Kiểm tra Temperature
+            temp = health_data.get('temperature')
+            if temp and temp > 0:
+                temp_min = thresholds.get('temperature_min', 36.0)
+                temp_max = thresholds.get('temperature_max', 37.5)
+                if temp < temp_min:
+                    severity = 'high' if temp < 35.0 else 'medium'
+                    alerts.append({
+                        'type': 'low_temperature',
+                        'severity': severity,
+                        'message': f'Nhiệt độ thấp: {temp:.1f}°C (ngưỡng: {temp_min}-{temp_max})',
+                        'value': temp
+                    })
+                elif temp > temp_max:
+                    severity = 'critical' if temp > 39.0 else 'high'
+                    alerts.append({
+                        'type': 'high_temperature',
+                        'severity': severity,
+                        'message': f'Nhiệt độ cao: {temp:.1f}°C (ngưỡng: {temp_min}-{temp_max})',
+                        'value': temp
+                    })
+            
+            # Kiểm tra Blood Pressure
+            systolic = health_data.get('systolic_bp')
+            diastolic = health_data.get('diastolic_bp')
+            if systolic and systolic > 0 and diastolic and diastolic > 0:
+                sys_min = thresholds.get('systolic_bp_min', 90)
+                sys_max = thresholds.get('systolic_bp_max', 140)
+                dia_min = thresholds.get('diastolic_bp_min', 60)
+                dia_max = thresholds.get('diastolic_bp_max', 90)
+                
+                if systolic < sys_min or diastolic < dia_min:
+                    alerts.append({
+                        'type': 'low_blood_pressure',
+                        'severity': 'medium',
+                        'message': f'Huyết áp thấp: {systolic:.0f}/{diastolic:.0f} mmHg',
+                        'value': f'{systolic}/{diastolic}'
+                    })
+                elif systolic > sys_max or diastolic > dia_max:
+                    severity = 'critical' if systolic > 180 or diastolic > 120 else 'high'
+                    alerts.append({
+                        'type': 'high_blood_pressure',
+                        'severity': severity,
+                        'message': f'Huyết áp cao: {systolic:.0f}/{diastolic:.0f} mmHg',
+                        'value': f'{systolic}/{diastolic}'
+                    })
+            
+            # Lưu alerts vào database
+            for alert_data in alerts:
+                try:
+                    if hasattr(self.database, 'save_alert'):
+                        alert_id = self.database.save_alert(
+                            patient_id=patient_id,
+                            alert_type=alert_data['type'],
+                            severity=alert_data['severity'],
+                            message=alert_data['message'],
+                            health_record_id=record_id,
+                            metadata={'value': alert_data['value']}
+                        )
+                        self.logger.info(
+                            f"⚠️  Alert created: {alert_data['type']} (severity={alert_data['severity']}, alert_id={alert_id})"
+                        )
+                        
+                        # Gửi TTS warning nếu severity cao
+                        if alert_data['severity'] in ('high', 'critical'):
+                            self.speak_text(alert_data['message'], force=True)
+                            
+                except Exception as alert_exc:
+                    self.logger.error(f"Failed to create alert: {alert_exc}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error checking thresholds and creating alerts: {e}", exc_info=True)
 
     def _save_to_local_vitals(self, measurement_data: Dict[str, Any]) -> bool:
         db_path = project_root / "data" / "vitals.db"
