@@ -85,6 +85,52 @@ communication:
     max_queue_size: 1000
     max_retries: 5
     retry_interval: 30
+
+# Cloud Synchronization (MySQL on Personal PC)
+cloud:
+  enabled: true  # ✅ ENABLED - Ready for cloud sync
+  
+  mysql:
+    host: "192.168.2.15"  # ✅ UPDATED: Your PC IP address
+    port: 3306
+    database: "iot_health_cloud"
+    user: "danhsidoi"  # ✅ UPDATED: Use working user
+    password_env: "MYSQL_CLOUD_PASSWORD"  # Password from environment variable
+    password: ""  # Or put password here (not recommended)
+    
+    # Connection pool settings
+    pool_size: 5
+    max_overflow: 10
+    pool_timeout: 30
+    pool_recycle: 3600  # Recycle connections after 1 hour
+    
+    # SSL/TLS (optional - recommended for production)
+    ssl_enabled: false
+    ssl_ca: "/path/to/ca-cert.pem"
+    ssl_cert: "/path/to/client-cert.pem"
+    ssl_key: "/path/to/client-key.pem"
+  
+  sync:
+    mode: "auto"  # auto / manual / scheduled
+    interval_seconds: 300  # Sync every 5 minutes (auto mode)
+    batch_size: 100  # Records per batch
+    retry_attempts: 3
+    retry_delay_seconds: 60
+    
+    # What to sync
+    sync_health_records: true
+    sync_alerts: true
+    sync_calibrations: true
+    sync_logs: false  # Logs create too much data
+    
+    # Conflict resolution strategy
+    conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual
+  
+  device:
+    device_id: "rasp_pi_001"  # ⚠️ Unique device identifier (keep unique per device)
+    device_name: "Living Room Monitor"  # ⚠️ Give it a friendly name
+    location: "Home - Living Room"  # ⚠️ Physical location
+
 database:
   backup_enabled: true
   backup_interval: 3600
