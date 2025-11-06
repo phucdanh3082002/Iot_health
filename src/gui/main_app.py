@@ -8,7 +8,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import closing
 import sqlite3
 import yaml
@@ -16,6 +16,7 @@ from kivy.uix.screenmanager import ScreenManager
 from kivy.clock import Clock
 from kivy.config import Config
 from kivymd.app import MDApp
+from kivymd.uix.snackbar import Snackbar
 
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
@@ -42,6 +43,7 @@ from src.utils.tts_manager import (
     ScenarioID,
     TTSManager,
 )
+from src.utils.health_validators import HealthDataValidator
 
 # Import screens - handle both relative and absolute imports
 try:
@@ -912,7 +914,21 @@ class HealthMonitorApp(MDApp):
                          signal_quality_index, spo2_cv, peak_count, measurement_elapsed
         """
         try:
+            # ============================================================
+            # VALIDATION: Check data validity before saving
+            # ============================================================
+            is_valid, validation_errors = HealthDataValidator.validate(measurement_data)
+            
+            if not is_valid:
+                # Show validation errors to user
+                error_message = "Dữ liệu không hợp lệ:\n" + "\n".join(validation_errors)
+                self.logger.warning(f"Validation failed: {validation_errors}")
+                self._show_error_notification(error_message)
+                return None  # Don't save invalid data
+            
+            # ============================================================
             # Ưu tiên dùng DatabaseManager nếu có
+            # ============================================================
             if self.database and hasattr(self.database, 'save_health_record'):
                 try:
                     # Lấy patient_id từ config
@@ -993,9 +1009,17 @@ class HealthMonitorApp(MDApp):
                             f"✅ Measurement saved to DatabaseManager (record_id={record_id}, patient={patient_id})"
                         )
                         
+                        # ============================================================
+                        # USER FEEDBACK: Show success notification
+                        # ============================================================
+                        self._show_success_notification(
+                            f"Đã lưu kết quả (ID: {record_id})",
+                            duration=2
+                        )
+                        
                         # Kiểm tra ngưỡng và tạo alert nếu cần
                         self._check_and_create_alert(patient_id, health_data, record_id)
-                        return
+                        return record_id
                     else:
                         self.logger.warning("DatabaseManager.save_health_record() returned None - falling back to local DB")
                         
@@ -1006,11 +1030,14 @@ class HealthMonitorApp(MDApp):
             # Fallback về SQLite cục bộ nếu DatabaseManager fail hoặc không có
             if self._save_to_local_vitals(measurement_data):
                 self.logger.info("Measurement saved to local vitals.db (fallback)")
+                self._show_success_notification("Đã lưu kết quả (local)", duration=2)
             else:
                 self.logger.error("Unable to persist measurement data to any database")
+                self._show_error_notification("Không thể lưu dữ liệu vào database")
                 
         except Exception as e:
             self.logger.error(f"Critical error in save_measurement_to_database: {e}", exc_info=True)
+            self._show_error_notification(f"Lỗi khi lưu: {str(e)}")
 
     def _check_and_create_alert(self, patient_id: str, health_data: Dict[str, Any], record_id: int):
         """
@@ -1043,14 +1070,18 @@ class HealthMonitorApp(MDApp):
                         'type': 'low_heart_rate',
                         'severity': 'medium',
                         'message': f'Nhịp tim thấp: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
-                        'value': hr
+                        'value': hr,
+                        'vital_sign': 'heart_rate',
+                        'threshold': hr_min
                     })
                 elif hr > hr_max:
                     alerts.append({
                         'type': 'high_heart_rate',
                         'severity': 'high',
                         'message': f'Nhịp tim cao: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
-                        'value': hr
+                        'value': hr,
+                        'vital_sign': 'heart_rate',
+                        'threshold': hr_max
                     })
             
             # Kiểm tra SpO2
@@ -1063,7 +1094,9 @@ class HealthMonitorApp(MDApp):
                         'type': 'low_spo2',
                         'severity': severity,
                         'message': f'SpO2 thấp: {spo2:.0f}% (ngưỡng tối thiểu: {spo2_min}%)',
-                        'value': spo2
+                        'value': spo2,
+                        'vital_sign': 'spo2',
+                        'threshold': spo2_min
                     })
             
             # Kiểm tra Temperature
@@ -1077,7 +1110,9 @@ class HealthMonitorApp(MDApp):
                         'type': 'low_temperature',
                         'severity': severity,
                         'message': f'Nhiệt độ thấp: {temp:.1f}°C (ngưỡng: {temp_min}-{temp_max})',
-                        'value': temp
+                        'value': temp,
+                        'vital_sign': 'temperature',
+                        'threshold': temp_min
                     })
                 elif temp > temp_max:
                     severity = 'critical' if temp > 39.0 else 'high'
@@ -1085,7 +1120,9 @@ class HealthMonitorApp(MDApp):
                         'type': 'high_temperature',
                         'severity': severity,
                         'message': f'Nhiệt độ cao: {temp:.1f}°C (ngưỡng: {temp_min}-{temp_max})',
-                        'value': temp
+                        'value': temp,
+                        'vital_sign': 'temperature',
+                        'threshold': temp_max
                     })
             
             # Kiểm tra Blood Pressure
@@ -1102,7 +1139,9 @@ class HealthMonitorApp(MDApp):
                         'type': 'low_blood_pressure',
                         'severity': 'medium',
                         'message': f'Huyết áp thấp: {systolic:.0f}/{diastolic:.0f} mmHg',
-                        'value': f'{systolic}/{diastolic}'
+                        'value': f'{systolic}/{diastolic}',
+                        'vital_sign': 'blood_pressure',
+                        'threshold': f'{sys_min}/{dia_min}'
                     })
                 elif systolic > sys_max or diastolic > dia_max:
                     severity = 'critical' if systolic > 180 or diastolic > 120 else 'high'
@@ -1110,21 +1149,59 @@ class HealthMonitorApp(MDApp):
                         'type': 'high_blood_pressure',
                         'severity': severity,
                         'message': f'Huyết áp cao: {systolic:.0f}/{diastolic:.0f} mmHg',
-                        'value': f'{systolic}/{diastolic}'
+                        'value': f'{systolic}/{diastolic}',
+                        'vital_sign': 'blood_pressure',
+                        'threshold': f'{sys_max}/{dia_max}'
                     })
             
             # Lưu alerts vào database
             for alert_data in alerts:
                 try:
+                    # ============================================================
+                    # ALERT DEDUPLICATION: Check for existing unresolved alert
+                    # ============================================================
+                    if hasattr(self.database, 'get_active_alerts'):
+                        # Check if similar alert exists within last hour
+                        active_alerts = self.database.get_active_alerts(patient_id)
+                        
+                        # Filter for same type and not resolved
+                        duplicate_found = False
+                        for existing in active_alerts:
+                            if existing.get('alert_type') == alert_data['type']:
+                                # Check timestamp (within 1 hour)
+                                try:
+                                    alert_time = datetime.fromisoformat(existing.get('timestamp', ''))
+                                    time_diff = datetime.now() - alert_time
+                                    
+                                    if time_diff < timedelta(hours=1):
+                                        duplicate_found = True
+                                        self.logger.debug(
+                                            f"Skipping duplicate alert: {alert_data['type']} "
+                                            f"(existing alert_id={existing.get('id')}, "
+                                            f"age={time_diff.total_seconds() / 60:.1f} minutes)"
+                                        )
+                                        break
+                                except:
+                                    pass
+                        
+                        if duplicate_found:
+                            continue  # Skip this alert, don't create duplicate
+                    
+                    # Create new alert (no duplicate found)
                     if hasattr(self.database, 'save_alert'):
-                        alert_id = self.database.save_alert(
-                            patient_id=patient_id,
-                            alert_type=alert_data['type'],
-                            severity=alert_data['severity'],
-                            message=alert_data['message'],
-                            health_record_id=record_id,
-                            metadata={'value': alert_data['value']}
-                        )
+                        # Prepare alert_data dict for save_alert()
+                        alert_dict = {
+                            'patient_id': patient_id,
+                            'alert_type': alert_data['type'],
+                            'severity': alert_data['severity'],
+                            'message': alert_data['message'],
+                            'vital_sign': alert_data.get('vital_sign'),
+                            'current_value': alert_data.get('value'),
+                            'threshold_value': alert_data.get('threshold'),
+                            'timestamp': datetime.now()
+                        }
+                        
+                        alert_id = self.database.save_alert(alert_dict)
                         self.logger.info(
                             f"⚠️  Alert created: {alert_data['type']} (severity={alert_data['severity']}, alert_id={alert_id})"
                         )
@@ -1249,6 +1326,66 @@ class HealthMonitorApp(MDApp):
                 self.logger.error(f"Error closing database: {e}")
 
     # ------------------------------------------------------------------
+    # User Feedback & Notifications
+    # ------------------------------------------------------------------
+
+    def _show_success_notification(self, message: str, duration: float = 2.0):
+        """Show success notification using Snackbar"""
+        try:
+            Snackbar(
+                text=f"✅ {message}",
+                snackbar_x="10dp",
+                snackbar_y="10dp",
+                size_hint_x=0.9,
+                duration=duration,
+                bg_color=(0.0, 0.68, 0.57, 1),
+            ).open()
+        except Exception as e:
+            self.logger.error(f"Failed to show success notification: {e}")
+
+    def _show_error_notification(self, message: str, duration: float = 3.0):
+        """Show error notification using Snackbar"""
+        try:
+            Snackbar(
+                text=f"❌ {message}",
+                snackbar_x="10dp",
+                snackbar_y="10dp",
+                size_hint_x=0.9,
+                duration=duration,
+                bg_color=(0.96, 0.4, 0.3, 1),
+            ).open()
+        except Exception as e:
+            self.logger.error(f"Failed to show error notification: {e}")
+
+    def _show_warning_notification(self, message: str, duration: float = 2.5):
+        """Show warning notification using Snackbar"""
+        try:
+            Snackbar(
+                text=f"⚠️ {message}",
+                snackbar_x="10dp",
+                snackbar_y="10dp",
+                size_hint_x=0.9,
+                duration=duration,
+                bg_color=(1.0, 0.6, 0.0, 1),
+            ).open()
+        except Exception as e:
+            self.logger.error(f"Failed to show warning notification: {e}")
+
+    def _show_info_notification(self, message: str, duration: float = 2.0):
+        """Show info notification using Snackbar"""
+        try:
+            Snackbar(
+                text=f"ℹ️ {message}",
+                snackbar_x="10dp",
+                snackbar_y="10dp",
+                size_hint_x=0.9,
+                duration=duration,
+                bg_color=(0.12, 0.55, 0.76, 1),
+            ).open()
+        except Exception as e:
+            self.logger.error(f"Failed to show info notification: {e}")
+
+    # ------------------------------------------------------------------
     # Application Lifecycle
     # ------------------------------------------------------------------
 
@@ -1265,6 +1402,9 @@ def main():
     import sys
     import logging
     import yaml
+    from src.data.database import DatabaseManager
+    from src.communication.cloud_sync_manager import CloudSyncManager
+    from src.communication.sync_scheduler import SyncScheduler
     
     # Setup basic logging
     logging.basicConfig(level=logging.INFO)
@@ -1295,12 +1435,54 @@ def main():
             }
         }
     
+    # ============================================================
+    # CRITICAL FIX: Initialize DatabaseManager
+    # ============================================================
+    database = None
+    try:
+        database = DatabaseManager(config)
+        logger.info("✅ DatabaseManager initialized successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize DatabaseManager: {e}")
+        logger.warning("App will run with fallback local database only")
+    
+    # ============================================================
+    # CRITICAL FIX: Initialize CloudSyncManager and SyncScheduler
+    # ============================================================
+    cloud_sync = None
+    sync_scheduler = None
+    
+    if database and config.get('cloud', {}).get('enabled', False):
+        try:
+            # Initialize CloudSyncManager
+            cloud_sync = CloudSyncManager(database, config['cloud'])
+            logger.info("✅ CloudSyncManager initialized successfully")
+            
+            # Initialize and start SyncScheduler for auto-sync
+            sync_mode = config['cloud'].get('sync', {}).get('mode', 'auto')
+            if sync_mode == 'auto':
+                interval = config['cloud'].get('sync', {}).get('interval_seconds', 300)
+                sync_scheduler = SyncScheduler(cloud_sync, interval_seconds=interval)
+                sync_scheduler.start()
+                logger.info(f"✅ SyncScheduler started (auto-sync every {interval}s)")
+            else:
+                logger.info(f"Sync mode is '{sync_mode}', auto-sync disabled")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize CloudSync: {e}")
+            logger.warning("App will run without cloud sync")
+    else:
+        if not database:
+            logger.warning("CloudSync disabled: DatabaseManager not available")
+        else:
+            logger.info("CloudSync disabled in config")
+    
     try:
         # Create and run app with real sensor integration
         app = HealthMonitorApp(
             config=config,
             sensors=None,  # Will create from config
-            database=None,
+            database=database,  # ✅ FIX: Pass DatabaseManager instance
             mqtt_client=None,
             alert_system=None
         )
@@ -1310,6 +1492,14 @@ def main():
         import traceback
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        # Cleanup: Stop sync scheduler
+        if sync_scheduler:
+            try:
+                sync_scheduler.stop()
+                logger.info("✅ SyncScheduler stopped")
+            except Exception as e:
+                logger.error(f"Error stopping SyncScheduler: {e}")
 
 
 if __name__ == '__main__':

@@ -47,6 +47,7 @@ class DatabaseManager:
         
         # Cloud sync manager (initialized later if enabled)
         self.cloud_sync_manager = None
+        self.sync_scheduler = None  # Auto-sync scheduler
         
         # Ensure data directory exists
         db_dir = os.path.dirname(self.db_path)
@@ -123,6 +124,16 @@ class DatabaseManager:
             # Try to connect to cloud
             if self.cloud_sync_manager.connect_to_cloud():
                 self.logger.info("Cloud sync initialized and connected")
+                
+                # Start auto-sync scheduler if mode is 'auto'
+                sync_mode = cloud_config.get('sync', {}).get('mode', 'manual')
+                if sync_mode == 'auto':
+                    from src.communication.sync_scheduler import SyncScheduler
+                    
+                    interval = cloud_config.get('sync', {}).get('interval_seconds', 300)
+                    self.sync_scheduler = SyncScheduler(self.cloud_sync_manager, interval)
+                    self.sync_scheduler.start()
+                    self.logger.info(f"Auto-sync scheduler started ({interval}s interval)")
             else:
                 self.logger.warning("Cloud sync initialized but connection failed (will retry)")
                 
@@ -136,6 +147,10 @@ class DatabaseManager:
         Close database connections and cloud sync
         """
         try:
+            # Stop sync scheduler
+            if self.sync_scheduler:
+                self.sync_scheduler.stop()
+            
             # Disconnect cloud sync
             if self.cloud_sync_manager:
                 self.cloud_sync_manager.disconnect_from_cloud()
@@ -359,15 +374,15 @@ class DatabaseManager:
                 record_id = record.id
                 
                 self.logger.info(f"Saved health record ID={record_id} for patient {health_data['patient_id']}")
-                
-                # Trigger cloud sync if enabled
-                if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_health_records', True):
-                    try:
-                        self.cloud_sync_manager.push_health_record(record_id)
-                    except Exception as sync_error:
-                        self.logger.warning(f"Cloud sync failed for record {record_id}: {sync_error}")
-                
-                return record_id
+            
+            # Trigger cloud sync AFTER transaction commits (outside context manager)
+            if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_health_records', True):
+                try:
+                    self.cloud_sync_manager.push_health_record(record_id)
+                except Exception as sync_error:
+                    self.logger.warning(f"Cloud sync failed for record {record_id}: {sync_error}")
+            
+            return record_id
                 
         except Exception as e:
             self.logger.error(f"Error saving health record: {e}", exc_info=True)
@@ -487,15 +502,15 @@ class DatabaseManager:
                 alert_id = alert.id
                 
                 self.logger.warning(f"Saved alert ID={alert_id}: {alert.severity} - {alert.message}")
-                
-                # Trigger cloud sync if enabled
-                if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_alerts', True):
-                    try:
-                        self.cloud_sync_manager.push_alert(alert_id)
-                    except Exception as sync_error:
-                        self.logger.warning(f"Cloud sync failed for alert {alert_id}: {sync_error}")
-                
-                return alert_id
+            
+            # Trigger cloud sync AFTER transaction commits
+            if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_alerts', True):
+                try:
+                    self.cloud_sync_manager.push_alert(alert_id)
+                except Exception as sync_error:
+                    self.logger.warning(f"Cloud sync failed for alert {alert_id}: {sync_error}")
+            
+            return alert_id
                 
         except Exception as e:
             self.logger.error(f"Error saving alert: {e}")
@@ -703,15 +718,15 @@ class DatabaseManager:
                 calibration_id = calibration.id
                 
                 self.logger.info(f"Saved calibration ID={calibration_id} for {calibration_data['sensor_name']}")
-                
-                # Trigger cloud sync if enabled
-                if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_calibrations', True):
-                    try:
-                        self.cloud_sync_manager.push_calibration(calibration_id)
-                    except Exception as sync_error:
-                        self.logger.warning(f"Cloud sync failed for calibration {calibration_id}: {sync_error}")
-                
-                return calibration_id
+            
+            # Trigger cloud sync AFTER transaction commits
+            if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_calibrations', True):
+                try:
+                    self.cloud_sync_manager.push_calibration(calibration_id)
+                except Exception as sync_error:
+                    self.logger.warning(f"Cloud sync failed for calibration {calibration_id}: {sync_error}")
+            
+            return calibration_id
                 
         except Exception as e:
             self.logger.error(f"Error saving calibration: {e}")

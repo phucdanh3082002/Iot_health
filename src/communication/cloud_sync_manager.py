@@ -347,7 +347,7 @@ class CloudSyncManager:
             
             # Get record from local database
             with self.local_db.get_session() as local_session:
-                from data.models import HealthRecord
+                from src.data.models import HealthRecord
                 
                 record = local_session.query(HealthRecord).filter_by(id=record_id).first()
                 
@@ -366,7 +366,7 @@ class CloudSyncManager:
                     'systolic_bp': record.systolic_bp,
                     'diastolic_bp': record.diastolic_bp,
                     'mean_arterial_pressure': record.mean_arterial_pressure,
-                    'sensor_data': record.sensor_data,
+                    'sensor_data': json.dumps(record.sensor_data) if record.sensor_data else None,  # Convert dict to JSON string
                     'data_quality': record.data_quality,
                     'measurement_context': record.measurement_context,
                     'synced_at': datetime.now(),
@@ -420,7 +420,7 @@ class CloudSyncManager:
             
             # Get alert from local database
             with self.local_db.get_session() as local_session:
-                from data.models import Alert
+                from src.data.models import Alert
                 
                 alert = local_session.query(Alert).filter_by(id=alert_id).first()
                 
@@ -432,7 +432,7 @@ class CloudSyncManager:
                 alert_data = {
                     'patient_id': alert.patient_id,
                     'device_id': self.device_id,
-                    'health_record_id': alert.health_record_id,
+                    'health_record_id': None,  # Local Alert doesn't have this field
                     'alert_type': alert.alert_type,
                     'severity': alert.severity,
                     'message': alert.message,
@@ -491,7 +491,7 @@ class CloudSyncManager:
             
             # Get calibration from local database
             with self.local_db.get_session() as local_session:
-                from data.models import SensorCalibration
+                from src.data.models import SensorCalibration
                 
                 calibration = local_session.query(SensorCalibration).filter_by(id=calibration_id).first()
                 
@@ -740,7 +740,7 @@ class CloudSyncManager:
         try:
             # Store in local SQLite queue table
             with self.local_db.get_session() as session:
-                from data.models import SystemLog
+                from src.data.models import SystemLog
                 
                 # Use SystemLog table temporarily for queue storage
                 # TODO: Create dedicated sync_queue table in local database
@@ -788,7 +788,7 @@ class CloudSyncManager:
             
             # Get pending queue items from SystemLog
             with self.local_db.get_session() as session:
-                from data.models import SystemLog
+                from src.data.models import SystemLog
                 
                 pending = session.query(SystemLog).filter(
                     SystemLog.module == 'cloud_sync',
@@ -841,7 +841,7 @@ class CloudSyncManager:
         """
         try:
             with self.local_db.get_session() as session:
-                from data.models import SystemLog
+                from src.data.models import SystemLog
                 
                 # Delete synced items older than 7 days
                 cutoff_date = datetime.now() - timedelta(days=7)
@@ -930,7 +930,7 @@ class CloudSyncManager:
             
             # Get records created/updated after 'since' timestamp
             with self.local_db.get_session() as session:
-                from data.models import HealthRecord, Alert
+                from src.data.models import HealthRecord, Alert
                 
                 # Sync new health records
                 new_records = session.query(HealthRecord).filter(
