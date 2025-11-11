@@ -153,14 +153,18 @@ python main.py
 - [ ] Threshold-based alerts
 
 ### Phase 2 - Communication
-- [ ] MQTT client implementation
-- [ ] REST API integration
-- [ ] Store-forward offline support
+- [x] MQTT client implementation (test.mosquitto.org:1883)
+- [x] MQTT payload schemas (VitalsPayload, AlertPayload, DeviceStatusPayload)
+- [x] REST API client framework
+- [x] Store-forward offline support
+- [x] Cloud sync with MySQL (192.168.2.15:3306)
 
 ### Phase 3 - Advanced Features
-- [ ] Blood pressure measurement
-- [ ] AI anomaly detection
-- [ ] Android app integration
+- [x] Blood pressure measurement (HX710B oscillometric method)
+- [x] AI anomaly detection (IsolationForest framework)
+- [x] Android app design (Kotlin + Jetpack Compose)
+- [x] Multi-device management (QR code pairing)
+- [ ] Android app implementation (in progress)
 - [ ] Web dashboard
 
 ### Phase 4 - Optimization
@@ -324,9 +328,72 @@ graph TD
 - Kivy framebuffer rendering
 
 ### Communication
-- MQTT: localhost:1883 (configurable)
-- REST API: http://localhost:8000
-- Store-forward: SQLite queue
+
+#### MQTT Configuration (Production Ready)
+- **Broker**: test.mosquitto.org:1883 (non-TLS) / 8883 (TLS)
+- **Client ID**: rpi_bp_001 (device_id from config)
+- **QoS Levels**: 
+  - Vitals: QoS 1 (at least once)
+  - Alerts: QoS 2 (exactly once)
+  - Status: QoS 0 (fire and forget)
+  - Commands: QoS 2 (exactly once)
+
+#### MQTT Topics Structure
+```yaml
+# Pi → Cloud/App (Publish)
+iot_health/device/{device_id}/vitals:
+  QoS: 1
+  Payload: VitalsPayload (JSON với HR, SpO2, Temp, BP + raw metrics)
+  Frequency: Mỗi lần đo xong
+
+iot_health/device/{device_id}/alerts:
+  QoS: 2
+  Payload: AlertPayload (JSON với alert_type, severity, recommendations)
+  Trigger: Khi vượt ngưỡng
+
+iot_health/device/{device_id}/status:
+  QoS: 0
+  Payload: DeviceStatusPayload (JSON với sensors, battery, system health)
+  Frequency: Heartbeat mỗi 60s
+
+# Cloud/App → Pi (Subscribe)
+iot_health/patient/{patient_id}/commands:
+  QoS: 2
+  Payload: CommandPayload (JSON với command, parameters)
+  Examples: start_measurement, calibrate_sensor, emergency_deflate
+
+iot_health/patient/{patient_id}/predictions:
+  QoS: 1
+  Payload: AI predictions từ cloud
+```
+
+#### Cloud Database (MySQL)
+- **Host**: 192.168.2.15:3306
+- **Database**: iot_health_cloud
+- **Tables**: 
+  - `devices` - Device registry với pairing fields
+  - `device_ownership` - Multi-user device access control
+  - `patients` - Patient information
+  - `health_records` - Vitals history (HR, SpO2, Temp, BP)
+  - `alerts` - Alert history với severity levels
+  - `patient_thresholds` - Custom thresholds per patient
+  - `sensor_calibrations` - HX710B calibration data
+  - `sync_queue` - Store-and-forward queue
+  - `system_logs` - System event logs
+
+#### Local Database (SQLite)
+- **Path**: data/health_monitor.db
+- **Purpose**: Local cache, offline mode (7 days)
+- **Sync Strategy**: Auto-sync mỗi 5 phút, conflict resolution (cloud wins)
+
+#### REST API (Planned)
+- **Server**: http://localhost:8000 hoặc cloud endpoint
+- **Endpoints**:
+  - `GET /api/v1/devices` - List devices
+  - `POST /api/v1/pair-device` - Device pairing
+  - `GET /api/v1/health-records` - Historical data
+  - `GET /api/v1/trend-analysis` - AI trend analysis
+  - `POST /api/v1/chat-with-ai` - Chatbot interface
 
 ## Bảo mật
 - MQTT over TLS
@@ -340,5 +407,200 @@ graph TD
 - Error tracking và alerting
 - Performance monitoring
 
+## MQTT Payload Schemas
+
+### VitalsPayload Example
+```json
+{
+  "timestamp": 1699344000.5,
+  "device_id": "rasp_pi_001",
+  "patient_id": "patient_001",
+  "measurements": {
+    "heart_rate": {
+      "value": 85,
+      "unit": "bpm",
+      "valid": true,
+      "confidence": 0.95,
+      "source": "MAX30102",
+      "raw_metrics": {
+        "ir_quality": 50000,
+        "peak_count": 142,
+        "sampling_rate": 50.0
+      }
+    },
+    "spo2": {
+      "value": 98,
+      "unit": "%",
+      "valid": true,
+      "confidence": 0.92,
+      "source": "MAX30102",
+      "raw_metrics": {
+        "r_value": 0.85,
+        "ac_red": 48000,
+        "dc_red": 1000000
+      }
+    },
+    "temperature": {
+      "object_temp": 36.8,
+      "ambient_temp": 29.5,
+      "unit": "celsius",
+      "valid": true,
+      "source": "MLX90614"
+    },
+    "blood_pressure": {
+      "systolic": 120,
+      "diastolic": 80,
+      "map": 93,
+      "unit": "mmHg",
+      "valid": true,
+      "quality": "good",
+      "confidence": 0.88,
+      "source": "HX710B",
+      "raw_metrics": {
+        "max_counts": 125000,
+        "map_counts": 115000,
+        "samples_collected": 450,
+        "sampling_rate": 10.0,
+        "oscillation_amplitude": 15.5,
+        "envelope_quality": 0.85
+      }
+    }
+  },
+  "session": {
+    "session_id": "session_20251108_143000",
+    "measurement_sequence": 1,
+    "total_duration": 45.2,
+    "user_triggered": true
+  }
+}
+```
+
+### AlertPayload Example
+```json
+{
+  "timestamp": 1699344100.5,
+  "device_id": "rasp_pi_001",
+  "patient_id": "patient_001",
+  "alert_type": "high_blood_pressure",
+  "severity": "critical",
+  "priority": 1,
+  "current_measurement": {
+    "vital_sign": "blood_pressure",
+    "systolic": 185,
+    "diastolic": 95,
+    "map": 125
+  },
+  "thresholds": {
+    "systolic_max": 180,
+    "diastolic_max": 90
+  },
+  "trend": {
+    "direction": "increasing",
+    "rate_of_change": 5.2
+  },
+  "actions": {
+    "emergency_call_suggested": true,
+    "medication_reminder": true
+  },
+  "recommendations": [
+    "Uống thuốc huyết áp ngay",
+    "Nghỉ ngơi và thư giãn",
+    "Gọi bác sĩ nếu không giảm trong 30 phút"
+  ],
+  "metadata": {
+    "alert_id": "alert_20251108_143100",
+    "notification_sent": true,
+    "tts_spoken": true
+  }
+}
+```
+
+## Android App Integration
+
+### App Architecture
+- **Language**: Kotlin
+- **UI Framework**: Jetpack Compose
+- **Architecture**: MVVM + Clean Architecture
+- **DI**: Hilt
+- **Local DB**: Room (SQLite cache)
+- **MQTT**: Paho Android MQTT client
+- **Charts**: MPAndroidChart
+- **QR Scanner**: ZXing
+
+### Key Features
+- **Multi-device management**: Quản lý nhiều Raspberry Pi devices
+- **QR code pairing**: Ghép nối device qua QR code (pairing_code)
+- **Real-time monitoring**: MQTT wildcard subscription `iot_health/device/+/#`
+- **Offline mode**: Room cache 7 ngày, auto-sync khi online
+- **Push notifications**: Critical alerts qua Firebase Cloud Messaging
+- **Charts & analytics**: Trends, statistics, export CSV/PDF
+- **Role-based access**: Owner, Admin, Caregiver, Viewer
+
+### Device Pairing Flow
+1. Pi generates pairing_code (6-8 chars: A7X9K2)
+2. Display QR code on Kivy GUI (Settings → Pairing)
+3. Android app scan QR hoặc nhập code manual
+4. Verify với MySQL: `SELECT * FROM devices WHERE pairing_code = ?`
+5. Create ownership: `INSERT INTO device_ownership (user_id, device_id, role)`
+6. Subscribe MQTT: `iot_health/device/{device_id}/#`
+7. Start real-time monitoring
+
+### Documentation
+- **Implementation Guide**: `docs/ANDROID_APP_IMPLEMENTATION_GUIDE.md`
+- **MySQL Setup**: `docs/MYSQL_SETUP_COMPLETED.md`
+- **MQTT Test**: `tests/test_mqtt_connection.py`
+
+## Testing
+
+### MQTT Connection Test
+```bash
+# Test MQTT broker connectivity
+python tests/test_mqtt_connection.py
+
+## Deployment Checklist
+
+### Raspberry Pi Setup
+- [x] Hardware assembly (sensors, pump, valve, optocouplers)
+- [x] GPIO configuration (HX710B: GPIO5/6, Pump: GPIO26, Valve: GPIO16)
+- [x] I2C sensors (MAX30102: 0x57, MLX90614: 0x5A)
+- [x] SPI LCD 3.5" (480x320, framebuffer /dev/fb1)
+- [x] MQTT client (test.mosquitto.org:1883)
+- [x] MySQL cloud sync (192.168.2.15:3306)
+- [x] PiperTTS (vi_VN voice for audio alerts)
+
+### Cloud Infrastructure
+- [x] MySQL database (iot_health_cloud)
+- [x] MQTT broker (test.mosquitto.org - for development)
+- [ ] Production MQTT broker (self-hosted Mosquitto recommended)
+- [ ] REST API server (Flask/FastAPI - planned)
+- [ ] SSL/TLS certificates (for production)
+
+### Android App
+- [x] Architecture design (MVVM + Clean)
+- [x] UI/UX layouts (8 screens documented)
+- [x] MQTT topics structure
+- [x] Database schema (Room + MySQL)
+- [ ] Implementation (Kotlin + Compose - in progress)
+- [ ] Testing (Unit + Integration + UI tests)
+- [ ] Play Store deployment
+
 ## Đóng góp
 Dự án đồ án tốt nghiệp - IoT Health Monitoring System
+
+### Team
+- Hardware & Embedded: Raspberry Pi, Sensors, Blood Pressure measurement
+- Backend: Python, MQTT, MySQL, Cloud Sync
+- Mobile: Android (Kotlin + Jetpack Compose)
+- AI/ML: Anomaly detection, Trend analysis
+
+### Technologies
+- **Embedded**: Python 3.9+, Kivy, smbus2, RPi.GPIO
+- **Communication**: Paho MQTT, SQLAlchemy, Requests
+- **Database**: SQLite, MySQL 8.0
+- **Mobile**: Kotlin, Jetpack Compose, Hilt, Room, Retrofit
+- **AI/ML**: scikit-learn, IsolationForest
+- **Audio**: PiperTTS (Vietnamese TTS)
+
+### Contact
+- GitHub: github.com/danhsidoi1234/Iot_health
+- Project Status: Active Development

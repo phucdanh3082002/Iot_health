@@ -127,9 +127,9 @@ cloud:
     conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual
   
   device:
-    device_id: "rasp_pi_001"  # ⚠️ Unique device identifier (keep unique per device)
-    device_name: "Living Room Monitor"  # ⚠️ Give it a friendly name
-    location: "Home - Living Room"  # ⚠️ Physical location
+    device_id: "rasp_pi_001" 
+    device_name: "Living Room Monitor"  
+    location: "Home - Living Room"  
 
 database:
   backup_enabled: true
