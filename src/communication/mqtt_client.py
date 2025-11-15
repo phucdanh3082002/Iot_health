@@ -3,7 +3,7 @@ MQTT Client - Production Ready
 MQTT client cho real-time data transmission và remote monitoring
 
 Features:
-- TLS/SSL encryption
+- TLS/SSL encryption (HiveMQ Cloud compatible)
 - Auto-reconnect với exponential backoff
 - QoS support (0, 1, 2)
 - Thread-safe operations
@@ -17,6 +17,7 @@ import logging
 import json
 import ssl
 import time
+import os
 import paho.mqtt.client as mqtt
 from threading import Lock, Thread
 from pathlib import Path
@@ -64,8 +65,21 @@ class IoTHealthMQTTClient:
         self.port = mqtt_cfg.get('port', 8883)
         self.device_id = mqtt_cfg.get('device_id', 'rpi_001')
         self.patient_id = config.get('patient', {}).get('id', 'P12345')
+        
+        # Authentication - load from environment variable if specified
         self.username = mqtt_cfg.get('username')
-        self.password = mqtt_cfg.get('password')
+        password_env = mqtt_cfg.get('password_env')
+        if password_env:
+            # Load password from environment variable (e.g., MQTT_PASSWORD)
+            self.password = os.getenv(password_env)
+            if not self.password:
+                self.logger.warning(
+                    f"Environment variable '{password_env}' not set. "
+                    f"Falling back to password from config."
+                )
+                self.password = mqtt_cfg.get('password')
+        else:
+            self.password = mqtt_cfg.get('password')
         
         # TLS/SSL
         self.use_tls = mqtt_cfg.get('use_tls', True)
@@ -114,21 +128,26 @@ class IoTHealthMQTTClient:
         # Setup TLS if enabled
         if self.use_tls:
             try:
-                ssl_context = self._setup_ssl_context()
-                self.client.tls_set_context(ssl_context)
-                self.client.tls_insecure_set(False)
-                self.logger.info("TLS/SSL enabled for MQTT connection")
+                # HiveMQ Cloud uses Let's Encrypt CA (trusted by system)
+                # Use default system CA certificates
+                self.client.tls_set(
+                    ca_certs=None,  # Use system default CA bundle
+                    certfile=None,
+                    keyfile=None,
+                    cert_reqs=ssl.CERT_REQUIRED,
+                    tls_version=ssl.PROTOCOL_TLS,
+                    ciphers=None
+                )
+                self.client.tls_insecure_set(False)  # Verify hostname
+                self.logger.info("TLS/SSL enabled with system CA certificates")
             except Exception as e:
                 self.logger.error(f"Failed to setup TLS: {e}")
         
         # Setup Last Will & Testament
         last_will = mqtt_cfg.get('last_will', {})
         if last_will:
-            will_topic = last_will.get('topic', '').format(device_id=self.device_id)
-            will_message = last_will.get('message', '').format(
-                timestamp=time.time(),
-                device_id=self.device_id
-            )
+            will_topic = last_will.get('topic', '').replace('{device_id}', self.device_id)
+            will_message = last_will.get('message', '').replace('{device_id}', self.device_id)
             self.client.will_set(
                 will_topic,
                 will_message,

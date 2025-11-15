@@ -719,14 +719,3 @@ REACT_APP_MQTT_PASSWORD=<strong_password>
 1. **MQTT Explorer**: Desktop GUI để monitor topics real-time
 2. **Mosquitto logs**: `sudo journalctl -u mosquitto -f`
 3. **Custom dashboard**: Track message rates, errors, latency
-
-### **Debug Checklist**
-- ✅ Broker reachable? `mosquitto_pub -h test.mosquitto.org -t test -m "hello"`
-- ✅ Credentials correct? Check username/password
-- ✅ Topics matching? Verify topic structure
-- ✅ QoS levels correct? Check message delivery
-- ✅ Payload format valid? Validate JSON schema
-- ✅ Network stable? Check WiFi signal on Pi
-- ✅ Broker capacity? Monitor message queue depth
-
----

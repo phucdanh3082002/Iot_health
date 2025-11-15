@@ -30,23 +30,26 @@ audio:
   volume: 80
 communication:
   mqtt:
-    # Broker connection
-    broker: test.mosquitto.org  # Public test broker (thay bằng broker thật khi deploy)
-    port: 8883  # TLS port (1883 cho non-TLS)
+    # ============================================================
+    # HiveMQ Cloud Broker (Production)
+    # ============================================================
+    broker: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
+    port: 8883  # TLS port (bắt buộc cho HiveMQ Cloud)
+    websocket_port: 8884  # WebSocket port (cho web dashboard)
     keepalive: 60
     
-    # Authentication
-    username: iot_health_device  # Thay bằng username thật
-    password: ''  # Điền password vào đây hoặc dùng environment variable
+    # Authentication (HiveMQ Cloud credentials)
+    username: rpi_bp_001  # HiveMQ username cho Pi
+    password_env: MQTT_PASSWORD  # Password từ environment variable (.env)
+    password: ''  # KHÔNG điền password trực tiếp vào đây
     
     # Device identification
     device_id: rpi_bp_001  # Unique device ID
     
-    # TLS/SSL Security
+    # TLS/SSL Security (HiveMQ Cloud mặc định dùng TLS)
     use_tls: true
-    ca_cert: config/certs/ca.crt  # Path đến CA certificate
-    cert_file: config/certs/client.crt  # Client certificate (mutual TLS)
-    key_file: config/certs/client.key  # Client private key
+    # HiveMQ Cloud dùng Let's Encrypt CA (trusted by default)
+    # Không cần cert files riêng, Python ssl module tự verify
     
     # QoS levels per message type
     qos:
@@ -62,7 +65,7 @@ communication:
     # Last Will & Testament (offline detection)
     last_will:
       topic: iot_health/device/{device_id}/status
-      message: '{"timestamp": {timestamp}, "device_id": "{device_id}", "status": "offline", "reason": "unexpected_disconnect"}'
+      message: '{"device_id": "{device_id}", "status": "offline", "reason": "unexpected_disconnect"}'
       qos: 1
       retain: true
     
@@ -86,16 +89,16 @@ communication:
     max_retries: 5
     retry_interval: 30
 
-# Cloud Synchronization (MySQL on Personal PC)
+# Cloud Synchronization (AWS RDS MySQL - Singapore)
 cloud:
-  enabled: true  # ✅ ENABLED - Ready for cloud sync
+  enabled: true  # ✅ ENABLED - Syncing to AWS RDS
   
   mysql:
-    host: "192.168.2.15"  # ✅ UPDATED: Your PC IP address
+    host: "database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com"  # ✅ AWS RDS Endpoint
     port: 3306
     database: "iot_health_cloud"
-    user: "danhsidoi"  # ✅ UPDATED: Use working user
-    password_env: "MYSQL_CLOUD_PASSWORD"  # Password from environment variable
+    user: "pi_sync"  # ✅ Limited user (SELECT, INSERT, UPDATE only) - Principle of Least Privilege
+    password_env: "MYSQL_PI_SYNC_PASSWORD"  # Password from environment variable
     password: ""  # Or put password here (not recommended)
     
     # Connection pool settings

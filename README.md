@@ -329,14 +329,24 @@ graph TD
 
 ### Communication
 
-#### MQTT Configuration (Production Ready)
-- **Broker**: test.mosquitto.org:1883 (non-TLS) / 8883 (TLS)
+#### MQTT Configuration (HiveMQ Cloud - Production)
+- **Broker**: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
+- **Port**: 8883 (TLS required)
+- **WebSocket Port**: 8884 (for web dashboard)
+- **Region**: Singapore (Free Tier)
+- **Credentials**: 
+  - Pi Device: `rpi_bp_001` (username), password in .env
+  - Android App: `android_app` (username), password in .env
+  - Web Dashboard: `web_dashboard` (username) - *deferred*
 - **Client ID**: rpi_bp_001 (device_id from config)
+- **TLS**: Required (system CA certificates - Let's Encrypt)
 - **QoS Levels**: 
   - Vitals: QoS 1 (at least once)
   - Alerts: QoS 2 (exactly once)
   - Status: QoS 0 (fire and forget)
   - Commands: QoS 2 (exactly once)
+- **Last Will & Testament**: Enabled (offline notification)
+- **Auto-reconnect**: Exponential backoff (5s, 10s, 20s, 40s, 60s max)
 
 #### MQTT Topics Structure
 ```yaml
@@ -552,9 +562,24 @@ iot_health/patient/{patient_id}/predictions:
 
 ## Testing
 
-### MQTT Connection Test
+### HiveMQ Cloud Connection Test
 ```bash
-# Test MQTT broker connectivity
+# CRITICAL: Set MQTT password in .env first
+nano .env
+# Replace <REPLACE_WITH_YOUR_HIVEMQ_PASSWORD> with your actual password
+
+# Test HiveMQ Cloud connectivity (3 tests)
+python tests/test_hivemq_connection.py
+
+# Expected output:
+# ✅ Test 1: Basic Connection - Connects to HiveMQ Cloud, verifies TLS
+# ✅ Test 2: Publish Vitals - Sends sample vitals payload to broker
+# ✅ Test 3: Subscribe Commands - Listens for commands from Android/Web
+```
+
+### Legacy MQTT Test
+```bash
+# Test MQTT broker connectivity (test.mosquitto.org - deprecated)
 python tests/test_mqtt_connection.py
 
 ## Deployment Checklist
@@ -570,10 +595,12 @@ python tests/test_mqtt_connection.py
 
 ### Cloud Infrastructure
 - [x] MySQL database (iot_health_cloud)
-- [x] MQTT broker (test.mosquitto.org - for development)
-- [ ] Production MQTT broker (self-hosted Mosquitto recommended)
+- [x] MQTT broker (HiveMQ Cloud - Singapore region, free tier)
+- [x] TLS/SSL certificates (Let's Encrypt via HiveMQ)
+- [x] Device credentials (rpi_bp_001, android_app)
+- [ ] Production MQTT ACL rules (HiveMQ dashboard)
 - [ ] REST API server (Flask/FastAPI - planned)
-- [ ] SSL/TLS certificates (for production)
+- [ ] CI/CD pipeline (GitHub Actions - planned)
 
 ### Android App
 - [x] Architecture design (MVVM + Clean)
