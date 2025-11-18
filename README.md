@@ -378,23 +378,52 @@ iot_health/patient/{patient_id}/predictions:
 ```
 
 #### Cloud Database (MySQL)
-- **Host**: 192.168.2.15:3306
+- **Host**: database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com:3306 (AWS RDS)
 - **Database**: iot_health_cloud
-- **Tables**: 
-  - `devices` - Device registry với pairing fields
-  - `device_ownership` - Multi-user device access control
-  - `patients` - Patient information
-  - `health_records` - Vitals history (HR, SpO2, Temp, BP)
-  - `alerts` - Alert history với severity levels
-  - `patient_thresholds` - Custom thresholds per patient
-  - `sensor_calibrations` - HX710B calibration data
-  - `sync_queue` - Store-and-forward queue
-  - `system_logs` - System event logs
+- **Engine**: MySQL 8.0.44
+- **Charset**: utf8mb4_unicode_ci
+- **Tables**:
+
+  **Core Tables:**
+  - `devices` - Device registry với pairing fields (device_id, device_name, location, pairing_code, device_type)
+  - `device_ownership` - Multi-user device access control (user_id, device_id, role, nickname)
+  - `patients` - Patient information (patient_id, name, age, gender, device_id, emergency_contact)
+  - `health_records` - Vitals history (id, patient_id, device_id, timestamp, heart_rate, spo2, temperature, systolic_bp, diastolic_bp, mean_arterial_pressure, sensor_data, data_quality, measurement_context, synced_at, sync_status)
+  - `alerts` - Alert history với severity levels (id, patient_id, device_id, alert_type, severity, message, vital_sign, current_value, threshold_value, timestamp, acknowledged, resolved, notification_sent, notification_method)
+
+  **Configuration Tables:**
+  - `patient_thresholds` - Personalized vital sign thresholds (patient_id, vital_sign, min_normal, max_normal, min_critical, max_critical)
+  - `sensor_calibrations` - Sensor calibration data (device_id, sensor_name, calibration_type, reference_values, measured_values, calibration_factors)
+
+  **Sync & Logging Tables:**
+  - `sync_queue` - Store-and-forward queue (device_id, table_name, operation, record_id, data_snapshot, sync_status, sync_attempts)
+  - `system_logs` - System event logs với partitioning (device_id, level, message, module, timestamp, additional_data)
+
+  **Views (Analytics):**
+  - `v_active_alerts` - Active alerts with patient/device info
+  - `v_alert_summary` - Alert statistics by date/severity
+  - `v_daily_summary` - Daily system metrics
+  - `v_data_quality` - Data quality analytics
+  - `v_device_health` - Device status and health metrics
+  - `v_device_status` - Device overview
+  - `v_error_dashboard` - Error monitoring dashboard
+  - `v_hourly_activity` - Hourly activity patterns
+  - `v_latest_vitals` - Latest vital signs per patient
+  - `v_patient_vitals_trend` - Vital trends analysis
+  - `v_sync_performance` - Sync performance metrics
+  - `v_sync_queue_status` - Sync queue monitoring
+  - `v_system_status` - System health overview
+
+  **Stored Procedures:**
+  - `sp_cleanup_old_records(days_to_keep)` - Data retention management
+  - `sp_patient_statistics(patient_id)` - Patient statistics calculation
 
 #### Local Database (SQLite)
 - **Path**: data/health_monitor.db
 - **Purpose**: Local cache, offline mode (7 days)
+- **Tables**: alerts, health_records, patients, patient_thresholds, sensor_calibrations, system_logs
 - **Sync Strategy**: Auto-sync mỗi 5 phút, conflict resolution (cloud wins)
+- **Note**: Simplified schema without partitioning, foreign keys optional
 
 #### REST API (Planned)
 - **Server**: http://localhost:8000 hoặc cloud endpoint
@@ -423,7 +452,7 @@ iot_health/patient/{patient_id}/predictions:
 ```json
 {
   "timestamp": 1699344000.5,
-  "device_id": "rasp_pi_001",
+  "device_id": "rpi_bp_001",
   "patient_id": "patient_001",
   "measurements": {
     "heart_rate": {
@@ -489,7 +518,7 @@ iot_health/patient/{patient_id}/predictions:
 ```json
 {
   "timestamp": 1699344100.5,
-  "device_id": "rasp_pi_001",
+  "device_id": "rpi_bp_001",
   "patient_id": "patient_001",
   "alert_type": "high_blood_pressure",
   "severity": "critical",

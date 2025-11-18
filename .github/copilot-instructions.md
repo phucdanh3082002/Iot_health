@@ -18,8 +18,8 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 
 ### **Broker Configuration**
 ```yaml
-Broker: test.mosquitto.org (public test) → PRODUCTION: self-hosted broker
-Port: 1883 (non-TLS) / 8883 (TLS production)
+Broker: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud (HiveMQ Cloud Singapore)
+Port: 8883 (TLS required) / 8884 (WebSocket for web dashboard)
 Protocol: MQTT v3.1.1
 QoS Levels:
   - Vitals: QoS 1 (at least once)
@@ -49,7 +49,7 @@ iot_health/
 ```json
 {
   "timestamp": 1699518000.123,
-  "device_id": "rasp_pi_001",
+  "device_id": "rpi_bp_001",
   "patient_id": "patient_001",
   "measurements": {
     "heart_rate": {
@@ -90,7 +90,7 @@ iot_health/
 ```json
 {
   "timestamp": 1699518000.123,
-  "device_id": "rasp_pi_001",
+  "device_id": "rpi_bp_001",
   "patient_id": "patient_001",
   "alert_type": "high_heart_rate",
   "severity": "high",
@@ -105,7 +105,7 @@ iot_health/
 ```json
 {
   "timestamp": 1699518000.123,
-  "device_id": "rasp_pi_001",
+  "device_id": "rpi_bp_001",
   "status": "online",
   "uptime_seconds": 86400,
   "battery_level": 85,
@@ -158,7 +158,7 @@ Authorization: ACL rules:
   - Pi devices: PUBLISH vitals/alerts/status, SUBSCRIBE commands
   - Android/Web: SUBSCRIBE vitals/alerts/status, PUBLISH commands
   - Admin: Full access
-Certificates: CA cert + client certs (mutual TLS)
+Certificates: Let's Encrypt (HiveMQ Cloud managed)
 ```
 
 ### **QoS Strategy**
@@ -350,37 +350,37 @@ requirements.txt
 
 ```yaml
 # ============================================================
-# MQTT Configuration (KHÔNG ĐỔI)
+# MQTT Configuration (HiveMQ Cloud - Production)
 # ============================================================
 communication:
   mqtt:
-    broker: test.mosquitto.org  # Production: self-hosted broker
-    port: 1883  # 8883 for TLS
-    use_tls: false  # true for production
+    broker: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud  # HiveMQ Cloud Singapore
+    port: 8883  # TLS required
+    use_tls: true  # TLS encryption required
     keepalive: 60
-    
+
     # Device identification
-    device_id: rasp_pi_001
+    device_id: rpi_bp_001
     patient_id: patient_001
-    
+
     # QoS levels per message type
     qos:
       vitals: 1    # At least once
       alerts: 2    # Exactly once
       status: 0    # Fire and forget
       commands: 2  # Exactly once
-    
+
     # Topics (với placeholders)
     topics:
       vitals: iot_health/device/{device_id}/vitals
       alerts: iot_health/device/{device_id}/alerts
       status: iot_health/device/{device_id}/status
       commands: iot_health/patient/{patient_id}/commands
-    
+
     # Reconnection
     reconnect_delay: 5
     max_reconnect_attempts: 10
-    
+
     # Last Will & Testament
     last_will:
       topic: iot_health/device/{device_id}/status
@@ -414,19 +414,53 @@ sensors:
       dia_frac: 0.8   # DIA at 80% of max amplitude
 
 # ============================================================
-# Cloud Sync (MySQL)
+# Cloud Sync (MySQL - AWS RDS)
 # ============================================================
 cloud:
   enabled: true
   mysql:
-    host: 192.168.2.15
+    host: database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com
     port: 3306
     database: iot_health_cloud
-    user: danhsidoi
+    user: pi_sync  # Limited user for Pi operations (SELECT/INSERT/UPDATE)
+    # user: android_app  # Limited user for mobile app (SELECT only)
   sync:
     mode: auto
     interval_seconds: 300  # Sync every 5 minutes
     batch_size: 100
+
+# ============================================================
+# Database Schema (MySQL Cloud + SQLite Local)
+# ============================================================
+
+## **MySQL Cloud Schema (AWS RDS)**
+- **Engine**: MySQL 8.0.44 với partitioning và foreign keys
+- **Charset**: utf8mb4_unicode_ci
+- **Tables**: 9 core tables + 15 analytical views + stored procedures
+
+### **Core Tables:**
+- `devices` - Device registry (device_id, device_name, location, pairing_code, device_type)
+- `device_ownership` - Multi-user access control (user_id, device_id, role, nickname)
+- `patients` - Patient info (patient_id, name, age, gender, device_id, emergency_contact)
+- `health_records` - Vitals history (id, patient_id, device_id, timestamp, heart_rate, spo2, temperature, systolic_bp, diastolic_bp, mean_arterial_pressure, sensor_data, data_quality, measurement_context, synced_at, sync_status)
+- `alerts` - Alert history (id, patient_id, device_id, alert_type, severity, message, vital_sign, current_value, threshold_value, timestamp, acknowledged, resolved, notification_sent, notification_method)
+- `patient_thresholds` - Personalized thresholds (patient_id, vital_sign, min_normal, max_normal, min_critical, max_critical)
+- `sensor_calibrations` - Calibration data (device_id, sensor_name, calibration_type, reference_values, measured_values, calibration_factors)
+- `sync_queue` - Store-and-forward (device_id, table_name, operation, record_id, data_snapshot, sync_status, sync_attempts)
+- `system_logs` - Event logs với partitioning (device_id, level, message, module, timestamp, additional_data)
+
+### **Analytical Views:**
+- `v_active_alerts`, `v_alert_summary`, `v_daily_summary`, `v_data_quality`, `v_device_health`, `v_device_status`, `v_error_dashboard`, `v_hourly_activity`, `v_latest_vitals`, `v_patient_vitals_trend`, `v_sync_performance`, `v_sync_queue_status`, `v_system_status`
+
+### **Stored Procedures:**
+- `sp_cleanup_old_records(days_to_keep)` - Data retention
+- `sp_patient_statistics(patient_id)` - Patient analytics
+
+## **SQLite Local Schema**
+- **Path**: data/health_monitor.db
+- **Purpose**: Offline cache (7 days), simplified schema
+- **Tables**: alerts, health_records, patients, patient_thresholds, sensor_calibrations, system_logs
+- **Sync Strategy**: Auto-sync mỗi 5 phút, conflict resolution (cloud wins)
 ```
 
 ---
@@ -649,8 +683,8 @@ useEffect(() => {
 // WebSocket over TLS (wss://)
 const mqttOptions = {
     protocol: 'wss',
-    port: 8884,  // WSS port
-    username: 'web_admin',
+    port: 8884,  // WSS port for HiveMQ Cloud
+    username: 'web_dashboard',
     password: process.env.REACT_APP_MQTT_PASSWORD,
     clean: true,
     reconnectPeriod: 5000
@@ -662,53 +696,53 @@ const mqttOptions = {
 ## 🔐 **SECURITY BEST PRACTICES**
 
 ### **Production MQTT Setup**
-1. **Self-hosted broker**: Mosquitto on VPS/Cloud
+1. **HiveMQ Cloud**: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud (Singapore region, free tier)
 2. **TLS encryption**: Port 8883 (TCP) / 8884 (WebSocket)
-3. **Authentication**: Username/password per client
-4. **Authorization**: ACL rules per device/user
-5. **Certificates**: CA cert + client certs (mutual TLS)
+3. **Authentication**: Username/password per client (rpi_bp_001, android_app, web_dashboard)
+4. **Authorization**: ACL rules configured in HiveMQ Cloud dashboard
+5. **Certificates**: Let's Encrypt (managed by HiveMQ Cloud)
 
-### **ACL Rules Example** (mosquitto.conf)
+### **ACL Rules Example** (HiveMQ Cloud Dashboard)
 ```
 # Pi devices (publish only)
-user rasp_pi_001
-topic write iot_health/device/rasp_pi_001/vitals
-topic write iot_health/device/rasp_pi_001/alerts
-topic write iot_health/device/rasp_pi_001/status
+user rpi_bp_001
+topic write iot_health/device/rpi_bp_001/vitals
+topic write iot_health/device/rpi_bp_001/alerts
+topic write iot_health/device/rpi_bp_001/status
 topic read iot_health/patient/+/commands
 
 # Android app (subscribe + limited publish)
-user android_user_001
+user android_app
 topic read iot_health/device/+/vitals
 topic read iot_health/device/+/alerts
 topic read iot_health/device/+/status
 topic write iot_health/patient/+/commands
 
-# Web admin (full access)
-user web_admin
+# Web dashboard (admin access)
+user web_dashboard
 topic readwrite iot_health/#
 ```
 
 ### **Environment Variables** (KHÔNG commit vào git)
 ```bash
 # Pi (.env)
-MQTT_BROKER=mqtt.example.com
+MQTT_BROKER=c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
 MQTT_PORT=8883
-MQTT_USERNAME=rasp_pi_001
-MQTT_PASSWORD=<strong_password>
+MQTT_USERNAME=rpi_bp_001
+MQTT_PASSWORD=<your_hivemq_password>
 MYSQL_PASSWORD=<mysql_password>
 
 # Android (local.properties)
-mqtt.broker=mqtt.example.com
+mqtt.broker=c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
 mqtt.port=8883
-mqtt.username=android_user_001
-mqtt.password=<strong_password>
+mqtt.username=android_app
+mqtt.password=<your_hivemq_password>
 
 # Web (.env.production)
-REACT_APP_MQTT_BROKER=mqtt.example.com
+REACT_APP_MQTT_BROKER=c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
 REACT_APP_MQTT_PORT=8884
-REACT_APP_MQTT_USERNAME=web_admin
-REACT_APP_MQTT_PASSWORD=<strong_password>
+REACT_APP_MQTT_USERNAME=web_dashboard
+REACT_APP_MQTT_PASSWORD=<your_hivemq_password>
 ```
 
 ---
@@ -717,5 +751,5 @@ REACT_APP_MQTT_PASSWORD=<strong_password>
 
 ### **MQTT Monitoring Tools**
 1. **MQTT Explorer**: Desktop GUI để monitor topics real-time
-2. **Mosquitto logs**: `sudo journalctl -u mosquitto -f`
+2. **HiveMQ Cloud Dashboard**: Web interface để monitor connections, topics, và metrics
 3. **Custom dashboard**: Track message rates, errors, latency
