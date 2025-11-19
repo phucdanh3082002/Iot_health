@@ -946,6 +946,7 @@ class HealthMonitorApp(MDApp):
                     
                     health_data = {
                         'patient_id': patient_id,  # REQUIRED by save_health_record()
+                        'device_id': self.config_data.get('cloud', {}).get('device', {}).get('device_id', 'rpi_bp_001'),  # REQUIRED after migration
                         'timestamp': timestamp_dt,  # Must be datetime object for SQLAlchemy
                         'heart_rate': measurement_data.get('heart_rate') or measurement_data.get('hr'),
                         'spo2': measurement_data.get('spo2'),

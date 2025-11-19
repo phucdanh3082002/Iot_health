@@ -377,6 +377,169 @@ iot_health/patient/{patient_id}/predictions:
   Payload: AI predictions từ cloud
 ```
 
+#### REST API Server (Production - AWS EC2)
+- **Server**: http://47.130.193.237:8000 (AWS EC2 Ubuntu)
+- **Framework**: Flask + Gunicorn + systemd
+- **Database**: MySQL 8.0.44 (AWS RDS)
+- **Authentication**: None (planned JWT)
+- **Rate Limiting**: None (planned)
+- **CORS**: Enabled for Android/Web clients
+
+#### REST API Endpoints
+
+##### Health Check
+```http
+GET /api/health
+```
+**Response:**
+```json
+{
+  "status": "ok",
+  "database": "connected",
+  "timestamp": "2025-11-18T10:30:00.000000",
+  "version": "1.0.0"
+}
+```
+
+##### Device Pairing
+```http
+POST /api/pair-device
+Content-Type: application/json
+
+{
+  "pairing_code": "ABC123XY",
+  "user_id": "user_001",
+  "nickname": "Living Room Monitor"
+}
+```
+**Success Response:**
+```json
+{
+  "status": "success",
+  "message": "Device paired successfully",
+  "data": {
+    "device_info": {
+      "device_id": "rpi_bp_001",
+      "device_name": "Living Room Monitor",
+      "device_type": "raspberry_pi_4b",
+      "location": "Home - Living Room",
+      "nickname": "Living Room Monitor"
+    },
+    "patient_info": null,
+    "mqtt_topics": {
+      "vitals": "iot_health/device/rpi_bp_001/vitals",
+      "alerts": "iot_health/device/rpi_bp_001/alerts",
+      "status": "iot_health/device/rpi_bp_001/status",
+      "commands": null
+    },
+    "thresholds": {}
+  }
+}
+```
+
+##### Add Patient Information
+```http
+POST /api/patient
+Content-Type: application/json
+
+{
+  "device_id": "rpi_bp_001",
+  "user_id": "user_001",
+  "name": "Nguyễn Văn A",
+  "age": 65,
+  "gender": "M",
+  "medical_conditions": {
+    "hypertension": true,
+    "diabetes": false,
+    "heart_disease": false,
+    "notes": "Cao huyết áp từ 2020"
+  },
+  "emergency_contact": {
+    "name": "Nguyễn Thị B",
+    "relationship": "Con gái",
+    "phone": "0912345678"
+  }
+}
+```
+**Success Response:**
+```json
+{
+  "status": "success",
+  "message": "Patient information saved successfully",
+  "data": {
+    "patient_id": "patient_rpi_bp_001_user_001",
+    "name": "Nguyễn Văn A",
+    "age": 65,
+    "gender": "M",
+    "medical_conditions": {
+      "hypertension": true,
+      "diabetes": false,
+      "heart_disease": false,
+      "notes": "Cao huyết áp từ 2020"
+    },
+    "emergency_contact": {
+      "name": "Nguyễn Thị B",
+      "relationship": "Con gái",
+      "phone": "0912345678"
+    },
+    "mqtt_commands_topic": "iot_health/patient/patient_rpi_bp_001_user_001/commands"
+  }
+}
+```
+
+##### Get User Devices
+```http
+GET /api/devices/{user_id}
+```
+**Success Response:**
+```json
+{
+  "status": "success",
+  "devices": [
+    {
+      "device_id": "rpi_bp_001",
+      "device_name": "Living Room Monitor",
+      "device_type": "raspberry_pi_4b",
+      "location": "Home - Living Room",
+      "nickname": "Living Room Monitor",
+      "last_seen": "2025-11-18T08:00:00.000000",
+      "is_active": 1,
+      "patient_id": "patient_rpi_bp_001_user_001",
+      "patient_name": "Nguyễn Văn A",
+      "age": 65,
+      "gender": "M"
+    }
+  ]
+}
+```
+
+#### REST API Error Responses
+```json
+// 400 Bad Request
+{
+  "status": "error",
+  "message": "Missing required fields: pairing_code, user_id, nickname"
+}
+
+// 403 Forbidden
+{
+  "status": "error",
+  "message": "User does not own this device"
+}
+
+// 409 Conflict
+{
+  "status": "error",
+  "message": "Device already paired with this user"
+}
+
+// 500 Internal Server Error
+{
+  "status": "error",
+  "message": "Database error: Connection timeout"
+}
+```
+
 #### Cloud Database (MySQL)
 - **Host**: database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com:3306 (AWS RDS)
 - **Database**: iot_health_cloud
@@ -576,18 +739,253 @@ iot_health/patient/{patient_id}/predictions:
 - **Role-based access**: Owner, Admin, Caregiver, Viewer
 
 ### Device Pairing Flow
-1. Pi generates pairing_code (6-8 chars: A7X9K2)
+1. Pi generates pairing_code (6-8 chars: ABC123XY)
 2. Display QR code on Kivy GUI (Settings → Pairing)
 3. Android app scan QR hoặc nhập code manual
-4. Verify với MySQL: `SELECT * FROM devices WHERE pairing_code = ?`
-5. Create ownership: `INSERT INTO device_ownership (user_id, device_id, role)`
-6. Subscribe MQTT: `iot_health/device/{device_id}/#`
-7. Start real-time monitoring
+4. **REST API call**: `POST /api/pair-device` với pairing_code, user_id, nickname
+5. **Response**: device_info, mqtt_topics, patient_info=null, thresholds={}
+6. **Optional**: Add patient info via `POST /api/patient`
+7. Create ownership: `INSERT INTO device_ownership (user_id, device_id, role)`
+8. Subscribe MQTT: `iot_health/device/{device_id}/#`
+9. Start real-time monitoring
 
 ### Documentation
 - **Implementation Guide**: `docs/ANDROID_APP_IMPLEMENTATION_GUIDE.md`
 - **MySQL Setup**: `docs/MYSQL_SETUP_COMPLETED.md`
 - **MQTT Test**: `tests/test_mqtt_connection.py`
+
+## System Workflow
+
+### Complete IoT Health Monitoring Flow
+
+```mermaid
+graph TB
+    subgraph "Raspberry Pi (IoT Device)"
+        subgraph "Sensors"
+            MAX30102[MAX30102<br/>HR/SpO2]
+            MLX90614[MLX90614<br/>Temperature]
+            HX710B[HX710B<br/>Blood Pressure]
+        end
+        
+        subgraph "Data Processing"
+            SensorLogic[Sensor Logic<br/>Validation & Processing]
+            AlertSystem[Alert System<br/>Threshold Checking]
+        end
+        
+        subgraph "Communication"
+            MQTTClient[MQTT Client<br/>Paho MQTT]
+            RESTClient[REST Client<br/>For pairing]
+        end
+        
+        subgraph "Local Storage"
+            SQLite[(SQLite<br/>Local Cache)]
+        end
+        
+        MAX30102 --> SensorLogic
+        MLX90614 --> SensorLogic
+        HX710B --> SensorLogic
+        SensorLogic --> AlertSystem
+        AlertSystem --> MQTTClient
+        MQTTClient --> RESTClient
+        SensorLogic --> SQLite
+    end
+    
+    subgraph "Cloud Infrastructure"
+        subgraph "MQTT Broker"
+            HiveMQ[HiveMQ Cloud<br/>Singapore<br/>Port: 8883 (TLS)]
+        end
+        
+        subgraph "REST API Server"
+            FlaskAPI[Flask API<br/>AWS EC2<br/>Port: 8000]
+        end
+        
+        subgraph "Database"
+            MySQL[(MySQL 8.0.44<br/>AWS RDS<br/>iot_health_cloud)]
+        end
+        
+        HiveMQ --> FlaskAPI
+        FlaskAPI --> MySQL
+    end
+    
+    subgraph "Android Mobile App"
+        subgraph "UI Layer"
+            ComposeUI[Jetpack Compose<br/>Material 3]
+            QRScanner[QR Scanner<br/>ZXing]
+        end
+        
+        subgraph "Business Logic"
+            ViewModels[ViewModels<br/>MVVM]
+            Repositories[Repositories<br/>Data Access]
+        end
+        
+        subgraph "Data Layer"
+            RoomDB[(Room DB<br/>SQLite Cache)]
+            MQTTAndroid[MQTT Client<br/>Paho Android]
+            Retrofit[Retrofit<br/>REST API]
+        end
+        
+        subgraph "Services"
+            FCM[Firebase Cloud<br/>Messaging]
+            WorkManager[Work Manager<br/>Background Tasks]
+        end
+        
+        ComposeUI --> ViewModels
+        QRScanner --> ViewModels
+        ViewModels --> Repositories
+        Repositories --> RoomDB
+        Repositories --> MQTTAndroid
+        Repositories --> Retrofit
+        MQTTAndroid --> FCM
+        ViewModels --> WorkManager
+    end
+    
+    %% Data Flow
+    MQTTClient --> HiveMQ
+    HiveMQ --> MQTTAndroid
+    
+    RESTClient --> FlaskAPI
+    Retrofit --> FlaskAPI
+    
+    FlaskAPI --> MySQL
+    RoomDB --> MySQL
+    
+    %% Status Flow
+    MQTTClient -.->|Status Updates| HiveMQ
+    HiveMQ -.->|Real-time Data| MQTTAndroid
+    AlertSystem -.->|Alerts| FCM
+    
+    %% Pairing Flow
+    QRScanner -.->|Scan QR Code| RESTClient
+    RESTClient -.->|Pair Device| FlaskAPI
+    FlaskAPI -.->|Device Info| Retrofit
+    
+    %% Patient Management
+    ComposeUI -.->|Add Patient| Retrofit
+    Retrofit -.->|Patient Data| FlaskAPI
+    FlaskAPI -.->|Store Patient| MySQL
+    
+    %% Sync Flow
+    SQLite -.->|Auto Sync| MySQL
+    RoomDB -.->|Offline Cache| MySQL
+```
+
+### Detailed Workflow Steps
+
+#### 1. Device Setup & Pairing
+```mermaid
+sequenceDiagram
+    participant Pi as Raspberry Pi
+    participant GUI as Kivy GUI
+    participant API as REST API
+    participant DB as MySQL DB
+    participant App as Android App
+
+    Pi->>GUI: Generate pairing_code (ABC123XY)
+    GUI->>GUI: Display QR code
+    App->>App: Scan QR code
+    App->>API: POST /api/pair-device
+    API->>DB: Verify pairing_code
+    DB-->>API: Device info
+    API->>DB: Create device_ownership
+    API-->>App: device_info, mqtt_topics
+    App->>App: Subscribe MQTT topics
+    App->>API: POST /api/patient (optional)
+    API->>DB: Create patient + thresholds
+    API-->>App: patient_info, commands_topic
+```
+
+#### 2. Real-time Monitoring Flow
+```mermaid
+sequenceDiagram
+    participant Pi as Raspberry Pi
+    participant MQTT as HiveMQ Cloud
+    participant App as Android App
+    participant DB as MySQL DB
+
+    loop Every measurement
+        Pi->>Pi: Collect sensor data
+        Pi->>Pi: Process & validate
+        Pi->>Pi: Check thresholds
+        Pi->>MQTT: Publish vitals (QoS 1)
+        Pi->>MQTT: Publish alerts (QoS 2, if any)
+        MQTT-->>App: Real-time vitals
+        App->>App: Update UI
+        App->>App: Store in Room DB
+        App->>DB: Sync to cloud (background)
+    end
+    
+    Pi->>MQTT: Publish status (QoS 0, every 60s)
+    MQTT-->>App: Device status updates
+```
+
+#### 3. Alert & Notification Flow
+```mermaid
+sequenceDiagram
+    participant Pi as Raspberry Pi
+    participant MQTT as HiveMQ Cloud
+    participant FCM as Firebase Cloud Messaging
+    participant App as Android App
+
+    Pi->>Pi: Detect critical vital signs
+    Pi->>Pi: Generate alert payload
+    Pi->>MQTT: Publish alert (QoS 2)
+    MQTT-->>App: Alert notification
+    App->>FCM: Trigger push notification
+    FCM-->>App: Display critical alert
+    App->>App: TTS voice alert (if enabled)
+    App->>App: Emergency contact (if configured)
+```
+
+#### 4. Data Synchronization Flow
+```mermaid
+sequenceDiagram
+    participant Pi as Raspberry Pi
+    participant SQLite as Local SQLite
+    participant API as REST API
+    participant MySQL as Cloud MySQL
+    participant App as Android App
+    participant Room as Room DB
+
+    Pi->>SQLite: Store measurements locally
+    SQLite->>API: Auto-sync every 5 min
+    API->>MySQL: Batch insert/update
+    
+    App->>Room: Cache received data
+    Room->>API: Sync when online
+    API->>MySQL: Update cloud database
+    
+    Note over Pi,MySQL: Conflict resolution: Cloud wins
+```
+
+### Data Flow Summary
+
+| Component | Input | Processing | Output |
+|-----------|-------|------------|--------|
+| **Raspberry Pi** | Sensor data | Validation, Alert checking | MQTT vitals/alerts/status |
+| **REST API** | HTTP requests | Business logic, DB operations | JSON responses |
+| **MySQL DB** | SQL queries | Data persistence | Query results |
+| **MQTT Broker** | MQTT messages | Message routing | Topic distribution |
+| **Android App** | MQTT messages, API responses | UI updates, Local storage | User interactions |
+
+### Error Handling & Recovery
+
+#### Connection Failures
+- **MQTT**: Auto-reconnect with exponential backoff (5s → 60s)
+- **REST API**: Retry with circuit breaker pattern
+- **Database**: Connection pooling, failover to local cache
+
+#### Data Consistency
+- **Optimistic locking** for concurrent updates
+- **Store-and-forward** for offline scenarios
+- **Conflict resolution** policies (cloud wins)
+
+#### Monitoring & Alerts
+- **Health checks** every 30 seconds
+- **Error logging** with structured format
+- **Performance metrics** collection
+- **Automated recovery** procedures
+
+---
 
 ## Testing
 
@@ -627,8 +1025,8 @@ python tests/test_mqtt_connection.py
 - [x] MQTT broker (HiveMQ Cloud - Singapore region, free tier)
 - [x] TLS/SSL certificates (Let's Encrypt via HiveMQ)
 - [x] Device credentials (rpi_bp_001, android_app)
+- [x] **REST API server (Flask + AWS EC2 - http://47.130.193.237:8000)**
 - [ ] Production MQTT ACL rules (HiveMQ dashboard)
-- [ ] REST API server (Flask/FastAPI - planned)
 - [ ] CI/CD pipeline (GitHub Actions - planned)
 
 ### Android App
@@ -651,12 +1049,16 @@ Dự án đồ án tốt nghiệp - IoT Health Monitoring System
 
 ### Technologies
 - **Embedded**: Python 3.9+, Kivy, smbus2, RPi.GPIO
-- **Communication**: Paho MQTT, SQLAlchemy, Requests
+- **Communication**: Paho MQTT, SQLAlchemy, Requests, **Flask + Gunicorn (REST API)**
 - **Database**: SQLite, MySQL 8.0
 - **Mobile**: Kotlin, Jetpack Compose, Hilt, Room, Retrofit
 - **AI/ML**: scikit-learn, IsolationForest
 - **Audio**: PiperTTS (Vietnamese TTS)
+- **Cloud**: AWS EC2, AWS RDS, HiveMQ Cloud
 
 ### Contact
 - GitHub: github.com/danhsidoi1234/Iot_health
+- **REST API Server**: http://47.130.193.237:8000
+- **MySQL Database**: database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com:3306
+- **MQTT Broker**: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud:8883
 - Project Status: Active Development

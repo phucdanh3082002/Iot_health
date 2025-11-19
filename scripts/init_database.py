@@ -102,6 +102,7 @@ def init_database(config):
         print("4. Saving HX710B calibration...")
         
         calibration_data = {
+            'device_id': config.get('cloud', {}).get('device', {}).get('device_id', 'rpi_bp_001'),  # REQUIRED after migration
             'sensor_name': 'HX710B',
             'calibration_type': 'two_point',
             'reference_values': [0.0, 200.0],

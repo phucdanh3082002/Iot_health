@@ -15,10 +15,11 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from .models import Base, Patient, HealthRecord, Alert, PatientThreshold, SensorCalibration, SystemLog
+from .models import Base, Patient, HealthRecord, Alert, PatientThreshold, SensorCalibration, SystemLog, Device, DeviceOwnership, SyncQueue
+from .database_extensions import DatabaseManagerExtensions
 
 
-class DatabaseManager:
+class DatabaseManager(DatabaseManagerExtensions):
     """
     Database manager cho SQLite database operations
     
@@ -356,6 +357,7 @@ class DatabaseManager:
             with self.get_session() as session:
                 record = HealthRecord(
                     patient_id=health_data['patient_id'],
+                    device_id=health_data.get('device_id'),  # REQUIRED after migration
                     timestamp=health_data.get('timestamp', datetime.utcnow()),
                     heart_rate=health_data.get('heart_rate'),
                     spo2=health_data.get('spo2'),
@@ -487,6 +489,7 @@ class DatabaseManager:
             with self.get_session() as session:
                 alert = Alert(
                     patient_id=alert_data['patient_id'],
+                    device_id=alert_data.get('device_id'),  # REQUIRED after migration
                     alert_type=alert_data['alert_type'],
                     severity=alert_data['severity'],
                     message=alert_data['message'],
@@ -697,11 +700,13 @@ class DatabaseManager:
             with self.get_session() as session:
                 # Deactivate old calibrations for this sensor
                 session.query(SensorCalibration).filter_by(
+                    device_id=calibration_data.get('device_id'),
                     sensor_name=calibration_data['sensor_name']
                 ).update({'is_active': False})
                 
                 # Create new calibration
                 calibration = SensorCalibration(
+                    device_id=calibration_data.get('device_id'),  # REQUIRED after migration
                     sensor_name=calibration_data['sensor_name'],
                     calibration_type=calibration_data['calibration_type'],
                     reference_values=calibration_data.get('reference_values'),

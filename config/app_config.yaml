@@ -93,6 +93,15 @@ communication:
 cloud:
   enabled: true  # ✅ ENABLED - Syncing to AWS RDS
   
+  # Device registration (for cloud database)
+  device:
+    device_id: "rpi_bp_001"  # ✅ Unique device identifier (IMPORTANT: Change per device)
+    device_name: "Living Room Health Monitor"  # Human-readable name
+    device_type: "blood_pressure_monitor"  # Device type
+    location: "Home - Living Room"  # Physical location
+    firmware_version: "1.0.0"  # Update when firmware changes
+    os_version: "Raspberry Pi OS Bookworm 64-bit"  # OS version
+  
   mysql:
     host: "database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com"  # ✅ AWS RDS Endpoint
     port: 3306
@@ -125,14 +134,11 @@ cloud:
     sync_alerts: true
     sync_calibrations: true
     sync_logs: false  # Logs create too much data
+    sync_devices: true  # ✅ NEW: Sync device info
+    sync_patients: true  # ✅ NEW: Sync patient info
     
     # Conflict resolution strategy
-    conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual
-  
-  device:
-    device_id: "rasp_pi_001" 
-    device_name: "Living Room Monitor"  
-    location: "Home - Living Room"  
+    conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual  
 
 database:
   backup_enabled: true

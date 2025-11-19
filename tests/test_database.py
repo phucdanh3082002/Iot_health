@@ -97,6 +97,7 @@ def test_health_records(db: DatabaseManager, patient_id: str):
     records_data = [
         {
             'patient_id': patient_id,
+            'device_id': 'rpi_bp_001',  # REQUIRED after migration
             'timestamp': base_time - timedelta(hours=3),
             'heart_rate': 72.0,
             'spo2': 98.0,
@@ -109,6 +110,7 @@ def test_health_records(db: DatabaseManager, patient_id: str):
         },
         {
             'patient_id': patient_id,
+            'device_id': 'rpi_bp_001',  # REQUIRED after migration
             'timestamp': base_time - timedelta(hours=2),
             'heart_rate': 85.0,
             'spo2': 97.0,
@@ -121,6 +123,7 @@ def test_health_records(db: DatabaseManager, patient_id: str):
         },
         {
             'patient_id': patient_id,
+            'device_id': 'rpi_bp_001',  # REQUIRED after migration
             'timestamp': base_time - timedelta(hours=1),
             'heart_rate': 75.0,
             'spo2': 99.0,
@@ -168,6 +171,7 @@ def test_alerts(db: DatabaseManager, patient_id: str):
     alerts_data = [
         {
             'patient_id': patient_id,
+            'device_id': 'rpi_bp_001',  # REQUIRED after migration
             'alert_type': 'threshold',
             'severity': 'high',
             'message': 'Huyết áp cao: 145/95 mmHg',
@@ -177,6 +181,7 @@ def test_alerts(db: DatabaseManager, patient_id: str):
         },
         {
             'patient_id': patient_id,
+            'device_id': 'rpi_bp_001',  # REQUIRED after migration
             'alert_type': 'threshold',
             'severity': 'medium',
             'message': 'SpO2 thấp: 93%',
@@ -220,6 +225,7 @@ def test_sensor_calibration(db: DatabaseManager):
     
     # Save HX710B calibration
     calibration_data = {
+        'device_id': 'rpi_bp_001',  # REQUIRED after migration
         'sensor_name': 'HX710B',
         'calibration_type': 'two_point',
         'reference_values': [0.0, 200.0],  # mmHg
@@ -243,6 +249,7 @@ def test_sensor_calibration(db: DatabaseManager):
     
     # Update calibration (new calibration deactivates old one)
     new_calibration_data = {
+        'device_id': 'rpi_bp_001',  # REQUIRED after migration
         'sensor_name': 'HX710B',
         'calibration_type': 'two_point',
         'reference_values': [0.0, 200.0],

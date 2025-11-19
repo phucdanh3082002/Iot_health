@@ -358,7 +358,7 @@ class CloudSyncManager:
                 # Prepare data for cloud
                 record_data = {
                     'patient_id': record.patient_id,
-                    'device_id': self.device_id,
+                    'device_id': record.device_id if hasattr(record, 'device_id') and record.device_id else self.device_id,
                     'timestamp': record.timestamp,
                     'heart_rate': record.heart_rate,
                     'spo2': record.spo2,
