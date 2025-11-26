@@ -375,7 +375,9 @@ class DatabaseManager(DatabaseManagerExtensions):
                 
                 record_id = record.id
                 
-                self.logger.info(f"Saved health record ID={record_id} for patient {health_data['patient_id']}")
+                # Log message handle NULL patient_id (device-centric approach)
+                patient_info = health_data.get('patient_id') or 'unassigned (device-centric)'
+                self.logger.info(f"Saved health record ID={record_id} for patient {patient_info}")
             
             # Trigger cloud sync AFTER transaction commits (outside context manager)
             if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_health_records', True):
@@ -490,6 +492,7 @@ class DatabaseManager(DatabaseManagerExtensions):
                 alert = Alert(
                     patient_id=alert_data['patient_id'],
                     device_id=alert_data.get('device_id'),  # REQUIRED after migration
+                    health_record_id=alert_data.get('health_record_id'),  # Link to health record
                     alert_type=alert_data['alert_type'],
                     severity=alert_data['severity'],
                     message=alert_data['message'],
@@ -1051,6 +1054,7 @@ class DatabaseManager(DatabaseManagerExtensions):
             bool: True if data is valid
         """
         # Check required fields
+        # Device-centric approach: patient_id có thể NULL (sẽ được auto-resolve từ cloud)
         if 'patient_id' not in health_data:
             self.logger.warning("Missing patient_id in health data")
             return False

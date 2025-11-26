@@ -565,7 +565,10 @@ class BPMeasurementScreen(Screen):
                 'heart_rate': self.last_result.heart_rate,
                 'measurement_type': 'blood_pressure',
                 'quality': self.last_result.quality,
-                'confidence': self.last_result.confidence
+                'confidence': self.last_result.confidence,
+                # Add metadata for MQTT publishing
+                'pulse_pressure': self.last_result.systolic - self.last_result.diastolic,
+                'valid': True if self.last_result.quality in ['good', 'excellent'] else False
             }
             
             self.app_instance.save_measurement_to_database(measurement_data)

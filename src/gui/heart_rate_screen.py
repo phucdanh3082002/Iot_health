@@ -985,6 +985,22 @@ class HeartRateScreen(Screen):
             "spo2": self.current_spo2,
             "measurement_type": "heart_rate_spo2",
         }
+        
+        # Add metadata from last snapshot for MQTT publishing
+        last_snapshot = getattr(self.controller, 'last_snapshot', {})
+        sensor_data = last_snapshot.get('sensor_status', {}).get('MAX30102', {})
+        
+        if sensor_data:
+            measurement_data.update({
+                'signal_quality_index': sensor_data.get('signal_quality_index', 0.0),
+                'peak_count': sensor_data.get('peak_count', 0),
+                'measurement_duration': self.controller.MEASUREMENT_DURATION,
+                'cv': sensor_data.get('spo2_cv', 0.0),
+                'confidence': sensor_data.get('signal_quality_ir', 0.0) / 100.0 if sensor_data.get('signal_quality_ir') else 0.9,
+                'spo2_confidence': 0.9,  # Default confidence
+                'sampling_rate': 100.0  # MAX30102 default sampling rate
+            })
+        
         try:
             self.app_instance.save_measurement_to_database(measurement_data)
             self.logger.info(

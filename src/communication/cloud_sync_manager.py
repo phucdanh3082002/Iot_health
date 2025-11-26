@@ -19,7 +19,7 @@ import json
 import socket
 from enum import Enum
 
-from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer, String, DateTime, JSON, Enum as SQLEnum
+from sqlalchemy import create_engine, text, MetaData, Table, Column, Integer, String, DateTime, JSON, Enum as SQLEnum, and_, or_
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from sqlalchemy.pool import QueuePool
@@ -83,9 +83,14 @@ class CloudSyncManager:
         self.last_sync_time = None
         
         # Device identification
-        self.device_id = cloud_config.get('device', {}).get('device_id', 'unknown_device')
-        self.device_name = cloud_config.get('device', {}).get('device_name', 'Unknown Device')
-        self.location = cloud_config.get('device', {}).get('location', '')
+        device_config = cloud_config.get('device', {})
+        self.device_id = device_config.get('device_id', 'unknown_device')
+        self.device_name = device_config.get('device_name', 'Unknown Device')
+        self.device_type = device_config.get('device_type', 'blood_pressure_monitor')
+        self.location = device_config.get('location', '')
+        self.pairing_code = device_config.get('pairing_code', '')
+        self.firmware_version = device_config.get('firmware_version', '1.0.0')
+        self.os_version = device_config.get('os_version', 'Unknown OS')
         
         # Sync configuration
         self.sync_config = cloud_config.get('sync', {})
@@ -269,18 +274,15 @@ class CloudSyncManager:
     
     def _register_device(self):
         """
-        Register this device in cloud devices table
-        Updates last_seen timestamp if device already exists
+        Register/Update device in cloud with upsert strategy
+        
+        Strategy:
+        - INSERT (first time): Push all fields from config
+        - UPDATE (subsequent): Only update technical fields (firmware, OS, last_seen, ip)
+        - PRESERVE: device_name, location (managed by Android app after pairing)
         """
         try:
             with self.get_cloud_session() as session:
-                # Check if device exists
-                result = session.execute(
-                    text("SELECT id FROM devices WHERE device_id = :device_id"),
-                    {'device_id': self.device_id}
-                )
-                device = result.fetchone()
-                
                 # Get device IP address
                 hostname = socket.gethostname()
                 try:
@@ -288,41 +290,64 @@ class CloudSyncManager:
                 except:
                     ip_address = None
                 
+                # Check if device exists
+                result = session.execute(
+                    text("SELECT id, device_name, location FROM devices WHERE device_id = :device_id"),
+                    {'device_id': self.device_id}
+                )
+                device = result.fetchone()
+                
                 if device:
-                    # Update existing device
+                    # UPDATE: Chỉ update technical fields, KHÔNG overwrite name/location
                     session.execute(
                         text("""
                             UPDATE devices 
                             SET last_seen = NOW(), 
                                 ip_address = :ip_address,
+                                firmware_version = :firmware_version,
+                                os_version = :os_version,
                                 is_active = 1
                             WHERE device_id = :device_id
                         """),
                         {
                             'device_id': self.device_id,
-                            'ip_address': ip_address
+                            'ip_address': ip_address,
+                            'firmware_version': self.firmware_version,
+                            'os_version': self.os_version
                         }
                     )
-                    self.logger.info(f"Updated device registration: {self.device_id}")
+                    self.logger.info(
+                        f"Updated device technical fields: {self.device_id} "
+                        f"(fw: {self.firmware_version}, os: {self.os_version})"
+                    )
                 else:
-                    # Insert new device
+                    # INSERT: Đẩy tất cả fields lần đầu (including name/location from config)
                     session.execute(
                         text("""
                             INSERT INTO devices 
-                            (device_id, device_name, location, ip_address, last_seen, is_active)
-                            VALUES (:device_id, :device_name, :location, :ip_address, NOW(), 1)
+                            (device_id, device_name, device_type, location, pairing_code, 
+                             firmware_version, os_version, ip_address, last_seen, is_active, created_at)
+                            VALUES (:device_id, :device_name, :device_type, :location, :pairing_code,
+                                    :firmware_version, :os_version, :ip_address, NOW(), 1, NOW())
                         """),
                         {
                             'device_id': self.device_id,
                             'device_name': self.device_name,
+                            'device_type': self.device_type,
                             'location': self.location,
+                            'pairing_code': self.pairing_code,
+                            'firmware_version': self.firmware_version,
+                            'os_version': self.os_version,
                             'ip_address': ip_address
                         }
                     )
-                    self.logger.info(f"Registered new device: {self.device_id}")
+                    self.logger.info(
+                        f"Registered new device: {self.device_id} "
+                        f"(pairing_code: {self.pairing_code}, type: {self.device_type})"
+                    )
                 
         except Exception as e:
-            self.logger.error(f"Failed to register device: {e}")
+            self.logger.error(f"Failed to register/update device: {e}")
     
     # ═══════════════════════════════════════════════════════════════════
     # PUSH OPERATIONS (Local → Cloud)
@@ -355,9 +380,26 @@ class CloudSyncManager:
                     self.logger.error(f"Health record {record_id} not found in local database")
                     return False
                 
+                # Device-centric: Get patient_id from cloud devices table if not set locally
+                patient_id_to_use = record.patient_id
+                if not patient_id_to_use:
+                    # Query patient_id from cloud based on device_id
+                    try:
+                        with self.get_cloud_session() as cloud_session:
+                            result = cloud_session.execute(
+                                text("SELECT patient_id FROM patients WHERE device_id = :device_id AND is_active = 1 LIMIT 1"),
+                                {'device_id': self.device_id}
+                            )
+                            patient_row = result.fetchone()
+                            if patient_row:
+                                patient_id_to_use = patient_row[0]
+                                self.logger.info(f"Auto-resolved patient_id: {patient_id_to_use} for device {self.device_id}")
+                    except Exception as e:
+                        self.logger.warning(f"Could not auto-resolve patient_id: {e}")
+                
                 # Prepare data for cloud
                 record_data = {
-                    'patient_id': record.patient_id,
+                    'patient_id': patient_id_to_use,  # Can be NULL if device not assigned to patient yet
                     'device_id': record.device_id if hasattr(record, 'device_id') and record.device_id else self.device_id,
                     'timestamp': record.timestamp,
                     'heart_rate': record.heart_rate,
@@ -388,6 +430,14 @@ class CloudSyncManager:
                     """),
                     record_data
                 )
+            
+            # Update local record sync status
+            with self.local_db.get_session() as local_session:
+                from src.data.models import HealthRecord
+                record_to_update = local_session.query(HealthRecord).filter_by(id=record_id).first()
+                if record_to_update:
+                    record_to_update.synced_at = datetime.now()
+                    record_to_update.sync_status = 'synced'
             
             self.stats['total_pushes'] += 1
             self.stats['successful_pushes'] += 1
@@ -428,9 +478,26 @@ class CloudSyncManager:
                     self.logger.error(f"Alert {alert_id} not found in local database")
                     return False
                 
+                # Device-centric: Get patient_id from cloud devices table if not set locally
+                patient_id_to_use = alert.patient_id
+                if not patient_id_to_use:
+                    # Query patient_id from cloud based on device_id
+                    try:
+                        with self.get_cloud_session() as cloud_session:
+                            result = cloud_session.execute(
+                                text("SELECT patient_id FROM patients WHERE device_id = :device_id AND is_active = 1 LIMIT 1"),
+                                {'device_id': self.device_id}
+                            )
+                            patient_row = result.fetchone()
+                            if patient_row:
+                                patient_id_to_use = patient_row[0]
+                                self.logger.info(f"Auto-resolved patient_id: {patient_id_to_use} for device {self.device_id}")
+                    except Exception as e:
+                        self.logger.warning(f"Could not auto-resolve patient_id: {e}")
+                
                 # Prepare data for cloud
                 alert_data = {
-                    'patient_id': alert.patient_id,
+                    'patient_id': patient_id_to_use,  # Can be NULL if device not assigned to patient yet
                     'device_id': self.device_id,
                     'health_record_id': None,  # Local Alert doesn't have this field
                     'alert_type': alert.alert_type,
@@ -463,6 +530,13 @@ class CloudSyncManager:
                     """),
                     alert_data
                 )
+            
+            # Update local alert sync status
+            with self.local_db.get_session() as local_session:
+                alert_to_update = local_session.query(Alert).filter_by(id=alert_id).first()
+                if alert_to_update and hasattr(alert_to_update, 'synced_at'):
+                    alert_to_update.synced_at = datetime.now()
+                    alert_to_update.sync_status = 'synced'
             
             self.stats['successful_pushes'] += 1
             self.logger.info(f"Successfully pushed alert {alert_id} to cloud")
@@ -748,7 +822,7 @@ class CloudSyncManager:
                     level='INFO',
                     message=f'Sync queue: {operation.value} {table_name}',
                     module='cloud_sync',
-                    function='enqueue_for_sync',
+                    function_name='enqueue_for_sync',
                     timestamp=datetime.now(),
                     additional_data=json.dumps({
                         'table_name': table_name,
@@ -792,7 +866,7 @@ class CloudSyncManager:
                 
                 pending = session.query(SystemLog).filter(
                     SystemLog.module == 'cloud_sync',
-                    SystemLog.function == 'enqueue_for_sync'
+                    SystemLog.function_name == 'enqueue_for_sync'
                 ).all()
                 
                 for item in pending:
@@ -932,19 +1006,38 @@ class CloudSyncManager:
             with self.local_db.get_session() as session:
                 from src.data.models import HealthRecord, Alert
                 
-                # Sync new health records
+                # Sync new health records (only those not synced or updated after last sync)
                 new_records = session.query(HealthRecord).filter(
-                    HealthRecord.timestamp > since
+                    and_(
+                        HealthRecord.timestamp > since,
+                        or_(
+                            HealthRecord.synced_at.is_(None),  # Never synced
+                            HealthRecord.synced_at < HealthRecord.timestamp  # Updated after sync
+                        )
+                    )
                 ).all()
                 
                 for record in new_records:
                     if self.push_health_record(record.id):
                         results['records_synced'] += 1
                 
-                # Sync new alerts
-                new_alerts = session.query(Alert).filter(
-                    Alert.timestamp > since
-                ).all()
+                # Sync new alerts (only those not synced or updated after last sync)
+                # Check if synced_at column exists in Alert model
+                if hasattr(Alert, 'synced_at'):
+                    new_alerts = session.query(Alert).filter(
+                        and_(
+                            Alert.timestamp > since,
+                            or_(
+                                Alert.synced_at.is_(None),  # Never synced
+                                Alert.synced_at < Alert.timestamp  # Updated after sync
+                            )
+                        )
+                    ).all()
+                else:
+                    # Fallback: sync all alerts after 'since' timestamp
+                    new_alerts = session.query(Alert).filter(
+                        Alert.timestamp > since
+                    ).all()
                 
                 for alert in new_alerts:
                     if self.push_alert(alert.id):

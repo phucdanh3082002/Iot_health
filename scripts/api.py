@@ -1026,6 +1026,927 @@ def get_device_status(device_id):
             'message': str(e)
         }), 500
 
+@app.route('/api/health-records', methods=['GET'])
+def get_health_records():
+    """
+    Get health records (vitals history) với filter và pagination
+    DEVICE-CENTRIC APPROACH: Query theo device_id (primary), patient_id optional
+    
+    Query params:
+    - user_id: User ID (required for authorization)
+    - device_id: Filter by device (optional but recommended)
+    - patient_id: Filter by patient (optional, auto-resolved từ device nếu không có)
+    - start_date: ISO format datetime (optional, default: 7 days ago)
+    - end_date: ISO format datetime (optional, default: now)
+    - vital_sign: Filter by vital type (heart_rate, spo2, temperature, blood_pressure) (optional)
+    - page: Page number (default: 1)
+    - limit: Records per page (default: 50, max: 500)
+    - sort_order: asc or desc (default: desc)
+    
+    Returns:
+    - Paginated list of health records với metadata
+    - Records có thể có patient_id = NULL nếu device chưa assign patient
+    """
+    try:
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        device_id = request.args.get('device_id')
+        patient_id = request.args.get('patient_id')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        vital_sign = request.args.get('vital_sign')
+        page = int(request.args.get('page', 1))
+        limit = min(int(request.args.get('limit', 50)), 500)  # Max 500 records
+        sort_order = request.args.get('sort_order', 'desc').upper()
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameter: user_id'
+            }), 400
+        
+        if sort_order not in ['ASC', 'DESC']:
+            sort_order = 'DESC'
+        
+        # Set default date range (7 days)
+        if not start_date:
+            start_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        if not end_date:
+            end_date = datetime.utcnow().isoformat()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Verify user has access to requested device/patient
+        if device_id:
+            cursor.execute("""
+                SELECT device_id FROM device_ownership
+                WHERE device_id = %s AND user_id = %s
+            """, (device_id, user_id))
+            
+            if not cursor.fetchone():
+                cursor.close()
+                conn.close()
+                return jsonify({
+                    'status': 'error',
+                    'message': 'User does not have access to this device'
+                }), 403
+        
+        # Build dynamic query
+        query = """
+            SELECT 
+                hr.id,
+                hr.device_id,
+                hr.patient_id,
+                hr.timestamp,
+                hr.heart_rate,
+                hr.spo2,
+                hr.temperature,
+                hr.systolic_bp,
+                hr.diastolic_bp,
+                hr.mean_arterial_pressure,
+                hr.data_quality,
+                hr.measurement_context,
+                hr.sensor_data,
+                d.device_name,
+                do.nickname as device_nickname,
+                p.name as patient_name
+            FROM health_records hr
+            JOIN devices d ON hr.device_id = d.device_id
+            JOIN device_ownership do ON d.device_id = do.device_id AND do.user_id = %s
+            LEFT JOIN patients p ON hr.patient_id = p.patient_id
+            WHERE hr.timestamp BETWEEN %s AND %s
+        """
+        
+        params = [user_id, start_date, end_date]
+        
+        # Add filters
+        if device_id:
+            query += " AND hr.device_id = %s"
+            params.append(device_id)
+        
+        if patient_id:
+            query += " AND hr.patient_id = %s"
+            params.append(patient_id)
+        
+        # Filter by vital sign (có giá trị khác NULL)
+        if vital_sign:
+            vital_map = {
+                'heart_rate': 'hr.heart_rate IS NOT NULL',
+                'spo2': 'hr.spo2 IS NOT NULL',
+                'temperature': 'hr.temperature IS NOT NULL',
+                'blood_pressure': '(hr.systolic_bp IS NOT NULL AND hr.diastolic_bp IS NOT NULL)'
+            }
+            if vital_sign in vital_map:
+                query += f" AND {vital_map[vital_sign]}"
+        
+        # Count total records
+        count_query = f"SELECT COUNT(*) as total FROM ({query}) as subquery"
+        cursor.execute(count_query, params)
+        total_records = cursor.fetchone()['total']
+        
+        # Add pagination
+        offset = (page - 1) * limit
+        query += f" ORDER BY hr.timestamp {sort_order} LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+        
+        # Execute query
+        cursor.execute(query, params)
+        records = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Format response
+        result = []
+        for record in records:
+            result.append({
+                'id': record['id'],
+                'device_id': record['device_id'],
+                'device_name': record['device_name'],
+                'device_nickname': record['device_nickname'],
+                'patient_id': record['patient_id'],
+                'patient_name': record['patient_name'],
+                'timestamp': record['timestamp'].isoformat() if record['timestamp'] else None,
+                'vitals': {
+                    'heart_rate': record['heart_rate'],
+                    'spo2': record['spo2'],
+                    'temperature': float(record['temperature']) if record['temperature'] else None,
+                    'systolic_bp': record['systolic_bp'],
+                    'diastolic_bp': record['diastolic_bp'],
+                    'mean_arterial_pressure': record['mean_arterial_pressure']
+                },
+                'data_quality': float(record['data_quality']) if record['data_quality'] else None,
+                'measurement_context': record['measurement_context'],
+                'sensor_data': json.loads(record['sensor_data']) if record['sensor_data'] else None
+            })
+        
+        total_pages = (total_records + limit - 1) // limit
+        
+        return jsonify({
+            'status': 'success',
+            'data': result,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_records': total_records,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            },
+            'filters': {
+                'device_id': device_id,
+                'patient_id': patient_id,
+                'start_date': start_date,
+                'end_date': end_date,
+                'vital_sign': vital_sign,
+                'sort_order': sort_order
+            }
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Invalid parameter: {str(e)}'
+        }), 400
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/health-records/<int:record_id>', methods=['GET'])
+def get_health_record_detail(record_id):
+    """
+    Get chi tiết single health record với full sensor data
+    
+    Query params:
+    - user_id: User ID (required for authorization)
+    """
+    try:
+        user_id = request.args.get('user_id')
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameter: user_id'
+            }), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get record với authorization check
+        cursor.execute("""
+            SELECT 
+                hr.*,
+                d.device_name,
+                do.nickname as device_nickname,
+                p.name as patient_name,
+                p.age,
+                p.gender
+            FROM health_records hr
+            JOIN devices d ON hr.device_id = d.device_id
+            JOIN device_ownership do ON d.device_id = do.device_id AND do.user_id = %s
+            LEFT JOIN patients p ON hr.patient_id = p.patient_id
+            WHERE hr.id = %s
+        """, (user_id, record_id))
+        
+        record = cursor.fetchone()
+        
+        if not record:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'status': 'error',
+                'message': 'Record not found or access denied'
+            }), 404
+        
+        cursor.close()
+        conn.close()
+        
+        # Format response
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'id': record['id'],
+                'device_id': record['device_id'],
+                'device_name': record['device_name'],
+                'device_nickname': record['device_nickname'],
+                'patient_id': record['patient_id'],
+                'patient_name': record['patient_name'],
+                'patient_age': record['age'],
+                'patient_gender': record['gender'],
+                'timestamp': record['timestamp'].isoformat() if record['timestamp'] else None,
+                'vitals': {
+                    'heart_rate': record['heart_rate'],
+                    'spo2': record['spo2'],
+                    'temperature': float(record['temperature']) if record['temperature'] else None,
+                    'systolic_bp': record['systolic_bp'],
+                    'diastolic_bp': record['diastolic_bp'],
+                    'mean_arterial_pressure': record['mean_arterial_pressure']
+                },
+                'data_quality': float(record['data_quality']) if record['data_quality'] else None,
+                'measurement_context': record['measurement_context'],
+                'sensor_data': json.loads(record['sensor_data']) if record['sensor_data'] else None,
+                'synced_at': record['synced_at'].isoformat() if record['synced_at'] else None,
+                'sync_status': record['sync_status']
+            }
+        })
+        
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/alerts', methods=['GET'])
+def get_alerts():
+    """
+    Get alerts history với filter và pagination
+    DEVICE-CENTRIC APPROACH: Query theo device_id (primary), patient_id optional
+    
+    Query params:
+    - user_id: User ID (required for authorization)
+    - device_id: Filter by device (optional but recommended)
+    - patient_id: Filter by patient (optional, auto-resolved từ device nếu không có)
+    - severity: Filter by severity (low, medium, high, critical) (optional)
+    - alert_type: Filter by alert type (optional)
+    - start_date: ISO format datetime (optional, default: 30 days ago)
+    - end_date: ISO format datetime (optional, default: now)
+    - acknowledged: Filter by acknowledged status (true/false) (optional)
+    - page: Page number (default: 1)
+    - limit: Records per page (default: 50, max: 200)
+    - sort_order: asc or desc (default: desc)
+    
+    Returns:
+    - Paginated list of alerts với metadata
+    - Alerts có thể có patient_id = NULL nếu device chưa assign patient
+    """
+    try:
+        # Get query parameters
+        user_id = request.args.get('user_id')
+        device_id = request.args.get('device_id')
+        patient_id = request.args.get('patient_id')
+        severity = request.args.get('severity')
+        alert_type = request.args.get('alert_type')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        acknowledged = request.args.get('acknowledged')
+        page = int(request.args.get('page', 1))
+        limit = min(int(request.args.get('limit', 50)), 200)  # Max 200 records
+        sort_order = request.args.get('sort_order', 'desc').upper()
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameter: user_id'
+            }), 400
+        
+        if sort_order not in ['ASC', 'DESC']:
+            sort_order = 'DESC'
+        
+        # Set default date range (30 days)
+        if not start_date:
+            start_date = (datetime.utcnow() - timedelta(days=30)).isoformat()
+        if not end_date:
+            end_date = datetime.utcnow().isoformat()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Build dynamic query
+        query = """
+            SELECT 
+                a.id,
+                a.device_id,
+                a.patient_id,
+                a.alert_type,
+                a.severity,
+                a.message,
+                a.vital_sign,
+                a.current_value,
+                a.threshold_value,
+                a.timestamp,
+                a.acknowledged,
+                a.resolved,
+                a.notification_sent,
+                a.notification_method,
+                d.device_name,
+                do.nickname as device_nickname,
+                p.name as patient_name
+            FROM alerts a
+            JOIN devices d ON a.device_id = d.device_id
+            JOIN device_ownership do ON d.device_id = do.device_id AND do.user_id = %s
+            LEFT JOIN patients p ON a.patient_id = p.patient_id
+            WHERE a.timestamp BETWEEN %s AND %s
+        """
+        
+        params = [user_id, start_date, end_date]
+        
+        # Add filters
+        if device_id:
+            query += " AND a.device_id = %s"
+            params.append(device_id)
+        
+        if patient_id:
+            query += " AND a.patient_id = %s"
+            params.append(patient_id)
+        
+        if severity:
+            query += " AND a.severity = %s"
+            params.append(severity)
+        
+        if alert_type:
+            query += " AND a.alert_type = %s"
+            params.append(alert_type)
+        
+        if acknowledged is not None:
+            ack_value = acknowledged.lower() in ['true', '1', 'yes']
+            query += " AND a.acknowledged = %s"
+            params.append(ack_value)
+        
+        # Count total records
+        count_query = f"SELECT COUNT(*) as total FROM ({query}) as subquery"
+        cursor.execute(count_query, params)
+        total_records = cursor.fetchone()['total']
+        
+        # Add pagination
+        offset = (page - 1) * limit
+        query += f" ORDER BY a.timestamp {sort_order} LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+        
+        # Execute query
+        cursor.execute(query, params)
+        alerts = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Format response
+        result = []
+        for alert in alerts:
+            # Generate summary for mobile app list view
+            summary = ""
+            if alert['alert_type'] == 'high_heart_rate':
+                summary = f"Nhịp tim cao: {alert['current_value']} BPM"
+            elif alert['alert_type'] == 'low_temperature':
+                summary = f"Nhiệt độ thấp: {alert['current_value']}°C"
+            elif alert['alert_type'] == 'high_temperature':
+                summary = f"Nhiệt độ cao: {alert['current_value']}°C"
+            elif alert['alert_type'] == 'low_spo2':
+                summary = f"SpO2 thấp: {alert['current_value']}%"
+            else:
+                # Generic summary from message
+                summary = alert['message'][:50] + "..." if len(alert['message']) > 50 else alert['message']
+            
+            result.append({
+                'id': alert['id'],
+                'device_id': alert['device_id'],
+                'device_name': alert['device_name'],
+                'device_nickname': alert['device_nickname'],
+                'patient_id': alert['patient_id'],
+                'patient_name': alert['patient_name'],
+                'alert_type': alert['alert_type'],
+                'severity': alert['severity'],
+                'summary': summary,  # ✅ THÊM TRƯỜNG SUMMARY
+                'message': alert['message'],
+                'vital_sign': alert['vital_sign'],
+                'current_value': float(alert['current_value']) if alert['current_value'] else None,
+                'threshold_value': float(alert['threshold_value']) if alert['threshold_value'] else None,
+                'timestamp': alert['timestamp'].isoformat() if alert['timestamp'] else None,
+                'acknowledged': bool(alert['acknowledged']),
+                'resolved': bool(alert['resolved']),
+                'notification_sent': bool(alert['notification_sent']),
+                'notification_method': alert['notification_method']
+            })
+        
+        total_pages = (total_records + limit - 1) // limit
+        
+        return jsonify({
+            'status': 'success',
+            'data': result,
+            'pagination': {
+                'page': page,
+                'limit': limit,
+                'total_records': total_records,
+                'total_pages': total_pages,
+                'has_next': page < total_pages,
+                'has_prev': page > 1
+            },
+            'filters': {
+                'device_id': device_id,
+                'patient_id': patient_id,
+                'severity': severity,
+                'alert_type': alert_type,
+                'start_date': start_date,
+                'end_date': end_date,
+                'acknowledged': acknowledged,
+                'sort_order': sort_order
+            }
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Invalid parameter: {str(e)}'
+        }), 400
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/alerts/<int:alert_id>/acknowledge', methods=['PUT'])
+def acknowledge_alert(alert_id):
+    """
+    Mark alert as acknowledged
+    
+    Body params:
+    - user_id: User ID (required for authorization)
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No JSON data provided'
+            }), 400
+        
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required field: user_id'
+            }), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Verify user has access to this alert
+        cursor.execute("""
+            SELECT a.id, a.device_id
+            FROM alerts a
+            JOIN device_ownership do ON a.device_id = do.device_id AND do.user_id = %s
+            WHERE a.id = %s
+        """, (user_id, alert_id))
+        
+        alert = cursor.fetchone()
+        
+        if not alert:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'status': 'error',
+                'message': 'Alert not found or access denied'
+            }), 404
+        
+        # Update alert
+        cursor.execute("""
+            UPDATE alerts
+            SET acknowledged = 1
+            WHERE id = %s
+        """, (alert_id,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Alert acknowledged successfully',
+            'data': {
+                'alert_id': alert_id,
+                'acknowledged': True
+            }
+        })
+        
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/alerts/<int:alert_id>/resolve', methods=['PUT'])
+def resolve_alert(alert_id):
+    """
+    Mark alert as resolved
+    
+    Body params:
+    - user_id: User ID (required for authorization)
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No JSON data provided'
+            }), 400
+        
+        user_id = data.get('user_id')
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required field: user_id'
+            }), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Verify user has access to this alert (owner or caregiver)
+        cursor.execute("""
+            SELECT a.id, a.device_id
+            FROM alerts a
+            JOIN device_ownership do ON a.device_id = do.device_id 
+            WHERE a.id = %s AND do.user_id = %s
+            AND do.role IN ('owner', 'caregiver')
+        """, (alert_id, user_id))
+        
+        alert = cursor.fetchone()
+        
+        if not alert:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'status': 'error',
+                'message': 'Alert not found or access denied'
+            }), 404
+        
+        # Update alert
+        cursor.execute("""
+            UPDATE alerts
+            SET resolved = 1,
+                acknowledged = 1
+            WHERE id = %s
+        """, (alert_id,))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Alert resolved successfully',
+            'data': {
+                'alert_id': alert_id,
+                'resolved': True,
+                'acknowledged': True
+            }
+        })
+        
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/alerts/statistics', methods=['GET'])
+def get_alerts_statistics():
+    """
+    Get alerts statistics cho dashboard mobile app
+    
+    Query params:
+    - user_id: User ID (required)
+    - device_id: Device ID (optional)
+    - patient_id: Patient ID (optional)
+    - days: Number of days to look back (default: 7)
+    
+    Returns:
+    - Alert counts by severity, status
+    - Recent alerts summary
+    """
+    try:
+        user_id = request.args.get('user_id')
+        device_id = request.args.get('device_id')
+        patient_id = request.args.get('patient_id')
+        days = int(request.args.get('days', 7))
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameter: user_id'
+            }), 400
+        
+        start_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        end_date = datetime.utcnow().isoformat()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Build base query
+        base_query = """
+            FROM alerts a
+            JOIN device_ownership do ON a.device_id = do.device_id AND do.user_id = %s
+            WHERE a.timestamp BETWEEN %s AND %s
+        """
+        
+        params = [user_id, start_date, end_date]
+        
+        if device_id:
+            base_query += " AND a.device_id = %s"
+            params.append(device_id)
+        
+        if patient_id:
+            base_query += " AND a.patient_id = %s"
+            params.append(patient_id)
+        
+        # Get severity counts
+        severity_query = f"""
+            SELECT 
+                a.severity,
+                COUNT(*) as count
+            {base_query}
+            GROUP BY a.severity
+        """
+        
+        cursor.execute(severity_query, params)
+        severity_stats = cursor.fetchall()
+        
+        # Get status counts
+        status_query = f"""
+            SELECT 
+                CASE 
+                    WHEN a.resolved = 1 THEN 'resolved'
+                    WHEN a.acknowledged = 1 THEN 'acknowledged'
+                    ELSE 'active'
+                END as status,
+                COUNT(*) as count
+            {base_query}
+            GROUP BY 
+                CASE 
+                    WHEN a.resolved = 1 THEN 'resolved'
+                    WHEN a.acknowledged = 1 THEN 'acknowledged'
+                    ELSE 'active'
+                END
+        """
+        
+        cursor.execute(status_query, params)
+        status_stats = cursor.fetchall()
+        
+        # Get recent alerts (last 10)
+        recent_query = f"""
+            SELECT 
+                a.id,
+                a.alert_type,
+                a.severity,
+                a.message,
+                a.timestamp,
+                d.device_name,
+                do.nickname as device_nickname
+            {base_query.replace('FROM alerts a', 'FROM alerts a JOIN devices d ON a.device_id = d.device_id')}
+            ORDER BY a.timestamp DESC
+            LIMIT 10
+        """
+        
+        cursor.execute(recent_query, params)
+        recent_alerts = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        # Format severity stats
+        severity_dict = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
+        for stat in severity_stats:
+            severity_dict[stat['severity']] = stat['count']
+        
+        # Format status stats
+        status_dict = {'active': 0, 'acknowledged': 0, 'resolved': 0}
+        for stat in status_stats:
+            status_dict[stat['status']] = stat['count']
+        
+        # Format recent alerts
+        recent_list = []
+        for alert in recent_alerts:
+            recent_list.append({
+                'id': alert['id'],
+                'alert_type': alert['alert_type'],
+                'severity': alert['severity'],
+                'message': alert['message'][:100] + "..." if len(alert['message']) > 100 else alert['message'],
+                'timestamp': alert['timestamp'].isoformat() if alert['timestamp'] else None,
+                'device_name': alert['device_name'],
+                'device_nickname': alert['device_nickname']
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'time_range': {
+                    'days': days,
+                    'start': start_date,
+                    'end': end_date
+                },
+                'severity_counts': severity_dict,
+                'status_counts': status_dict,
+                'total_alerts': sum(severity_dict.values()),
+                'recent_alerts': recent_list
+            }
+        })
+        
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/vitals/statistics', methods=['GET'])
+def get_vitals_statistics():
+    """
+    Get vitals statistics (min, max, avg) cho time range
+    
+    Query params:
+    - user_id: User ID (required)
+    - device_id: Device ID (optional)
+    - patient_id: Patient ID (optional)
+    - start_date: ISO format (default: 7 days ago)
+    - end_date: ISO format (default: now)
+    
+    Returns:
+    - Statistics for each vital sign
+    """
+    try:
+        user_id = request.args.get('user_id')
+        device_id = request.args.get('device_id')
+        patient_id = request.args.get('patient_id')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if not user_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required parameter: user_id'
+            }), 400
+        
+        # Set default date range (7 days)
+        if not start_date:
+            start_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
+        if not end_date:
+            end_date = datetime.utcnow().isoformat()
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Build query
+        query = """
+            SELECT 
+                COUNT(*) as total_records,
+                AVG(heart_rate) as avg_heart_rate,
+                MIN(heart_rate) as min_heart_rate,
+                MAX(heart_rate) as max_heart_rate,
+                AVG(spo2) as avg_spo2,
+                MIN(spo2) as min_spo2,
+                MAX(spo2) as max_spo2,
+                AVG(temperature) as avg_temperature,
+                MIN(temperature) as min_temperature,
+                MAX(temperature) as max_temperature,
+                AVG(systolic_bp) as avg_systolic,
+                MIN(systolic_bp) as min_systolic,
+                MAX(systolic_bp) as max_systolic,
+                AVG(diastolic_bp) as avg_diastolic,
+                MIN(diastolic_bp) as min_diastolic,
+                MAX(diastolic_bp) as max_diastolic
+            FROM health_records hr
+            JOIN device_ownership do ON hr.device_id = do.device_id AND do.user_id = %s
+            WHERE hr.timestamp BETWEEN %s AND %s
+        """
+        
+        params = [user_id, start_date, end_date]
+        
+        if device_id:
+            query += " AND hr.device_id = %s"
+            params.append(device_id)
+        
+        if patient_id:
+            query += " AND hr.patient_id = %s"
+            params.append(patient_id)
+        
+        cursor.execute(query, params)
+        stats = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'total_records': stats['total_records'],
+                'date_range': {
+                    'start': start_date,
+                    'end': end_date
+                },
+                'heart_rate': {
+                    'avg': float(stats['avg_heart_rate']) if stats['avg_heart_rate'] else None,
+                    'min': stats['min_heart_rate'],
+                    'max': stats['max_heart_rate']
+                },
+                'spo2': {
+                    'avg': float(stats['avg_spo2']) if stats['avg_spo2'] else None,
+                    'min': stats['min_spo2'],
+                    'max': stats['max_spo2']
+                },
+                'temperature': {
+                    'avg': float(stats['avg_temperature']) if stats['avg_temperature'] else None,
+                    'min': float(stats['min_temperature']) if stats['min_temperature'] else None,
+                    'max': float(stats['max_temperature']) if stats['max_temperature'] else None
+                },
+                'blood_pressure': {
+                    'systolic': {
+                        'avg': float(stats['avg_systolic']) if stats['avg_systolic'] else None,
+                        'min': stats['min_systolic'],
+                        'max': stats['max_systolic']
+                    },
+                    'diastolic': {
+                        'avg': float(stats['avg_diastolic']) if stats['avg_diastolic'] else None,
+                        'min': stats['min_diastolic'],
+                        'max': stats['max_diastolic']
+                    }
+                }
+            }
+        })
+        
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
 if __name__ == '__main__':
     # Production: Use gunicorn instead
     # gunicorn -w 4 -b 0.0.0.0:8000 flask_api_pairing:app

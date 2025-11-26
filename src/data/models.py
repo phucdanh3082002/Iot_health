@@ -226,7 +226,7 @@ class HealthRecord(Base):
     
     # Primary identification
     id = Column(Integer, primary_key=True, autoincrement=True)  # Integer for SQLite autoincrement
-    patient_id = Column(String(50), ForeignKey('patients.patient_id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False, index=True)
+    patient_id = Column(String(50), ForeignKey('patients.patient_id', ondelete='SET NULL', onupdate='CASCADE'), nullable=True, index=True)  # Device-centric: NULL until assigned
     device_id = Column(String(50), ForeignKey('devices.device_id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False, index=True)
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     
@@ -280,7 +280,7 @@ class Alert(Base):
     
     # Primary identification
     id = Column(Integer, primary_key=True, autoincrement=True)  # Integer for SQLite autoincrement
-    patient_id = Column(String(50), ForeignKey('patients.patient_id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False, index=True)
+    patient_id = Column(String(50), ForeignKey('patients.patient_id', ondelete='SET NULL', onupdate='CASCADE'), nullable=True, index=True)  # Device-centric: NULL until assigned
     device_id = Column(String(50), ForeignKey('devices.device_id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False, index=True)
     health_record_id = Column(BigInteger)  # Optional reference to health_records.id
     
@@ -309,6 +309,10 @@ class Alert(Base):
     # Notification
     notification_sent = Column(Boolean, default=False)
     notification_method = Column(String(50))  # mqtt, fcm, email
+    
+    # Cloud sync tracking
+    synced_at = Column(DateTime)  # Timestamp of last successful sync to cloud
+    sync_status = Column(String(20), default='pending')  # pending, synced, failed
     
     # Relationships
     patient = relationship("Patient", back_populates="alerts")

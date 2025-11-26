@@ -44,6 +44,7 @@ from src.utils.tts_manager import (
     TTSManager,
 )
 from src.utils.health_validators import HealthDataValidator
+from src.gui.mqtt_integration import GUIMQTTIntegration
 
 # Import screens - handle both relative and absolute imports
 try:
@@ -118,6 +119,19 @@ class HealthMonitorApp(MDApp):
         self.mqtt_client = mqtt_client
         self.alert_system = alert_system
         self.audio_config = self.config_data.get('audio', {}) or {}
+        
+        # Initialize MQTT integration helper
+        self.mqtt_integration = None
+        if self.mqtt_client:
+            device_id = config.get('communication', {}).get('mqtt', {}).get('device_id', 'rpi_bp_001')
+            patient_id = config.get('patient', {}).get('id', 'patient_001')
+            from src.gui.mqtt_integration import GUIMQTTIntegration
+            self.mqtt_integration = GUIMQTTIntegration(
+                mqtt_client=self.mqtt_client,
+                device_id=device_id,
+                patient_id=patient_id,
+                logger=logging.getLogger('mqtt_integration')
+            )
         
         # Initialize sensors from config or use provided ones
         if sensors is None:
@@ -931,8 +945,9 @@ class HealthMonitorApp(MDApp):
             # ============================================================
             if self.database and hasattr(self.database, 'save_health_record'):
                 try:
-                    # Lấy patient_id từ config
-                    patient_id = self.config_data.get('patient', {}).get('id', 'patient_001')
+                    # Device-centric approach: patient_id sẽ được auto-resolve từ cloud
+                    # Không đọc từ config nữa, để NULL và cloud sync sẽ xử lý
+                    patient_id = None
                     
                     # Chuẩn bị data theo format của DatabaseManager.save_health_record()
                     timestamp_value = measurement_data.get('timestamp', time.time())
@@ -1020,6 +1035,24 @@ class HealthMonitorApp(MDApp):
                         
                         # Kiểm tra ngưỡng và tạo alert nếu cần
                         self._check_and_create_alert(patient_id, health_data, record_id)
+                        
+                        # ============================================================
+                        # MQTT PUBLISHING: Publish vitals to MQTT broker
+                        # ============================================================
+                        if self.mqtt_integration:
+                            # Determine measurement type
+                            measurement_type = 'heart_rate'
+                            if health_data.get('temperature'):
+                                measurement_type = 'temperature'
+                            elif health_data.get('systolic_bp'):
+                                measurement_type = 'blood_pressure'
+                            
+                            # Publish vitals
+                            self.mqtt_integration.publish_vitals_from_measurement(
+                                measurement_data=measurement_data,
+                                measurement_type=measurement_type
+                            )
+                        
                         return record_id
                     else:
                         self.logger.warning("DatabaseManager.save_health_record() returned None - falling back to local DB")
@@ -1191,8 +1224,11 @@ class HealthMonitorApp(MDApp):
                     # Create new alert (no duplicate found)
                     if hasattr(self.database, 'save_alert'):
                         # Prepare alert_data dict for save_alert()
+                        # Device-centric approach: patient_id sẽ được auto-resolve từ cloud
                         alert_dict = {
-                            'patient_id': patient_id,
+                            'patient_id': None,  # Set to None for device-centric approach
+                            'device_id': self.device_id,  # Add device_id
+                            'health_record_id': record_id,  # Link to health record
                             'alert_type': alert_data['type'],
                             'severity': alert_data['severity'],
                             'message': alert_data['message'],
@@ -1206,6 +1242,39 @@ class HealthMonitorApp(MDApp):
                         self.logger.info(
                             f"⚠️  Alert created: {alert_data['type']} (severity={alert_data['severity']}, alert_id={alert_id})"
                         )
+                        
+                        # ============================================================
+                        # MQTT PUBLISHING: Publish alert to MQTT broker
+                        # ============================================================
+                        if self.mqtt_integration and alert_id:
+                            # Get threshold range
+                            threshold_val = alert_data.get('threshold')
+                            if isinstance(threshold_val, str) and '/' in threshold_val:
+                                # Blood pressure format "120/80"
+                                parts = threshold_val.split('/')
+                                threshold_min = float(parts[0]) if alert_data['type'].startswith('low') else 0
+                                threshold_max = float(parts[0]) if alert_data['type'].startswith('high') else 999
+                            else:
+                                threshold_min = float(threshold_val) if alert_data['type'].startswith('low') else 0
+                                threshold_max = float(threshold_val) if alert_data['type'].startswith('high') else 999
+                            
+                            # Convert value to float
+                            value = alert_data.get('value')
+                            if isinstance(value, str) and '/' in value:
+                                # Blood pressure "120/80" -> use systolic
+                                value = float(value.split('/')[0])
+                            else:
+                                value = float(value) if value else 0
+                            
+                            self.mqtt_integration.publish_alert_from_threshold_check(
+                                alert_type=alert_data['type'],
+                                severity=alert_data['severity'],
+                                vital_sign=alert_data.get('vital_sign', 'unknown'),
+                                current_value=value,
+                                threshold_min=threshold_min,
+                                threshold_max=threshold_max,
+                                message=alert_data['message']
+                            )
                         
                         # Gửi TTS warning nếu severity cao
                         if alert_data['severity'] in ('high', 'critical'):
@@ -1393,8 +1462,17 @@ class HealthMonitorApp(MDApp):
     def on_start(self):
         """
         Called when application starts
+        
+        Publish device online status to MQTT
         """
-        self._speak_scenario(ScenarioID.SYSTEM_START)
+        # Publish device online status
+        if self.mqtt_integration:
+            self.mqtt_integration.publish_device_status(
+                online=True,
+                sensors_status={'max30102': 'ready', 'mlx90614': 'ready', 'hx710b': 'ready'},
+                system_info={'uptime': 0, 'memory_usage': 50.0}
+            )
+            self.logger.info("📡 Published device online status to MQTT")
     
 
 

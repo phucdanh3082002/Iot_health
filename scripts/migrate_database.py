@@ -122,7 +122,29 @@ def migrate_database(db_path: str, config: dict):
             
             print(f"   ✅ Created 'devices' table and inserted device: {device_id}")
         else:
-            print("   ⏭️  'devices' table already exists, skipping...")
+            print("   ⏭️  'devices' table already exists, updating device info from config...")
+            
+            # Update existing device with latest config info
+            device_config = config.get('cloud', {}).get('device', {})
+            device_id = device_config.get('device_id', 'rpi_bp_001')
+            device_name = device_config.get('device_name', 'Raspberry Pi Monitor')
+            location = device_config.get('location', 'Home')
+            pairing_code = device_config.get('pairing_code', '')
+            firmware_version = device_config.get('firmware_version', '1.0.0')
+            os_version = device_config.get('os_version', 'Unknown OS')
+            
+            cursor.execute("""
+                UPDATE devices 
+                SET device_name = ?, 
+                    location = ?, 
+                    pairing_code = ?,
+                    firmware_version = ?,
+                    os_version = ?,
+                    updated_at = datetime('now')
+                WHERE device_id = ?
+            """, (device_name, location, pairing_code, firmware_version, os_version, device_id))
+            
+            print(f"   ✅ Updated device info for: {device_id} (pairing_code: {pairing_code})")
         
         # ========== STEP 2: Create new table - device_ownership ==========
         print("\n2️⃣  Creating 'device_ownership' table...")
@@ -233,6 +255,16 @@ def migrate_database(db_path: str, config: dict):
             if not check_column_exists(cursor, 'alerts', 'notification_method'):
                 cursor.execute("ALTER TABLE alerts ADD COLUMN notification_method VARCHAR(50)")
                 print("   ✅ Added 'notification_method' column to alerts")
+            
+            # Add synced_at column
+            if not check_column_exists(cursor, 'alerts', 'synced_at'):
+                cursor.execute("ALTER TABLE alerts ADD COLUMN synced_at DATETIME")
+                print("   ✅ Added 'synced_at' column to alerts")
+            
+            # Add sync_status column
+            if not check_column_exists(cursor, 'alerts', 'sync_status'):
+                cursor.execute("ALTER TABLE alerts ADD COLUMN sync_status VARCHAR(20) DEFAULT 'pending'")
+                print("   ✅ Added 'sync_status' column to alerts")
         
         # ========== STEP 7: Add missing columns to sensor_calibrations ==========
         print("\n7️⃣  Updating 'sensor_calibrations' table...")

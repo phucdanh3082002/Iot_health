@@ -96,18 +96,23 @@ cloud:
   # Device registration (for cloud database)
   device:
     device_id: "rpi_bp_001"  # ✅ Unique device identifier (IMPORTANT: Change per device)
-    device_name: "Living Room Health Monitor"  # Human-readable name
+    device_name: "Living Room Health Monitor"  # Human-readable name (sẽ bị overwrite bởi Android app)
     device_type: "blood_pressure_monitor"  # Device type
-    location: "Home - Living Room"  # Physical location
+    location: "Home - Living Room"  # Physical location (sẽ bị overwrite bởi Android app)
+    pairing_code: "ABC123XY"  # ✅ Pairing code cố định cho thiết bị này (dùng để pair với Android app)
     firmware_version: "1.0.0"  # Update when firmware changes
     os_version: "Raspberry Pi OS Bookworm 64-bit"  # OS version
+    # Sync strategy: Upsert với field-level control
+    # - INSERT lần đầu: Đẩy tất cả fields lên MySQL
+    # - UPDATE sau đó: Chỉ update technical fields (firmware_version, os_version, last_seen, ip_address)
+    # - KHÔNG overwrite: device_name, location (do Android app quản lý)
   
   mysql:
     host: "database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com"  # ✅ AWS RDS Endpoint
     port: 3306
     database: "iot_health_cloud"
     user: "pi_sync"  # ✅ Limited user (SELECT, INSERT, UPDATE only) - Principle of Least Privilege
-    password_env: "MYSQL_PI_SYNC_PASSWORD"  # Password from environment variable
+    password_env: "MYSQL_CLOUD_PASSWORD"  # ✅ Sửa từ MYSQL_PI_SYNC_PASSWORD thành MYSQL_CLOUD_PASSWORD
     password: ""  # Or put password here (not recommended)
     
     # Connection pool settings
@@ -124,7 +129,7 @@ cloud:
   
   sync:
     mode: "auto"  # auto / manual / scheduled
-    interval_seconds: 300  # Sync every 5 minutes (auto mode)
+    interval_seconds: 60  # Sync every 5 minutes (auto mode)
     batch_size: 100  # Records per batch
     retry_attempts: 3
     retry_delay_seconds: 60

@@ -380,8 +380,20 @@ class TemperatureScreen(Screen):
                 'timestamp': time.time(),
                 'temperature': self.current_temp,
                 'ambient_temperature': self.ambient_temp,
-                'measurement_type': 'temperature'
+                'measurement_type': 'temperature',
+                # Add metadata for MQTT publishing
+                'read_count': len(self.samples),
+                'std_dev': 0.0,  # Calculate if needed
+                'measurement_duration': self.measurement_duration
             }
+            
+            # Calculate standard deviation if we have samples
+            if len(self.samples) >= 2:
+                temps = [s['object'] for s in self.samples]
+                mean_temp = sum(temps) / len(temps)
+                variance = sum((t - mean_temp) ** 2 for t in temps) / len(temps)
+                measurement_data['std_dev'] = variance ** 0.5
+            
             self.app_instance.save_measurement_to_database(measurement_data)
             self.logger.info(f"Saved temperature measurement: {self.current_temp}°C")
             
