@@ -20,24 +20,36 @@ class GUIMQTTIntegration:
     MQTT Integration Layer cho GUI App
     
     Xử lý việc publish vitals, alerts, status từ GUI measurements
+    Device-centric: patient_id được resolve động từ cloud database
     """
     
-    def __init__(self, mqtt_client, device_id: str, patient_id: str, logger=None):
+    def __init__(self, mqtt_client, device_id: str, patient_id: str = None, logger=None):
         """
         Initialize MQTT integration
         
         Args:
             mqtt_client: IoTHealthMQTTClient instance
             device_id: Device ID
-            patient_id: Patient ID
+            patient_id: Patient ID (optional - can be set dynamically)
             logger: Logger instance
         """
         self.mqtt_client = mqtt_client
         self.device_id = device_id
-        self.patient_id = patient_id
+        self._patient_id = patient_id  # Can be None initially (device-centric)
         self.logger = logger or logging.getLogger(__name__)
         self.session_id = f"session_{int(time.time())}"
         self.measurement_sequence = 0
+    
+    @property
+    def patient_id(self) -> Optional[str]:
+        """Get current patient_id (may be None for device-centric approach)"""
+        return self._patient_id
+    
+    @patient_id.setter
+    def patient_id(self, value: str):
+        """Set patient_id dynamically (resolved from cloud)"""
+        self._patient_id = value
+        self.logger.debug(f"Updated patient_id to: {value}")
     
     def publish_vitals_from_measurement(
         self,

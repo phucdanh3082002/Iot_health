@@ -392,13 +392,17 @@ class DatabaseManager(DatabaseManagerExtensions):
             self.logger.error(f"Error saving health record: {e}", exc_info=True)
             return None
     
-    def get_health_records(self, patient_id: str, start_time: Optional[datetime] = None,
+    def get_health_records(self, patient_id: str = None, device_id: str = None, 
+                          start_time: Optional[datetime] = None,
                           end_time: Optional[datetime] = None, limit: int = 1000) -> List[Dict[str, Any]]:
         """
-        Get health records for patient
+        Get health records for patient or device
+        
+        Device-centric approach: Query by device_id if patient_id is None
         
         Args:
-            patient_id: Patient identifier
+            patient_id: Patient identifier (optional)
+            device_id: Device identifier (optional, used if patient_id is None)
             start_time: Start time filter
             end_time: End time filter
             limit: Maximum number of records
@@ -408,7 +412,14 @@ class DatabaseManager(DatabaseManagerExtensions):
         """
         try:
             with self.get_session() as session:
-                query = session.query(HealthRecord).filter_by(patient_id=patient_id)
+                query = session.query(HealthRecord)
+                
+                # Device-centric: Query by device_id if patient_id is None
+                if patient_id:
+                    query = query.filter(HealthRecord.patient_id == patient_id)
+                elif device_id:
+                    query = query.filter(HealthRecord.device_id == device_id)
+                # If neither, return all records (for admin use)
                 
                 # Apply time filters
                 if start_time:
@@ -487,6 +498,7 @@ class DatabaseManager(DatabaseManagerExtensions):
         Returns:
             Alert ID if successful, None if error
         """
+        self.logger.debug(f"[SAVE_ALERT_START] Saving alert: type={alert_data.get('alert_type')}, severity={alert_data.get('severity')}, patient_id={alert_data.get('patient_id')}, device_id={alert_data.get('device_id')}")
         try:
             with self.get_session() as session:
                 alert = Alert(
@@ -510,11 +522,14 @@ class DatabaseManager(DatabaseManagerExtensions):
                 self.logger.warning(f"Saved alert ID={alert_id}: {alert.severity} - {alert.message}")
             
             # Trigger cloud sync AFTER transaction commits
+            self.logger.debug(f"[DEBUG] push_alert check: cloud_sync_manager={self.cloud_sync_manager is not None}, sync_config={self.cloud_sync_manager.sync_config if self.cloud_sync_manager else 'None'}")
             if self.cloud_sync_manager and self.cloud_sync_manager.sync_config.get('sync_alerts', True):
                 try:
-                    self.cloud_sync_manager.push_alert(alert_id)
+                    self.logger.info(f"[PUSH_ALERT_CALL] About to push alert {alert_id} to cloud")
+                    result = self.cloud_sync_manager.push_alert(alert_id)
+                    self.logger.info(f"[PUSH_ALERT_RESULT] Alert {alert_id} push result: {result}")
                 except Exception as sync_error:
-                    self.logger.warning(f"Cloud sync failed for alert {alert_id}: {sync_error}")
+                    self.logger.error(f"[PUSH_ALERT_ERROR] Cloud sync failed for alert {alert_id}: {sync_error}", exc_info=True)
             
             return alert_id
                 
@@ -522,23 +537,36 @@ class DatabaseManager(DatabaseManagerExtensions):
             self.logger.error(f"Error saving alert: {e}")
             return None
     
-    def get_active_alerts(self, patient_id: str) -> List[Dict[str, Any]]:
+    def get_active_alerts(self, patient_id: str = None, device_id: str = None) -> List[Dict[str, Any]]:
         """
-        Get active alerts for patient
+        Get active alerts for patient or device
+        
+        Device-centric approach: Query by device_id if patient_id is None
         
         Args:
-            patient_id: Patient identifier
+            patient_id: Patient identifier (optional)
+            device_id: Device identifier (optional, used if patient_id is None)
             
         Returns:
             List of active alerts
         """
         try:
             with self.get_session() as session:
+                # Build filter conditions
+                conditions = [Alert.resolved == False]
+                
+                # Device-centric: Query by device_id if patient_id is None
+                if patient_id:
+                    conditions.append(Alert.patient_id == patient_id)
+                elif device_id:
+                    conditions.append(Alert.device_id == device_id)
+                else:
+                    # Neither patient_id nor device_id provided - return empty
+                    self.logger.debug("get_active_alerts: No patient_id or device_id provided")
+                    return []
+                
                 alerts = session.query(Alert).filter(
-                    and_(
-                        Alert.patient_id == patient_id,
-                        Alert.resolved == False
-                    )
+                    and_(*conditions)
                 ).order_by(desc(Alert.timestamp)).all()
                 
                 result = []

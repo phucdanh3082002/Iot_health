@@ -120,16 +120,25 @@ class HealthMonitorApp(MDApp):
         self.alert_system = alert_system
         self.audio_config = self.config_data.get('audio', {}) or {}
         
+        # Device identification (device-centric approach)
+        self.device_id = (
+            config.get('cloud', {}).get('device', {}).get('device_id')
+            or config.get('communication', {}).get('mqtt', {}).get('device_id', 'rpi_bp_001')
+        )
+        
+        # Cached patient_id (resolved from cloud via device_id)
+        self._cached_patient_id: Optional[str] = None
+        self._patient_id_resolved_at: Optional[float] = None
+        
         # Initialize MQTT integration helper
+        # Device-centric: patient_id will be resolved from cloud database
         self.mqtt_integration = None
         if self.mqtt_client:
-            device_id = config.get('communication', {}).get('mqtt', {}).get('device_id', 'rpi_bp_001')
-            patient_id = config.get('patient', {}).get('id', 'patient_001')
             from src.gui.mqtt_integration import GUIMQTTIntegration
             self.mqtt_integration = GUIMQTTIntegration(
                 mqtt_client=self.mqtt_client,
-                device_id=device_id,
-                patient_id=patient_id,
+                device_id=self.device_id,
+                patient_id=None,  # Resolved dynamically from cloud
                 logger=logging.getLogger('mqtt_integration')
             )
         
@@ -858,12 +867,15 @@ class HealthMonitorApp(MDApp):
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         """Fetch historical measurement records from database or fallback storage."""
-        patient_id = (self.config_data.get('patient') or {}).get('id', 'patient_001')
+        # Device-centric: resolve patient_id from cloud database
+        patient_id = self._resolve_patient_id_from_device()
 
         if self.database and hasattr(self.database, 'get_health_records'):
             try:
+                # Device-centric: pass device_id as fallback if patient_id is None
                 records = self.database.get_health_records(
-                    patient_id,
+                    patient_id=patient_id,
+                    device_id=self.device_id,
                     start_time=start_time,
                     end_time=end_time,
                     limit=limit,
@@ -1073,45 +1085,243 @@ class HealthMonitorApp(MDApp):
             self.logger.error(f"Critical error in save_measurement_to_database: {e}", exc_info=True)
             self._show_error_notification(f"Lỗi khi lưu: {str(e)}")
 
+    def _resolve_patient_id_from_device(self) -> Optional[str]:
+        """
+        Resolve patient_id từ device_id thông qua cloud database
+        Cache kết quả trong 5 phút để giảm query
+        
+        Returns:
+            patient_id nếu tìm được, None nếu không
+        """
+        try:
+            # Check cache (valid for 5 minutes)
+            if self._cached_patient_id and self._patient_id_resolved_at:
+                cache_age = time.time() - self._patient_id_resolved_at
+                if cache_age < 300:  # 5 minutes
+                    return self._cached_patient_id
+            
+            # ============================================================
+            # PRIORITY 1: Query from cloud database (source of truth)
+            # ============================================================
+            try:
+                from src.communication.cloud_sync_manager import CloudSyncManager
+                from sqlalchemy import text
+                
+                # Try to get CloudSyncManager from main.py global context
+                # or create a temporary connection
+                cloud_config = self.config_data.get('cloud', {})
+                if cloud_config.get('enabled', False):
+                    mysql_config = cloud_config.get('mysql', {})
+                    if mysql_config:
+                        from sqlalchemy import create_engine
+                        
+                        # Build connection string
+                        host = mysql_config.get('host')
+                        port = mysql_config.get('port', 3306)
+                        database = mysql_config.get('database')
+                        user = mysql_config.get('user')
+                        
+                        # Get password from environment or config
+                        import os
+                        password = os.environ.get('MYSQL_PASSWORD') or mysql_config.get('password', '')
+                        
+                        if host and database and user and password:
+                            connection_string = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
+                            engine = create_engine(connection_string, pool_pre_ping=True)
+                            
+                            with engine.connect() as conn:
+                                result = conn.execute(
+                                    text("SELECT patient_id FROM patients WHERE device_id = :device_id AND is_active = 1 LIMIT 1"),
+                                    {'device_id': self.device_id}
+                                )
+                                row = result.fetchone()
+                                if row:
+                                    self._cached_patient_id = row[0]
+                                    self._patient_id_resolved_at = time.time()
+                                    self.logger.debug(f"[Resolved patient_id from CLOUD] {self._cached_patient_id}")
+                                    engine.dispose()
+                                    return self._cached_patient_id
+                            
+                            engine.dispose()
+                            
+            except Exception as cloud_err:
+                self.logger.debug(f"Cloud patient resolution failed: {cloud_err}")
+            
+            # ============================================================
+            # PRIORITY 2: Fallback to local database
+            # ============================================================
+            if self.database and hasattr(self.database, 'get_session'):
+                try:
+                    with self.database.get_session() as session:
+                        from src.data.models import Patient
+                        patient = session.query(Patient).filter(
+                            Patient.device_id == self.device_id,
+                            Patient.is_active == True
+                        ).first()
+                        
+                        if patient:
+                            self._cached_patient_id = patient.patient_id
+                            self._patient_id_resolved_at = time.time()
+                            self.logger.debug(f"[Resolved patient_id from LOCAL] {self._cached_patient_id}")
+                            return self._cached_patient_id
+                except Exception as local_err:
+                    self.logger.debug(f"Local patient resolution failed: {local_err}")
+            
+            return None
+            
+        except Exception as e:
+            self.logger.warning(f"Could not resolve patient_id from device: {e}")
+            return None
+    
+    def _get_default_thresholds_from_config(self) -> Dict[str, Dict[str, float]]:
+        """
+        Lấy ngưỡng mặc định từ app_config.yaml
+        
+        Returns:
+            Dictionary thresholds theo format của get_patient_thresholds()
+        """
+        config_thresholds = self.config_data.get('thresholds', {})
+        
+        result = {}
+        
+        # Heart rate thresholds
+        hr_config = config_thresholds.get('heart_rate', {})
+        if hr_config:
+            result['heart_rate'] = {
+                'min_normal': hr_config.get('min', 60),
+                'max_normal': hr_config.get('max', 100),
+                'min_critical': hr_config.get('critical_min', 40),
+                'max_critical': hr_config.get('critical_max', 150)
+            }
+        
+        # SpO2 thresholds
+        spo2_config = config_thresholds.get('spo2', {})
+        if spo2_config:
+            result['spo2'] = {
+                'min_normal': spo2_config.get('min', 95),
+                'max_normal': 100,
+                'min_critical': spo2_config.get('critical_min', 90),
+                'max_critical': 100
+            }
+        
+        # Temperature thresholds
+        temp_config = config_thresholds.get('temperature', {})
+        if temp_config:
+            result['temperature'] = {
+                'min_normal': temp_config.get('min', 36.0),
+                'max_normal': temp_config.get('max', 37.5),
+                'min_critical': temp_config.get('critical_min', 35.0),
+                'max_critical': temp_config.get('critical_max', 39.0)
+            }
+        
+        # Blood pressure thresholds
+        bp_config = config_thresholds.get('blood_pressure', {})
+        if bp_config:
+            result['systolic_bp'] = {
+                'min_normal': 90,
+                'max_normal': bp_config.get('systolic_max', 140),
+                'min_critical': 70,
+                'max_critical': bp_config.get('systolic_critical', 180)
+            }
+            result['diastolic_bp'] = {
+                'min_normal': 60,
+                'max_normal': bp_config.get('diastolic_max', 90),
+                'min_critical': 40,
+                'max_critical': bp_config.get('diastolic_critical', 110)
+            }
+        
+        return result
+    
     def _check_and_create_alert(self, patient_id: str, health_data: Dict[str, Any], record_id: int):
         """
         Kiểm tra ngưỡng và tạo alert tự động nếu vượt threshold
         
+        Device-centric approach:
+        1. Resolve patient_id từ device_id nếu patient_id = None
+        2. Lấy thresholds từ patient_thresholds (cloud/local)
+        3. Fallback về thresholds từ config nếu không có
+        
         Args:
-            patient_id: Patient ID
+            patient_id: Patient ID (có thể None với device-centric)
             health_data: Health record data
             record_id: ID của health record vừa lưu
         """
         try:
-            if not self.database or not hasattr(self.database, 'get_patient_thresholds'):
-                return
+            # ============================================================
+            # STEP 1: Resolve patient_id từ device_id nếu cần
+            # ============================================================
+            resolved_patient_id = patient_id
+            if not resolved_patient_id:
+                resolved_patient_id = self._resolve_patient_id_from_device()
+                if resolved_patient_id:
+                    self.logger.info(f"[Alert] Resolved patient_id: {resolved_patient_id} for device {self.device_id}")
+                    # Update MQTT integration with resolved patient_id
+                    if self.mqtt_integration:
+                        self.mqtt_integration.patient_id = resolved_patient_id
             
-            # Lấy ngưỡng của patient
-            thresholds = self.database.get_patient_thresholds(patient_id)
+            # ============================================================
+            # STEP 2: Lấy thresholds từ database hoặc config
+            # ============================================================
+            thresholds = {}
+            
+            # Try patient-specific thresholds first
+            if resolved_patient_id and self.database and hasattr(self.database, 'get_patient_thresholds'):
+                thresholds = self.database.get_patient_thresholds(resolved_patient_id)
+                if thresholds:
+                    self.logger.debug(f"Using patient thresholds for {resolved_patient_id}")
+            
+            # Fallback to config thresholds
             if not thresholds:
-                self.logger.debug(f"No thresholds found for patient {patient_id}")
+                thresholds = self._get_default_thresholds_from_config()
+                self.logger.debug(f"Using default thresholds from config (patient={resolved_patient_id})")
+            
+            if not thresholds:
+                self.logger.warning("No thresholds available (neither patient nor config)")
                 return
             
             alerts = []
             
+            # ============================================================
+            # Helper function để lấy threshold value (hỗ trợ cả 2 formats)
+            # Format 1 (database): {'heart_rate': {'min_normal': 60, 'max_normal': 100}}
+            # Format 2 (legacy): {'heart_rate_min': 60, 'heart_rate_max': 100}
+            # ============================================================
+            def get_threshold(vital_sign: str, bound: str, default: float) -> float:
+                """Get threshold value, supporting both nested and flat formats"""
+                # Try nested format first (from database/config)
+                if vital_sign in thresholds and isinstance(thresholds[vital_sign], dict):
+                    return thresholds[vital_sign].get(bound, default)
+                # Try flat format (legacy)
+                flat_key = f"{vital_sign}_{bound.replace('_normal', '').replace('_critical', '_critical')}"
+                if bound == 'min_normal':
+                    flat_key = f"{vital_sign}_min"
+                elif bound == 'max_normal':
+                    flat_key = f"{vital_sign}_max"
+                return thresholds.get(flat_key, default)
+            
             # Kiểm tra Heart Rate
             hr = health_data.get('heart_rate')
             if hr and hr > 0:
-                hr_min = thresholds.get('heart_rate_min', 60)
-                hr_max = thresholds.get('heart_rate_max', 100)
+                hr_min = get_threshold('heart_rate', 'min_normal', 60)
+                hr_max = get_threshold('heart_rate', 'max_normal', 100)
+                hr_critical_min = get_threshold('heart_rate', 'min_critical', 40)
+                hr_critical_max = get_threshold('heart_rate', 'max_critical', 150)
+                
                 if hr < hr_min:
+                    severity = 'critical' if hr < hr_critical_min else 'medium'
                     alerts.append({
                         'type': 'low_heart_rate',
-                        'severity': 'medium',
+                        'severity': severity,
                         'message': f'Nhịp tim thấp: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
                         'value': hr,
                         'vital_sign': 'heart_rate',
                         'threshold': hr_min
                     })
                 elif hr > hr_max:
+                    severity = 'critical' if hr > hr_critical_max else 'high'
                     alerts.append({
                         'type': 'high_heart_rate',
-                        'severity': 'high',
+                        'severity': severity,
                         'message': f'Nhịp tim cao: {hr:.0f} BPM (ngưỡng: {hr_min}-{hr_max})',
                         'value': hr,
                         'vital_sign': 'heart_rate',
@@ -1121,9 +1331,11 @@ class HealthMonitorApp(MDApp):
             # Kiểm tra SpO2
             spo2 = health_data.get('spo2')
             if spo2 and spo2 > 0:
-                spo2_min = thresholds.get('spo2_min', 95)
+                spo2_min = get_threshold('spo2', 'min_normal', 95)
+                spo2_critical_min = get_threshold('spo2', 'min_critical', 90)
+                
                 if spo2 < spo2_min:
-                    severity = 'critical' if spo2 < 90 else 'high'
+                    severity = 'critical' if spo2 < spo2_critical_min else 'high'
                     alerts.append({
                         'type': 'low_spo2',
                         'severity': severity,
@@ -1136,10 +1348,13 @@ class HealthMonitorApp(MDApp):
             # Kiểm tra Temperature
             temp = health_data.get('temperature')
             if temp and temp > 0:
-                temp_min = thresholds.get('temperature_min', 36.0)
-                temp_max = thresholds.get('temperature_max', 37.5)
+                temp_min = get_threshold('temperature', 'min_normal', 36.0)
+                temp_max = get_threshold('temperature', 'max_normal', 37.5)
+                temp_critical_min = get_threshold('temperature', 'min_critical', 35.0)
+                temp_critical_max = get_threshold('temperature', 'max_critical', 39.0)
+                
                 if temp < temp_min:
-                    severity = 'high' if temp < 35.0 else 'medium'
+                    severity = 'critical' if temp < temp_critical_min else 'medium'
                     alerts.append({
                         'type': 'low_temperature',
                         'severity': severity,
@@ -1149,7 +1364,7 @@ class HealthMonitorApp(MDApp):
                         'threshold': temp_min
                     })
                 elif temp > temp_max:
-                    severity = 'critical' if temp > 39.0 else 'high'
+                    severity = 'critical' if temp > temp_critical_max else 'high'
                     alerts.append({
                         'type': 'high_temperature',
                         'severity': severity,
@@ -1163,10 +1378,12 @@ class HealthMonitorApp(MDApp):
             systolic = health_data.get('systolic_bp')
             diastolic = health_data.get('diastolic_bp')
             if systolic and systolic > 0 and diastolic and diastolic > 0:
-                sys_min = thresholds.get('systolic_bp_min', 90)
-                sys_max = thresholds.get('systolic_bp_max', 140)
-                dia_min = thresholds.get('diastolic_bp_min', 60)
-                dia_max = thresholds.get('diastolic_bp_max', 90)
+                sys_min = get_threshold('systolic_bp', 'min_normal', 90)
+                sys_max = get_threshold('systolic_bp', 'max_normal', 140)
+                sys_critical_max = get_threshold('systolic_bp', 'max_critical', 180)
+                dia_min = get_threshold('diastolic_bp', 'min_normal', 60)
+                dia_max = get_threshold('diastolic_bp', 'max_normal', 90)
+                dia_critical_max = get_threshold('diastolic_bp', 'max_critical', 110)
                 
                 if systolic < sys_min or diastolic < dia_min:
                     alerts.append({
@@ -1178,7 +1395,7 @@ class HealthMonitorApp(MDApp):
                         'threshold': f'{sys_min}/{dia_min}'
                     })
                 elif systolic > sys_max or diastolic > dia_max:
-                    severity = 'critical' if systolic > 180 or diastolic > 120 else 'high'
+                    severity = 'critical' if systolic > sys_critical_max or diastolic > dia_critical_max else 'high'
                     alerts.append({
                         'type': 'high_blood_pressure',
                         'severity': severity,
@@ -1196,7 +1413,11 @@ class HealthMonitorApp(MDApp):
                     # ============================================================
                     if hasattr(self.database, 'get_active_alerts'):
                         # Check if similar alert exists within last hour
-                        active_alerts = self.database.get_active_alerts(patient_id)
+                        # Device-centric: use device_id if patient_id is None
+                        active_alerts = self.database.get_active_alerts(
+                            patient_id=resolved_patient_id,
+                            device_id=self.device_id
+                        )
                         
                         # Filter for same type and not resolved
                         duplicate_found = False
@@ -1224,9 +1445,9 @@ class HealthMonitorApp(MDApp):
                     # Create new alert (no duplicate found)
                     if hasattr(self.database, 'save_alert'):
                         # Prepare alert_data dict for save_alert()
-                        # Device-centric approach: patient_id sẽ được auto-resolve từ cloud
+                        # Device-centric approach: use resolved_patient_id (can still be None)
                         alert_dict = {
-                            'patient_id': None,  # Set to None for device-centric approach
+                            'patient_id': resolved_patient_id,  # Use resolved patient_id
                             'device_id': self.device_id,  # Add device_id
                             'health_record_id': record_id,  # Link to health record
                             'alert_type': alert_data['type'],
@@ -1240,7 +1461,8 @@ class HealthMonitorApp(MDApp):
                         
                         alert_id = self.database.save_alert(alert_dict)
                         self.logger.info(
-                            f"⚠️  Alert created: {alert_data['type']} (severity={alert_data['severity']}, alert_id={alert_id})"
+                            f"⚠️  Alert created: {alert_data['type']} (severity={alert_data['severity']}, "
+                            f"alert_id={alert_id}, patient={resolved_patient_id}, device={self.device_id})"
                         )
                         
                         # ============================================================
@@ -1514,13 +1736,18 @@ def main():
             }
         }
     
-    # ============================================================
-    # CRITICAL FIX: Initialize DatabaseManager
-    # ============================================================
+
     database = None
     try:
         database = DatabaseManager(config)
         logger.info("✅ DatabaseManager initialized successfully")
+        
+        # Initialize database and cloud sync
+        if not database.initialize():
+            logger.error("❌ Database initialization failed")
+            database = None
+        else:
+            logger.info("✅ Database initialization completed")
     except Exception as e:
         logger.error(f"❌ Failed to initialize DatabaseManager: {e}")
         logger.warning("App will run with fallback local database only")
@@ -1531,11 +1758,22 @@ def main():
     cloud_sync = None
     sync_scheduler = None
     
-    if database and config.get('cloud', {}).get('enabled', False):
+    # CloudSyncManager should already be initialized in database.initialize()
+    # But explicitly set it here for clarity
+    if database and database.cloud_sync_manager:
+        cloud_sync = database.cloud_sync_manager
+        logger.info("✅ CloudSyncManager ready (initialized via database)")
+        
+        # SyncScheduler should already be started
+        if database.sync_scheduler:
+            sync_scheduler = database.sync_scheduler
+            logger.info("✅ SyncScheduler ready (started via database)")
+    
+    if not cloud_sync and database and config.get('cloud', {}).get('enabled', False):
+        # Fallback: Try to initialize cloud sync manually
         try:
-            # Initialize CloudSyncManager
             cloud_sync = CloudSyncManager(database, config['cloud'])
-            logger.info("✅ CloudSyncManager initialized successfully")
+            logger.info("✅ CloudSyncManager initialized (fallback)")
             
             # Initialize and start SyncScheduler for auto-sync
             sync_mode = config['cloud'].get('sync', {}).get('mode', 'auto')
@@ -1543,18 +1781,16 @@ def main():
                 interval = config['cloud'].get('sync', {}).get('interval_seconds', 300)
                 sync_scheduler = SyncScheduler(cloud_sync, interval_seconds=interval)
                 sync_scheduler.start()
-                logger.info(f"✅ SyncScheduler started (auto-sync every {interval}s)")
-            else:
-                logger.info(f"Sync mode is '{sync_mode}', auto-sync disabled")
+                logger.info(f"✅ SyncScheduler started (fallback, auto-sync every {interval}s)")
                 
         except Exception as e:
-            logger.error(f"❌ Failed to initialize CloudSync: {e}")
+            logger.error(f"❌ Failed to initialize CloudSync (fallback): {e}")
             logger.warning("App will run without cloud sync")
     else:
         if not database:
             logger.warning("CloudSync disabled: DatabaseManager not available")
         else:
-            logger.info("CloudSync disabled in config")
+            logger.info("CloudSync already initialized or disabled in config")
     
     try:
         # Create and run app with real sensor integration

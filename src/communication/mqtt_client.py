@@ -64,7 +64,8 @@ class IoTHealthMQTTClient:
         self.broker = mqtt_cfg.get('broker', 'localhost')
         self.port = mqtt_cfg.get('port', 8883)
         self.device_id = mqtt_cfg.get('device_id', 'rpi_001')
-        self.patient_id = config.get('patient', {}).get('id', 'P12345')
+        # Device-centric: patient_id resolved from cloud database, not config
+        self.patient_id = None  # Will be set dynamically when resolved from cloud
         
         # Authentication - load from environment variable if specified
         self.username = mqtt_cfg.get('username')

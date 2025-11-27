@@ -1,0 +1,6 @@
+- Đảm bảo OOP
+- đảm bảo consistantly giữa các file
+- không tạo file dum , giá trị ảo
+- không hard code
+- không tạo file .md summary sau khi trả lời nếu không được yêu cầu
+- Không hiểu gì hãy hỏi tôi

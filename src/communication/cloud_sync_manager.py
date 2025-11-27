@@ -463,26 +463,32 @@ class CloudSyncManager:
         Returns:
             bool: True if push successful, False otherwise
         """
+        self.logger.debug(f"[PUSH_ALERT_START] Starting push for alert {alert_id}")
         try:
             if not self.check_cloud_connection():
+                self.logger.warning(f"[PUSH_ALERT_OFFLINE] No cloud connection for alert {alert_id}, enqueueing")
                 self.enqueue_for_sync('alerts', SyncOperation.INSERT, {'id': alert_id})
                 return False
             
             # Get alert from local database
+            self.logger.debug(f"[PUSH_ALERT_QUERY_LOCAL] Querying local database for alert {alert_id}")
             with self.local_db.get_session() as local_session:
                 from src.data.models import Alert
                 
                 alert = local_session.query(Alert).filter_by(id=alert_id).first()
                 
                 if not alert:
-                    self.logger.error(f"Alert {alert_id} not found in local database")
+                    self.logger.error(f"[PUSH_ALERT_NOT_FOUND] Alert {alert_id} not found in local database")
                     return False
+                
+                self.logger.debug(f"[PUSH_ALERT_ALERT_FOUND] Alert {alert_id} found: type={alert.alert_type}, patient_id={alert.patient_id}, severity={alert.severity}")
                 
                 # Device-centric: Get patient_id from cloud devices table if not set locally
                 patient_id_to_use = alert.patient_id
                 if not patient_id_to_use:
                     # Query patient_id from cloud based on device_id
                     try:
+                        self.logger.debug(f"[PUSH_ALERT_RESOLVE_PATIENT] Resolving patient_id from cloud for device {self.device_id}")
                         with self.get_cloud_session() as cloud_session:
                             result = cloud_session.execute(
                                 text("SELECT patient_id FROM patients WHERE device_id = :device_id AND is_active = 1 LIMIT 1"),
@@ -491,15 +497,18 @@ class CloudSyncManager:
                             patient_row = result.fetchone()
                             if patient_row:
                                 patient_id_to_use = patient_row[0]
-                                self.logger.info(f"Auto-resolved patient_id: {patient_id_to_use} for device {self.device_id}")
+                                self.logger.info(f"[PUSH_ALERT_RESOLVED] Auto-resolved patient_id: {patient_id_to_use} for device {self.device_id}")
+                            else:
+                                self.logger.warning(f"[PUSH_ALERT_NO_DEVICE_MAPPING] No patient found for device {self.device_id} in cloud")
                     except Exception as e:
-                        self.logger.warning(f"Could not auto-resolve patient_id: {e}")
+                        self.logger.error(f"[PUSH_ALERT_RESOLVE_ERROR] Could not auto-resolve patient_id: {e}", exc_info=True)
                 
                 # Prepare data for cloud
+                self.logger.debug(f"[PUSH_ALERT_PREPARE_DATA] Preparing alert data with patient_id={patient_id_to_use}")
                 alert_data = {
                     'patient_id': patient_id_to_use,  # Can be NULL if device not assigned to patient yet
                     'device_id': self.device_id,
-                    'health_record_id': None,  # Local Alert doesn't have this field
+                    'health_record_id': alert.health_record_id,  # Link to health record (can be NULL)
                     'alert_type': alert.alert_type,
                     'severity': alert.severity,
                     'message': alert.message,
@@ -516,6 +525,7 @@ class CloudSyncManager:
                 }
             
             # Push to cloud
+            self.logger.debug(f"[PUSH_ALERT_EXECUTING_INSERT] Executing INSERT into cloud alerts table for alert {alert_id}")
             with self.get_cloud_session() as cloud_session:
                 cloud_session.execute(
                     text("""
@@ -530,21 +540,25 @@ class CloudSyncManager:
                     """),
                     alert_data
                 )
+                cloud_session.commit()
+                self.logger.debug(f"[PUSH_ALERT_CLOUD_COMMIT] Successfully committed alert {alert_id} to cloud")
             
             # Update local alert sync status
+            self.logger.debug(f"[PUSH_ALERT_UPDATE_LOCAL] Updating local alert {alert_id} sync status")
             with self.local_db.get_session() as local_session:
                 alert_to_update = local_session.query(Alert).filter_by(id=alert_id).first()
                 if alert_to_update and hasattr(alert_to_update, 'synced_at'):
                     alert_to_update.synced_at = datetime.now()
                     alert_to_update.sync_status = 'synced'
+                    self.logger.debug(f"[PUSH_ALERT_STATUS_UPDATED] Local alert {alert_id} marked as synced")
             
             self.stats['successful_pushes'] += 1
-            self.logger.info(f"Successfully pushed alert {alert_id} to cloud")
+            self.logger.info(f"[PUSH_ALERT_SUCCESS] Successfully pushed alert {alert_id} to cloud")
             return True
             
         except Exception as e:
             self.stats['failed_pushes'] += 1
-            self.logger.error(f"Failed to push alert {alert_id}: {e}")
+            self.logger.error(f"[PUSH_ALERT_EXCEPTION] Failed to push alert {alert_id}: {e}", exc_info=True)
             self.enqueue_for_sync('alerts', SyncOperation.INSERT, {'id': alert_id})
             return False
     
@@ -1006,6 +1020,41 @@ class CloudSyncManager:
             with self.local_db.get_session() as session:
                 from src.data.models import HealthRecord, Alert
                 
+                # ============================================================
+                # STEP 0: Retry pending alerts that are stuck (important!)
+                # ============================================================
+                pending_alerts = session.query(Alert).filter(
+                    Alert.sync_status == 'pending'
+                ).all()
+                
+                if pending_alerts:
+                    self.logger.info(f"[SYNC_RETRY_PENDING] Found {len(pending_alerts)} pending alerts, retrying...")
+                    for pending_alert in pending_alerts:
+                        if self.push_alert(pending_alert.id):
+                            results['alerts_synced'] += 1
+                            self.logger.debug(f"[SYNC_RETRY_SUCCESS] Retried pending alert {pending_alert.id}")
+                        else:
+                            self.logger.debug(f"[SYNC_RETRY_FAILED] Failed to retry pending alert {pending_alert.id}")
+                
+                # ============================================================
+                # STEP 1: Retry pending health records
+                # ============================================================
+                pending_records = session.query(HealthRecord).filter(
+                    HealthRecord.sync_status == 'pending'
+                ).all()
+                
+                if pending_records:
+                    self.logger.info(f"[SYNC_RETRY_PENDING] Found {len(pending_records)} pending health records, retrying...")
+                    for pending_record in pending_records:
+                        if self.push_health_record(pending_record.id):
+                            results['records_synced'] += 1
+                            self.logger.debug(f"[SYNC_RETRY_SUCCESS] Retried pending record {pending_record.id}")
+                        else:
+                            self.logger.debug(f"[SYNC_RETRY_FAILED] Failed to retry pending record {pending_record.id}")
+                
+                # ============================================================
+                # STEP 2: Sync new health records
+                # ============================================================
                 # Sync new health records (only those not synced or updated after last sync)
                 new_records = session.query(HealthRecord).filter(
                     and_(
@@ -1021,6 +1070,9 @@ class CloudSyncManager:
                     if self.push_health_record(record.id):
                         results['records_synced'] += 1
                 
+                # ============================================================
+                # STEP 3: Sync new alerts
+                # ============================================================
                 # Sync new alerts (only those not synced or updated after last sync)
                 # Check if synced_at column exists in Alert model
                 if hasattr(Alert, 'synced_at'):

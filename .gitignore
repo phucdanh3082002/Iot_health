@@ -11,3 +11,14 @@ data/*.db
 *.log
 *.wav
 .github/
+cline_mcp_settings.json
+.cline_mcp_settings.json
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDE settings có thể chứa secrets
+.vscode/settings.json

@@ -91,14 +91,16 @@ class HealthMonitorSystem:
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.config = yaml.safe_load(f)
             
-            # Extract device & patient info
+            # Extract device info (device-centric approach)
             mqtt_config = self.config.get('communication', {}).get('mqtt', {})
-            self.device_id = mqtt_config.get('device_id', 'rpi_bp_001')
-            self.patient_id = mqtt_config.get('patient_id', 'patient_001')
+            cloud_config = self.config.get('cloud', {}).get('device', {})
+            self.device_id = cloud_config.get('device_id') or mqtt_config.get('device_id', 'rpi_bp_001')
+            # patient_id is resolved from cloud database, not from config
+            self.patient_id = None  # Will be resolved from cloud based on device_id
             
             print(f"✅ Configuration loaded: {config_path}")
             print(f"   Device ID: {self.device_id}")
-            print(f"   Patient ID: {self.patient_id}")
+            print(f"   Patient ID: (resolved from cloud database)")
             
             return True
             

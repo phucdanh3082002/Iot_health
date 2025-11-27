@@ -164,11 +164,8 @@ logging:
   format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
   level: INFO
   max_size: 10MB
-patient:
-  age: 65
-  gender: M
-  id: patient_001
-  name: Default Patient
+# patient: REMOVED - patient_id is resolved from cloud database based on device_id
+# Device-centric approach: Pi chỉ cần device_id, patient_id tự động resolve từ cloud
 sensors:
   blood_pressure:
     enabled: true
