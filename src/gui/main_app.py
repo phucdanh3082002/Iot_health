@@ -240,13 +240,16 @@ class HealthMonitorApp(MDApp):
                     try:
                         # BP config already contains hx710b nested inside
                         self.logger.info("🚀 Attempting to create BloodPressure sensor...")
-                        sensor = BloodPressureSensor('BloodPressure', bp_config)
+                        # Truyền speak_callback vào BloodPressureSensor
+                        sensor = BloodPressureSensor('BloodPressure', bp_config, speak_callback=self._speak_scenario)
                         self.logger.info("🔧 BloodPressure sensor object created, calling initialize()...")
                         if sensor.initialize():
                             sensors['BloodPressure'] = sensor
                             self.logger.info("✅ BloodPressure sensor created and initialized successfully")
                         else:
                             self.logger.warning("⚠️  BloodPressure sensor.initialize() returned False")
+                            # TTS cho lỗi khởi tạo cảm biến huyết áp (nếu không thể khởi tạo)
+                            self._speak_scenario(ScenarioID.SENSOR_FAILURE, sensor="BloodPressure")
                     except Exception as e:
                         self.logger.error(f"❌ Exception creating BloodPressure sensor: {type(e).__name__}: {e}", exc_info=True)
             else:

@@ -1035,15 +1035,54 @@ class BloodPressureSensor(BaseSensor):
           dia_ratio: 0.80
     """
     
-    def __init__(self, name: str, config: Dict[str, Any]):
+from src.utils.tts_manager import ScenarioID
+
+class BloodPressureSensor(BaseSensor):
+    """
+    High-level Blood Pressure Sensor
+    
+    Tích hợp:
+    - HX710BSensor (ADC pressure readings)
+    - BPHardwareController (pump/valve control)
+    - BPSafetyMonitor (safety checks)
+    - OscillometricProcessor (signal processing)
+    
+    Public API:
+    ----------
+    - start_measurement(callback): Bắt đầu đo BP (non-blocking)
+    - stop_measurement(emergency): Dừng đo (optional emergency deflate)
+    - get_last_measurement(): Lấy kết quả gần nhất
+    - get_state(): Lấy state hiện tại
+    
+    Configuration (app_config.yaml):
+    -------------------------------
+    sensors:
+      blood_pressure:
+        enabled: true
+        inflate_target_mmhg: 165
+        deflate_rate_mmhg_s: 3.0
+        max_pressure_mmhg: 200
+        pump_gpio: 26
+        valve_gpio: 16
+        hx710b:
+          # HX710BSensor config...
+        algorithm:
+          sample_rate: 10.0
+          sys_ratio: 0.55
+          dia_ratio: 0.80
+    """
+    
+    def __init__(self, name: str, config: Dict[str, Any], speak_callback: Optional[Callable[[ScenarioID, Any], None]] = None):
         """
         Initialize Blood Pressure Sensor
         
         Args:
             name: Sensor name (e.g., "BloodPressure")
             config: Configuration dictionary
+            speak_callback: Callback function for TTS announcements (ScenarioID, kwargs)
         """
         super().__init__(name, config)
+        self.speak_callback = speak_callback
         
         # ========== COMPONENTS (COMPOSITION) ==========
         
@@ -1228,11 +1267,15 @@ class BloodPressureSensor(BaseSensor):
         # Start ADC sensor
         if not self.adc_sensor.start():
             self.logger.error("Failed to start ADC sensor")
+            if self.speak_callback:
+                self.speak_callback(ScenarioID.SENSOR_FAILURE, sensor="HX710B")
             return False
         
         # Initialize hardware
         if not self.hardware.initialize():
             self.logger.error("Failed to initialize hardware")
+            if self.speak_callback:
+                self.speak_callback(ScenarioID.PUMP_VALVE_FAILURE)
             return False
         
         # Ensure pump OFF, valve OPEN
@@ -1304,6 +1347,8 @@ class BloodPressureSensor(BaseSensor):
             if not is_safe and "CRITICAL" in msg:
                 self.logger.error(msg)
                 self.hardware.emergency_deflate()
+                if self.speak_callback:
+                    self.speak_callback(ScenarioID.BP_OVERPRESSURE)
                 return False
             
             # Safety check: soft limit

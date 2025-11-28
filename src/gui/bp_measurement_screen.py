@@ -504,8 +504,8 @@ class BPMeasurementScreen(Screen):
             # TTS announcement
             sys_int = int(round(result.systolic))
             dia_int = int(round(result.diastolic))
-            self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int)
-            
+            map_int = int(round(result.map_value))
+            self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int, map=map_int)
             # Update UI state
             self.start_btn.disabled = False
             self.start_btn.text = "Đo lại"
