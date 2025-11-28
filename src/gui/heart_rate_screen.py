@@ -261,7 +261,7 @@ class HeartRateMeasurementController:
             if self.finger_lost_ts is None:
                 # Lần đầu mất ngón tay → ghi nhận thời điểm
                 self.finger_lost_ts = now
-                self.logger.warning("⏸️  Ngón tay rời khỏi cảm biến - DỪNG đếm ngược")
+                self.logger.warning("Ngón tay rời khỏi cảm biến - DỪNG đếm ngược")
             
             # Tính elapsed = thời gian từ measure_started đến finger_lost_ts
             time_with_finger = self.finger_lost_ts - self.measure_started
@@ -270,7 +270,7 @@ class HeartRateMeasurementController:
             # Grace period check
             pause_duration = now - self.finger_lost_ts
             if pause_duration > self.FINGER_LOSS_GRACE:
-                self.logger.error("❌ Mất ngón tay quá %.1fs - Hủy phiên đo", self.FINGER_LOSS_GRACE)
+                self.logger.error("Mất ngón tay quá %.1fs - Hủy phiên đo", self.FINGER_LOSS_GRACE)
                 self._finalize(success=False, reason="finger_removed", snapshot=sensor_data)
                 return False
             
@@ -287,7 +287,7 @@ class HeartRateMeasurementController:
                 pause_duration = now - self.finger_lost_ts
                 self.measure_started += pause_duration  # Dịch thời điểm bắt đầu về sau
                 self.deadline += pause_duration  # Kéo dài deadline tương ứng
-                self.logger.info("▶️  Ngón tay quay lại - TIẾP TỤC đếm (đã tạm dừng %.1fs)", pause_duration)
+                self.logger.info("Ngón tay quay lại - TIẾP TỤC đếm (đã tạm dừng %.1fs)", pause_duration)
                 self.finger_lost_ts = None
             
             # Tính elapsed bình thường khi có ngón tay
@@ -316,18 +316,18 @@ class HeartRateMeasurementController:
         # 2. HOẶC đủ thời gian đầy đủ (15s) VÀ có ít nhất 1 giá trị
         if measurement_elapsed >= self.MINIMUM_MEASUREMENT_TIME:
             if has_both_metrics:
-                self.logger.info("✅ Đo hoàn tất sau %.1fs - Có đủ HR và SpO2", measurement_elapsed)
+                self.logger.info("Đo hoàn tất sau %.1fs - Có đủ HR và SpO2", measurement_elapsed)
                 self._finalize(success=True, reason="measurement_complete", snapshot=sensor_data)
                 return False
             elif measurement_elapsed >= self.MEASUREMENT_DURATION and has_valid_metrics:
-                self.logger.warning("⚠️  Đo hoàn tất sau %.1fs - Chỉ có 1 giá trị", measurement_elapsed)
+                self.logger.warning("Đo hoàn tất sau %.1fs - Chỉ có 1 giá trị", measurement_elapsed)
                 self._finalize(success=True, reason="partial_complete", snapshot=sensor_data)
                 return False
 
         # Timeout tuyệt đối
         if now >= self.deadline:
             self.logger.error(
-                "❌ Timeout đo nhịp tim sau %.1fs (chất lượng=%.1f%%)",
+                "Timeout đo nhịp tim sau %.1fs (chất lượng=%.1f%%)",
                 measurement_elapsed,
                 signal_quality,
             )
@@ -484,46 +484,47 @@ class HeartRateScreen(Screen):
         parent.add_widget(header_card)
 
     def _create_measurement_panel(self, parent) -> None:
-        available_height = Window.height
+        # Tối ưu cho màn hình 480×320 (3.5 inch)
+        # Bố cục: [Metrics bên trái] | [Pulse bên phải]
+        
         panel_layout = MDBoxLayout(
             orientation="horizontal",
-            spacing=dp(10),
+            spacing=dp(6),
             size_hint_y=None,
-            height=min(dp(140), available_height * 0.42),
+            height=dp(130),
+            padding=(dp(6), dp(6), dp(6), dp(6)),
         )
 
-        measurement_card = MDCard(
+        # ============================================================
+        # LEFT: HR & SpO2 Metrics (cột trái)
+        # ============================================================
+        metrics_card = MDCard(
             orientation="vertical",
-            size_hint_x=0.48,
-            padding=(dp(12), dp(10), dp(12), dp(10)),
-            spacing=dp(6),
-            radius=[dp(18)],
+            size_hint_x=0.65,
+            padding=(dp(8), dp(8), dp(8), dp(8)),
+            spacing=dp(4),
+            radius=[dp(14)],
             md_bg_color=MED_CARD_BG,
         )
 
-        metrics_container = MDBoxLayout(
-            orientation="vertical",
-            spacing=dp(10),
-            size_hint=(1, 1),
-        )
-
-        hr_section = MDBoxLayout(
+        # HR Row
+        hr_row = MDBoxLayout(
             orientation="horizontal",
-            spacing=dp(8),
+            spacing=dp(6),
             size_hint_y=None,
-            height=dp(56),
+            height=dp(42),
         )
         hr_icon = MDIcon(
             icon="heart-pulse",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
-            size=(dp(28), dp(28)),
+            size=(dp(32), dp(32)),
         )
-        hr_icon.icon_size = dp(24)
-        hr_section.add_widget(hr_icon)
+        hr_icon.icon_size = dp(28)
+        hr_row.add_widget(hr_icon)
 
-        hr_texts = MDBoxLayout(orientation="vertical", spacing=dp(2))
+        hr_value_box = MDBoxLayout(orientation="vertical", spacing=dp(0), size_hint_x=1)
         hr_label = MDLabel(
             text="Nhịp tim",
             font_style="Caption",
@@ -533,7 +534,7 @@ class HeartRateScreen(Screen):
             valign="middle",
         )
         hr_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        hr_texts.add_widget(hr_label)
+        hr_value_box.add_widget(hr_label)
 
         self.hr_value_label = MDLabel(
             text="-- BPM",
@@ -542,29 +543,31 @@ class HeartRateScreen(Screen):
             text_color=TEXT_PRIMARY,
             halign="left",
             valign="middle",
+            bold=True,
         )
         self.hr_value_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        hr_texts.add_widget(self.hr_value_label)
-        hr_section.add_widget(hr_texts)
-        metrics_container.add_widget(hr_section)
+        hr_value_box.add_widget(self.hr_value_label)
+        hr_row.add_widget(hr_value_box)
+        metrics_card.add_widget(hr_row)
 
-        spo2_section = MDBoxLayout(
+        # SpO2 Row
+        spo2_row = MDBoxLayout(
             orientation="horizontal",
-            spacing=dp(8),
+            spacing=dp(6),
             size_hint_y=None,
-            height=dp(56),
+            height=dp(42),
         )
         spo2_icon = MDIcon(
             icon="blood-bag",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
-            size=(dp(28), dp(28)),
+            size=(dp(32), dp(32)),
         )
-        spo2_icon.icon_size = dp(24)
-        spo2_section.add_widget(spo2_icon)
+        spo2_icon.icon_size = dp(28)
+        spo2_row.add_widget(spo2_icon)
 
-        spo2_texts = MDBoxLayout(orientation="vertical", spacing=dp(2))
+        spo2_value_box = MDBoxLayout(orientation="vertical", spacing=dp(0), size_hint_x=1)
         spo2_label = MDLabel(
             text="SpO2",
             font_style="Caption",
@@ -574,7 +577,7 @@ class HeartRateScreen(Screen):
             valign="middle",
         )
         spo2_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        spo2_texts.add_widget(spo2_label)
+        spo2_value_box.add_widget(spo2_label)
 
         self.spo2_value_label = MDLabel(
             text="-- %",
@@ -583,113 +586,85 @@ class HeartRateScreen(Screen):
             text_color=TEXT_PRIMARY,
             halign="left",
             valign="middle",
+            bold=True,
         )
         self.spo2_value_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        spo2_texts.add_widget(self.spo2_value_label)
-        spo2_section.add_widget(spo2_texts)
-        metrics_container.add_widget(spo2_section)
+        spo2_value_box.add_widget(self.spo2_value_label)
+        spo2_row.add_widget(spo2_value_box)
+        metrics_card.add_widget(spo2_row)
 
-        card_content = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(8),
-            size_hint=(1, 1),
+        # Instruction at bottom
+        self.instruction_label = MDLabel(
+            text="Đặt ngón tay lên cảm biến",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=(1, 1, 1, 0.6),
+            halign="left",
+            size_hint_y=None,
+            height=dp(20),
         )
-        card_content.add_widget(metrics_container)
+        self.instruction_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        metrics_card.add_widget(self.instruction_label)
 
+        panel_layout.add_widget(metrics_card)
+
+        # ============================================================
+        # RIGHT: Pulse Animation + Signal Quality (cột phải)
+        # ============================================================
+        right_column = MDBoxLayout(
+            orientation="vertical",
+            size_hint_x=0.35,
+            spacing=dp(4),
+        )
+
+        # Pulse animation (to hơn, ở bên phải)
         pulse_wrapper = AnchorLayout(
             anchor_x="center",
-            anchor_y="top",
-            padding=(0, dp(6), 0, dp(10)),
-            size_hint=(None, 1),
-            width=dp(72),
+            anchor_y="center",
+            size_hint_x=1,
+            size_hint_y=0.65,
         )
         self.pulse_widget = PulseAnimation()
         self.pulse_widget.size_hint = (None, None)
-        self.pulse_widget.width = dp(58)
-        self.pulse_widget.height = dp(58)
+        self.pulse_widget.width = dp(70)
+        self.pulse_widget.height = dp(70)
         pulse_wrapper.add_widget(self.pulse_widget)
-        card_content.add_widget(pulse_wrapper)
+        right_column.add_widget(pulse_wrapper)
 
-        measurement_card.add_widget(card_content)
-        panel_layout.add_widget(measurement_card)
-
-        instruction_card = MDCard(
-            orientation="vertical",
-            size_hint_x=0.52,
-            padding=(dp(12), dp(10), dp(12), dp(10)),
-            spacing=dp(6),
-            radius=[dp(18)],
-            md_bg_color=MED_CARD_BG,
-        )
-
-        instruction_header = MDBoxLayout(
-            orientation="horizontal",
-            spacing=dp(6),
-            size_hint_y=None,
-            height=dp(28),
-        )
-        instruction_icon = MDIcon(
-            icon="fingerprint",
-            theme_text_color="Custom",
-            text_color=MED_CARD_ACCENT,
-            size_hint=(None, None),
-            size=(dp(24), dp(24)),
-        )
-        instruction_icon.icon_size = dp(20)
-        instruction_header.add_widget(instruction_icon)
-
-        header_label = MDLabel(
-            text="Hướng dẫn nhanh",
-            font_style="Subtitle2",
-            theme_text_color="Custom",
-            text_color=TEXT_MUTED,
-            halign="left",
-            valign="middle",
-        )
-        header_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        instruction_header.add_widget(header_label)
-        instruction_card.add_widget(instruction_header)
-
-        self.instruction_label = MDLabel(
-            text="1. Bấm 'Bắt đầu đo'\n2. Đặt ngón tay nhẹ nhàng lên cảm biến\n3. Giữ cố định đến khi hoàn tất",
-            font_style="Body2",
-            theme_text_color="Custom",
-            text_color=TEXT_MUTED,
-            halign="left",
-            valign="top",
-        )
-        self.instruction_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        instruction_card.add_widget(self.instruction_label)
-
+        # Signal quality info
         self.signal_label = MDLabel(
-            text="Chất lượng tín hiệu: --",
+            text="Chất lượng: --",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            halign="left",
+            halign="center",
+            size_hint_y=0.35,
         )
         self.signal_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        instruction_card.add_widget(self.signal_label)
+        right_column.add_widget(self.signal_label)
 
-        panel_layout.add_widget(instruction_card)
+        panel_layout.add_widget(right_column)
         parent.add_widget(panel_layout)
 
     def _create_status_display(self, parent) -> None:
+        # Compact status bar cho màn hình nhỏ
         status_card = MDCard(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(60),
-            padding=(dp(12), dp(10), dp(12), dp(10)),
-            spacing=dp(6),
-            radius=[dp(18)],
+            height=dp(48),
+            padding=(dp(8), dp(6), dp(8), dp(6)),
+            spacing=dp(2),
+            radius=[dp(12)],
             md_bg_color=MED_CARD_BG,
         )
 
         self.status_label = MDLabel(
             text="Sẵn sàng đo",
-            font_style="Body1",
+            font_style="Body2",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
+            halign="left",
+            valign="middle",
         )
         self.status_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         status_card.add_widget(self.status_label)
@@ -699,35 +674,43 @@ class HeartRateScreen(Screen):
             value=0,
             color=MED_CARD_ACCENT,
             size_hint_y=None,
-            height=dp(4),
+            height=dp(3),
         )
         status_card.add_widget(self.progress_bar)
 
         parent.add_widget(status_card)
 
     def _create_controls(self, parent) -> None:
+        # Compact controls cho màn hình 480×320
         control_layout = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(44),
-            spacing=dp(10),
+            height=dp(48),
+            spacing=dp(8),
+            padding=(dp(4), dp(2), dp(4), dp(2)),
         )
 
         self.start_stop_btn = MDRectangleFlatIconButton(
-            text="Bắt đầu đo",
+            text="Bắt đầu",
             icon="play-circle",
             text_color=MED_CARD_ACCENT,
             line_color=MED_CARD_ACCENT,
+            size_hint_x=0.6,
+            font_size="14sp",
+            icon_size="20sp",
         )
         self.start_stop_btn.bind(on_press=self._on_start_stop_pressed)
         control_layout.add_widget(self.start_stop_btn)
 
         self.save_btn = MDRectangleFlatIconButton(
-            text="Lưu kết quả",
+            text="Lưu",
             icon="content-save",
             disabled=True,
             text_color=(1, 1, 1, 0.3),
             line_color=(1, 1, 1, 0.3),
+            size_hint_x=0.4,
+            font_size="14sp",
+            icon_size="20sp",
         )
         self.save_btn.bind(on_press=self._on_save_pressed)
         control_layout.add_widget(self.save_btn)
@@ -739,12 +722,12 @@ class HeartRateScreen(Screen):
     # ------------------------------------------------------------------
     def _style_start_button(self, active: bool) -> None:
         if active:
-            self.start_stop_btn.text = "Dừng đo"
+            self.start_stop_btn.text = "Dừng"
             self.start_stop_btn.icon = "stop-circle"
             self.start_stop_btn.text_color = MED_WARNING
             self.start_stop_btn.line_color = MED_WARNING
         else:
-            self.start_stop_btn.text = "Bắt đầu đo"
+            self.start_stop_btn.text = "Bắt đầu"
             self.start_stop_btn.icon = "play-circle"
             self.start_stop_btn.text_color = MED_CARD_ACCENT
             self.start_stop_btn.line_color = MED_CARD_ACCENT
@@ -767,64 +750,45 @@ class HeartRateScreen(Screen):
         self.spo2_value_label.text = "-- %"
         self.status_label.text = "Đang khởi động cảm biến..."
         self.signal_label.text = "Chất lượng tín hiệu: --"
-        self.instruction_label.text = (
-            "• Đặt nhẹ ngón tay lên cảm biến\n"
-            "• Giữ cố định, không bóp mạnh\n"
-            "• Thời gian đo: 15 giây (chuẩn y tế)"
-        )
+        self.instruction_label.text = "Đặt ngón tay lên cảm biến - không giới hạn thời gian"
         self.pulse_widget.start_pulse(60.0)
 
     def show_waiting_instructions(self) -> None:
         """Hiển thị hướng dẫn chờ ngón tay - KHÔNG có countdown."""
-        self.status_label.text = "Đang chờ phát hiện ngón tay..."
-        self.instruction_label.text = (
-            "📌 Vui lòng đặt ngón tay lên cảm biến\n"
-            "• Không giới hạn thời gian\n"
-            "• Nhấn 'Dừng đo' để hủy"
-        )
+        self.status_label.text = "⏳ Chờ ngón tay"
 
     def on_measurement_started(self, duration: float) -> None:
         """Bắt đầu đo với countdown."""
-        self.status_label.text = f"Đang đo ({duration:.0f}s chuẩn y tế) - Giữ ngón tay cố định"
-        self.instruction_label.text = (
-            "✅ Đang đo - Vui lòng:\n"
-            "• Giữ nguyên vị trí ngón tay\n"
-            "• Không cử động, tránh rung lắc\n"
-            "• Tránh ánh sáng mặt trời chiếu trực tiếp"
-        )
+        self.status_label.text = f"Đang đo {duration:.0f}s"
 
     def show_finger_instruction(self, missing: bool) -> None:
         if missing:
-            self.status_label.text = "Giữ ngón tay áp sát cảm biến"
+            self.status_label.text = "Mất ngón tay"
+            self.instruction_label.text = "Đặt lại"
         else:
-            self.status_label.text = "Đang thu tín hiệu, tiếp tục giữ cố định"
+            self.instruction_label.text = "Giữ"
 
     def show_measurement_guidance(self, remaining_time: float) -> None:
-        self.status_label.text = f"Đang đo - còn khoảng {remaining_time:.1f}s"
+        # Không cập nhật status_label để tránh flicker
+        pass
 
     def show_signal_warning(self) -> None:
-        self.status_label.text = "Tín hiệu yếu - hãy nhấn nhẹ hơn và giữ yên"
+        self.instruction_label.text = "Tín hiệu yếu"
 
     def update_progress(self, percent: float, measurement_status: str, remaining_time: float) -> None:
-        """Cập nhật thanh tiến trình và trạng thái."""
+        """Cập nhật thanh tiến trình (compact cho màn hình nhỏ)."""
         self.progress_bar.value = max(0.0, min(100.0, percent))
         
         if measurement_status == "waiting":
-            # Đang chờ ngón tay - KHÔNG hiển thị countdown
-            self.status_label.text = "⏳ Đang chờ ngón tay..."
+            self.status_label.text = "Chờ..."
         elif measurement_status == "paused":
-            # Mất ngón tay - DỪNG countdown
-            self.status_label.text = f"⏸️  TẠM DỪNG - Còn {remaining_time:.0f}s - Đặt lại ngón tay"
-        elif measurement_status == "partial":
-            self.status_label.text = "📊 Đang thu thêm tín hiệu để đảm bảo chính xác"
+            self.status_label.text = f"Đặt lại ({remaining_time:.0f}s)"
         elif measurement_status == "poor_signal":
-            self.status_label.text = f"⚠️  Tín hiệu yếu - Nhấn nhẹ hơn - Còn {remaining_time:.0f}s"
-        elif measurement_status == "good" and remaining_time > 0:
-            self.status_label.text = f"✓ Tín hiệu ổn định - Còn {remaining_time:.0f}s"
+            self.status_label.text = "Tín hiệu yếu"
         elif remaining_time > 0:
-            self.status_label.text = f"📈 Đang đo - Còn {remaining_time:.0f}s"
+            self.status_label.text = f"Đang đo {remaining_time:.0f}s"
         else:
-            self.status_label.text = "⏱️  Đang xử lý kết quả..."
+            self.status_label.text = "Xử lý..."
 
     def show_signal_info(
         self, 
@@ -836,32 +800,14 @@ class HeartRateScreen(Screen):
         cv: float = 0.0,  # NEW: Coefficient of variation
         peak_count: int = 0  # NEW: Number of peaks
     ) -> None:
-        """
-        Hiển thị thông tin tín hiệu chi tiết bao gồm metadata mới.
-        
-        Args:
-            quality: Signal quality IR (0-100%)
-            sqi: Signal Quality Index from HR calculation (0-100)
-            detection_score: Finger detection score
-            amplitude: Signal amplitude
-            ratio: AC/DC ratio
-            cv: Coefficient of variation for SpO2
-            peak_count: Number of detected peaks
-        """
-        ratio_scaled = ratio * 10000.0
-        
-        # Line 1: Basic quality metrics
-        line1 = f"Chất lượng IR: {quality:.0f}% | SQI: {sqi:.0f}%"
-        
-        # Line 2: Detection metrics
-        line2 = f"Phát hiện: {detection_score:.2f} | Biên độ: {amplitude:.0f} | AC/DC×1e4: {ratio_scaled:.1f}"
-        
-        # Line 3: Advanced metrics (chỉ hiển thị khi có data)
-        if peak_count > 0 or cv > 0:
-            line3 = f"Peaks: {peak_count} | CV: {cv:.3f}"
-            self.signal_label.text = f"{line1}\n{line2}\n{line3}"
+        """Hiển thị chất lượng tín hiệu ngắn gọn cho màn hình nhỏ."""
+        # Hiển thị compact cho màn hình 480×320
+        if quality > 70:
+            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
+        elif quality > 50:
+            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
         else:
-            self.signal_label.text = f"{line1}\n{line2}"
+            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
 
     def update_live_metrics(
         self,
@@ -903,8 +849,9 @@ class HeartRateScreen(Screen):
 
             self.hr_value_label.text = f"{self.current_hr:.0f} BPM" if self.current_hr > 0 else "-- BPM"
             self.spo2_value_label.text = f"{self.current_spo2:.1f} %" if self.current_spo2 > 0 else "-- %"
-            self.status_label.text = "Đã hoàn tất - nhấn 'Lưu kết quả' nếu cần"
+            self.status_label.text = "Hoàn tất - Nhấn 'Lưu' để lưu"
             self.progress_bar.value = 100.0
+            self.instruction_label.text = "Kết quả OK"
             self._style_save_button(True)
             self.logger.info(
                 "Đo nhịp tim thành công (HR=%.1f valid=%s, SpO2=%.1f valid=%s)",
@@ -922,13 +869,14 @@ class HeartRateScreen(Screen):
             self._style_save_button(False)
 
             failure_reason = {
-                "timeout": "Đo không thành công - tín hiệu chưa ổn định",
-                "no_finger": "Không phát hiện ngón tay - vui lòng thử lại",
-                "finger_removed": "Ngón tay bị rời khỏi cảm biến",
-                "user_cancel": "Đã hủy phiên đo",
-                "stopped": "Phiên đo đã dừng",
-            }.get(reason, "Đo không thành công - thử lại sau")
+                "timeout": "Tín hiệu yếu",
+                "no_finger": "Không phát hiện",
+                "finger_removed": "Mất ngón tay",
+                "user_cancel": "Hủy",
+                "stopped": "Dừng",
+            }.get(reason, "Lỗi")
             self.status_label.text = failure_reason
+            self.instruction_label.text = "Thử lại"
             if reason != "user_cancel" and previous_state == HeartRateMeasurementController.STATE_MEASURING:
                 self.logger.warning(
                     "Measurement failed - hr_valid=%s spo2_valid=%s quality=%.1f reason=%s",
@@ -938,24 +886,15 @@ class HeartRateScreen(Screen):
                     reason,
                 )
 
-        self.instruction_label.text = (
-            "• Nhấn 'Bắt đầu đo' để thực hiện lại\n"
-            "• Lau sạch cảm biến nếu tín hiệu yếu"
-        )
-
     def reset_to_idle(self) -> None:
         self._style_start_button(False)
         self._style_save_button(False)
         self.progress_bar.value = 0
         self.hr_value_label.text = "-- BPM"
         self.spo2_value_label.text = "-- %"
-        self.status_label.text = "Nhấn 'Bắt đầu đo' để khởi động"
-        self.signal_label.text = "Chất lượng tín hiệu: --"
-        self.instruction_label.text = (
-            "1. Bấm 'Bắt đầu đo'\n"
-            "2. Đặt ngón tay nhẹ nhàng lên cảm biến\n"
-            "3. Giữ cố định đến khi hoàn tất"
-        )
+        self.status_label.text = "Sẵn sàng"
+        self.signal_label.text = "Chất lượng: --"
+        self.instruction_label.text = "Đặt ngón tay"
         self.pulse_widget.stop_pulse()
 
     def show_error_status(self, message: str) -> None:

@@ -3,6 +3,21 @@
 ## Mô tả dự án
 Hệ thống IoT theo dõi sức khỏe cho người cao tuổi, đo nhịp tim, SpO2, nhiệt độ, huyết áp với giao diện cải tiến 480x320 trên màn hình SPI 3.5", cảnh báo qua loa và giám sát từ xa qua Android/Web.
 
+## 🚀 Project Status (v2.0 - Production Ready)
+
+**Alert System:** ✅ Device-centric with cloud sync + MQTT publishing  
+**Sensors:** ✅ MAX30102 (HR/SpO₂), MLX90614 (Temperature), HX710B (Blood Pressure)  
+**GUI:** ✅ Kivy 480×320 (Waveshare LCD) with 3 vital sign screens  
+**Database:** ✅ SQLite local + MySQL cloud with auto-sync (retries pending items)  
+**Communication:** ✅ MQTT (HiveMQ Cloud) + REST API  
+**TTS:** ✅ PiperTTS Vietnamese voice feedback  
+
+### Recent Changes (v2.0.2)
+- **Device-centric patient resolution**: `patient_id` no longer hardcoded. Devices publish with `device_id`; cloud auto-resolves patient via `devices/patients` mapping.
+- **Cloud sync improvement**: `sync_incremental()` now retries all pending alerts & health records before delta sync (fixes stuck pending items).
+- **Alert deduplication**: Works across all vital signs (Heart Rate, SpO₂, Temperature, Blood Pressure).
+- **Removed deprecated config**: No more hardcoded `patient_id` in `app_config.yaml`; use environment variables for credentials.
+
 ### Tính năng mới (v2.0)
 - **Giao diện cải tiến**: Dashboard với 3 khối cảm biến lớn, dễ sử dụng trên màn hình cảm ứng
 - **Màn hình đo chi tiết**: Giao diện riêng cho từng loại cảm biến với animation và gauge
@@ -121,6 +136,124 @@ python test_sensor_logic.py
 - **Status Color Coding**: Màu sắc theo trạng thái critical/warning/normal/partial
 - **Measurement Screens**: Logic đo chính xác với stability checking
 
+## Quick Setup & Run
+
+### Prerequisites
+- **Python 3.9+** installed on Raspberry Pi OS Bookworm 64-bit
+- **pip** for package management
+- **Hardware**: MAX30102, MLX90614, HX710B connected to Pi
+- **Environment**: SSH or direct terminal access to Pi
+
+### Step 1: Install Dependencies
+```bash
+cd /home/pi/Desktop/IoT_health
+pip install -r requirements.txt
+```
+
+### Step 2: Set Up Environment Variables
+Create `.env` file in project root with MQTT & database credentials:
+```bash
+cat > .env << EOF
+# MQTT Configuration (HiveMQ Cloud)
+MQTT_BROKER=c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud
+MQTT_PORT=8883
+MQTT_USERNAME=rpi_bp_001
+MQTT_PASSWORD=your_hivemq_password_here
+
+# MySQL Cloud (AWS RDS)
+MYSQL_HOST=database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com
+MYSQL_PORT=3306
+MYSQL_USER=pi_sync
+MYSQL_PASSWORD=your_mysql_password_here
+MYSQL_DATABASE=iot_health_cloud
+
+# Device Configuration
+DEVICE_ID=rpi_bp_001
+EOF
+```
+**Security Note**: Never commit `.env` to git. Add `.env` to `.gitignore`.
+
+### Step 3: Initialize Local Database
+```bash
+# Create SQLite database with schema
+python scripts/init_database.py
+
+# Verify database created at data/health_monitor.db
+ls -lh data/health_monitor.db
+```
+
+### Step 4: Configure Application
+Edit `config/app_config.yaml` to set:
+- Device settings (device_id, location)
+- Sensor calibration (HX710B offset/slope, temperature offset)
+- Alert thresholds (HR, SpO2, Temperature, Blood Pressure)
+- MQTT broker credentials (loaded from .env)
+
+Example key settings:
+```yaml
+device:
+  device_id: rpi_bp_001
+
+sensors:
+  hx710b:
+    calibration:
+      offset_counts: 0
+      slope_mmhg_per_count: 0.001
+      
+alerts:
+  thresholds:
+    heart_rate:
+      min_normal: 60
+      max_normal: 100
+      critical_min: 40
+      critical_max: 150
+```
+
+### Step 5: Test MQTT Connection
+```bash
+# Verify broker connectivity
+python scripts/test_hivemq_connection.py
+
+# Expected output:
+# ✅ Connected to MQTT broker
+# ✅ Subscribed to device status topics
+# ✅ Connection healthy
+```
+
+### Step 6: Run Application
+```bash
+# Start main health monitoring app
+python main.py
+
+# Expected output:
+# [INFO] Initializing sensors...
+# [INFO] Connecting to MQTT broker...
+# [INFO] Kivy GUI starting (480x320)...
+# [INFO] Ready to measure
+```
+
+### Step 7: Test Alert Sync (Optional)
+In another terminal, run sync test:
+```bash
+# Test cloud sync and alert retry logic
+python tests/test_auto_sync.py
+
+# Expected output:
+# Testing alert sync to cloud...
+# ✅ Created 5 test alerts
+# ✅ Synced 5 alerts to MySQL
+# ✅ Verified sync_status='synced'
+```
+
+### Troubleshooting Quick Reference
+| Issue | Solution |
+|-------|----------|
+| `Import error: No module named 'kivy'` | Run: `pip install -r requirements.txt` |
+| `MQTT connection timeout` | Check internet connection, verify broker credentials in `.env` |
+| `SQLite "database is locked"` | Ensure only one instance of app running |
+| `HX710B DOUT timeout` | Verify GPIO5/GPIO6 wiring, HX710B power supply |
+| `No display on LCD` | Check SPI enabled (`raspi-config`), verify `app_config.yaml` display settings |
+
 ## Cài đặt và chạy
 
 ### Yêu cầu hệ thống
@@ -157,20 +290,16 @@ python main.py
 - [x] MQTT payload schemas (VitalsPayload, AlertPayload, DeviceStatusPayload)
 - [x] REST API client framework
 - [x] Store-forward offline support
-- [x] Cloud sync with MySQL (192.168.2.15:3306)
+- [x] Cloud sync with MySQL (AWS RDS) + device-centric patient resolution
 
 ### Phase 3 - Advanced Features
 - [x] Blood pressure measurement (HX710B oscillometric method)
 - [x] AI anomaly detection (IsolationForest framework)
 - [x] Android app design (Kotlin + Jetpack Compose)
 - [x] Multi-device management (QR code pairing)
+- [x] Alert sync with cloud retry logic (retries pending items)
 - [ ] Android app implementation (in progress)
 - [ ] Web dashboard
-
-### Phase 4 - Optimization
-- [ ] Performance tuning
-- [ ] Security hardening
-- [ ] Clinical validation
 
 ### Phase 4 - Optimization
 - [ ] Performance tuning

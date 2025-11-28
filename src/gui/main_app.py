@@ -1739,6 +1739,24 @@ def main():
             }
         }
     
+    # ============================================================
+    # Initialize MQTT Client
+    # ============================================================
+    mqtt_client = None
+    try:
+        from src.communication.mqtt_client import IoTHealthMQTTClient
+        mqtt_client = IoTHealthMQTTClient(config)
+        
+        if not mqtt_client.connect():
+            logger.error("❌ Failed to connect MQTT client")
+            mqtt_client = None
+        else:
+            logger.info("✅ MQTT Client initialized and connected")
+            logger.info("MQTT Client will resolve patient_id dynamically from cloud.")
+            
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize MQTT Client: {e}", exc_info=True)
+        logger.warning("App will run without real-time MQTT communication")
 
     database = None
     try:
@@ -1801,7 +1819,7 @@ def main():
             config=config,
             sensors=None,  # Will create from config
             database=database,  # ✅ FIX: Pass DatabaseManager instance
-            mqtt_client=None,
+            mqtt_client=mqtt_client, # Pass MQTT client instance
             alert_system=None
         )
         app.run()
@@ -1818,6 +1836,14 @@ def main():
                 logger.info("✅ SyncScheduler stopped")
             except Exception as e:
                 logger.error(f"Error stopping SyncScheduler: {e}")
+        
+        # Cleanup: Disconnect MQTT client
+        if mqtt_client:
+            try:
+                mqtt_client.disconnect()
+                logger.info("✅ MQTT Client disconnected")
+            except Exception as e:
+                logger.error(f"Error disconnecting MQTT Client: {e}")
 
 
 if __name__ == '__main__':

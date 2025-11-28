@@ -14,6 +14,11 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 
 ---
 
+Recent changes:
+- Device-centric patient resolution: `patient_id` is no longer hardcoded. Devices publish using `device_id`; the cloud resolves `patient_id` via the devices/patients mapping and the local record may store `patient_id=NULL` until resolved by cloud sync.
+- Cloud sync improvement: `sync_incremental()` now retries pending alerts and health records before delta-sync, preventing stuck pending items.
+- Config guidance: Do not hardcode `patient_id` in `app_config.yaml`. Use environment variables for credentials; rely on cloud mapping for patient assignment.
+
 ## 📡 **MQTT COMMUNICATION ARCHITECTURE** (✅ CHỐT)
 
 ### **Broker Configuration**
@@ -361,7 +366,6 @@ communication:
 
     # Device identification
     device_id: rpi_bp_001
-    patient_id: patient_001
 
     # QoS levels per message type
     qos:
