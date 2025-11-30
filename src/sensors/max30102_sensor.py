@@ -1259,6 +1259,9 @@ class MAX30102Sensor(BaseSensor):
         # Configuration for finger detection hysteresis
         self._finger_confirm_frames = max(2, int(config.get("finger_confirm_frames", 2)))  # Giảm xuống 2 để nhanh hơn
         self._finger_release_frames = max(3, int(config.get("finger_release_frames", 4)))  # Giảm xuống 4
+        
+        # Visual buffer cho GUI waveform (raw IR data)
+        self._visual_buffer: List[int] = []
 
     def initialize(self) -> bool:
         if self.hardware:
@@ -1364,6 +1367,15 @@ class MAX30102Sensor(BaseSensor):
         if sample_count <= 0:
             self._update_status_no_samples()
             return self._build_payload(0)
+        
+        # ============================================================
+        # LƯU RAW IR DATA VÀO VISUAL BUFFER CHO GUI WAVEFORM
+        # ============================================================
+        if ir_samples:
+            self._visual_buffer.extend(ir_samples)
+            # Giới hạn size để tránh tràn nhớ nếu GUI không đọc kịp
+            if len(self._visual_buffer) > 2000:
+                self._visual_buffer = self._visual_buffer[-2000:]
         
         self.window.add_samples(ir_samples, red_samples)
         self.measurement.readings_count += sample_count
@@ -1504,6 +1516,18 @@ class MAX30102Sensor(BaseSensor):
 
     def end_measurement_session(self) -> None:
         self.session.active = False
+    
+    def pop_visual_samples(self) -> List[int]:
+        """
+        Trả về raw IR samples chưa đọc và xóa buffer.
+        GUI gọi method này để lấy dữ liệu vẽ waveform.
+        
+        Returns:
+            List các giá trị IR raw (int) chưa được GUI đọc
+        """
+        data = self._visual_buffer
+        self._visual_buffer = []  # Reset buffer
+        return data
         self.session.start_time = 0.0
         self.session.elapsed = 0.0
         self.measurement.ready = False

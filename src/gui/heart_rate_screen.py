@@ -9,12 +9,14 @@ import time
 
 from kivy.animation import Animation
 from kivy.clock import Clock
+from kivy.graphics import Color, Line, Rectangle
 from kivy.metrics import dp
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.screenmanager import Screen
+from kivy.uix.widget import Widget
 
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDIconButton, MDRectangleFlatIconButton
+from kivymd.uix.button import MDIconButton, MDFillRoundFlatIconButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.progressbar import MDProgressBar
@@ -23,13 +25,221 @@ from kivymd.uix.progressbar import MDProgressBar
 from src.utils.tts_manager import ScenarioID
 
 
-MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
-MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
-MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
-MED_PRIMARY = (0.12, 0.55, 0.76, 1)
-MED_WARNING = (0.96, 0.4, 0.3, 1)
-TEXT_PRIMARY = (1, 1, 1, 1)
-TEXT_MUTED = (0.78, 0.88, 0.95, 1)
+# ============================================================
+# THEME COLORS - Màu sắc giao diện y tế
+# ============================================================
+MED_BG_COLOR = (0.02, 0.18, 0.27, 1)       # Nền chính (xanh đậm)
+MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)     # Nền card
+MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)     # Màu nhấn (xanh lục)
+MED_PRIMARY = (0.12, 0.55, 0.76, 1)        # Màu chính (xanh dương)
+MED_WARNING = (0.96, 0.4, 0.3, 1)          # Cảnh báo (đỏ cam)
+TEXT_PRIMARY = (1, 1, 1, 1)                # Chữ chính (trắng)
+TEXT_MUTED = (0.78, 0.88, 0.95, 1)         # Chữ phụ (xám nhạt)
+
+# ============================================================
+# HEALTH STATUS COLORS - Màu theo ngưỡng sức khỏe (cho người già)
+# ============================================================
+COLOR_HEALTHY = (0.3, 0.85, 0.4, 1)        # Xanh lá - Tốt
+COLOR_CAUTION = (1.0, 0.8, 0.2, 1)         # Vàng - Cần chú ý
+COLOR_DANGER = (1.0, 0.3, 0.3, 1)          # Đỏ - Nguy hiểm
+COLOR_NORMAL = (0.4, 0.75, 0.95, 1)        # Xanh dương nhạt - Bình thường
+
+# ============================================================
+# BUTTON COLORS - Màu nút bấm nổi bật
+# ============================================================
+BTN_START_COLOR = (0.1, 0.5, 0.7, 1)       # Xanh đậm - Bắt đầu
+BTN_STOP_COLOR = (0.9, 0.35, 0.25, 1)      # Đỏ - Dừng
+BTN_SAVE_COLOR = (0.2, 0.7, 0.4, 1)        # Xanh lá - Lưu
+BTN_DISABLED_COLOR = (0.4, 0.4, 0.4, 1)    # Xám - Vô hiệu
+
+
+class WaveformWidget(Widget):
+    """
+    Widget hiển thị biểu đồ sóng PPG hiệu năng cao.
+    
+    Tối ưu:
+    - Dùng Line instruction cố định, không redraw toàn bộ canvas
+    - Auto-scale để sóng luôn nằm giữa màn hình
+    - Nhận batch data để giảm số lần cập nhật
+    - Downsample để sóng rõ ràng, không quá dày đặc
+    """
+    
+    # Buffer lưu raw data (~6 giây @ 100 SPS)
+    RAW_BUFFER_SIZE = 600
+    # Số điểm thực sự vẽ trên màn hình (sau khi downsample)
+    DISPLAY_POINTS = 120
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.data_points = []  # Raw buffer
+        
+        # ============================================================
+        # 1. VẼ NỀN VÀ LƯỚI (Tĩnh - chỉ vẽ 1 lần)
+        # ============================================================
+        with self.canvas.before:
+            Color(0.05, 0.15, 0.22, 1)  # Nền tối
+            self.bg_rect = Rectangle(pos=self.pos, size=self.size)
+            
+            Color(0.3, 0.4, 0.5, 0.2)  # Lưới mờ
+            self.grid_lines = []
+            for _ in range(15):  # Tạo sẵn pool các đường lưới
+                self.grid_lines.append(Line(points=[], width=0.5))
+        
+        # ============================================================
+        # 2. VẼ ĐƯỜNG SÓNG (Động - chỉ cập nhật points)
+        # ============================================================
+        with self.canvas:
+            self.line_color_instruction = Color(*COLOR_HEALTHY)
+            self.signal_line = Line(points=[], width=2.0)  # Đường dày hơn để dễ nhìn
+        
+        # Bind resize để cập nhật layout
+        self.bind(size=self._update_layout, pos=self._update_layout)
+    
+    def _update_layout(self, *args):
+        """Cập nhật vị trí nền và lưới khi resize (chỉ khi cần)."""
+        self.bg_rect.pos = self.pos
+        self.bg_rect.size = self.size
+        
+        # Vẽ lại lưới
+        rows, cols = 4, 10
+        grid_idx = 0
+        
+        # Đường dọc
+        step_x = self.width / cols if cols > 0 else self.width
+        for i in range(1, cols):
+            if grid_idx < len(self.grid_lines):
+                x = self.x + i * step_x
+                self.grid_lines[grid_idx].points = [x, self.y, x, self.y + self.height]
+                grid_idx += 1
+        
+        # Đường ngang
+        step_y = self.height / rows if rows > 0 else self.height
+        for i in range(1, rows):
+            if grid_idx < len(self.grid_lines):
+                y = self.y + i * step_y
+                self.grid_lines[grid_idx].points = [self.x, y, self.x + self.width, y]
+                grid_idx += 1
+        
+        # Cập nhật lại signal line với data hiện tại
+        self._update_signal_line()
+    
+    def set_color(self, color: tuple) -> None:
+        """Đặt màu đường sóng (không cần redraw toàn bộ)."""
+        self.line_color_instruction.rgba = color
+    
+    def clear(self) -> None:
+        """Xóa tất cả dữ liệu."""
+        self.data_points = []
+        self.signal_line.points = []
+    
+    def add_point(self, value: float) -> None:
+        """
+        Thêm một điểm dữ liệu (backward compatibility).
+        Khuyến khích dùng update_data() với batch để hiệu năng tốt hơn.
+        """
+        self.update_data([value])
+    
+    def update_data(self, new_values: list) -> None:
+        """
+        Nhận một MẢNG dữ liệu (batch) và vẽ lại.
+        Hiệu năng cao hơn nhiều so với add từng điểm.
+        
+        Args:
+            new_values: List các giá trị raw IR signal từ sensor
+        """
+        if not new_values:
+            return
+        
+        # Thêm dữ liệu mới vào buffer
+        self.data_points.extend(new_values)
+        
+        # Giới hạn buffer size
+        if len(self.data_points) > self.RAW_BUFFER_SIZE:
+            self.data_points = self.data_points[-self.RAW_BUFFER_SIZE:]
+        
+        # Cập nhật đường sóng
+        self._update_signal_line()
+    
+    def _downsample(self, data: list, target_points: int) -> list:
+        """
+        Giảm số điểm dữ liệu để vẽ rõ ràng hơn.
+        Dùng phương pháp lấy trung bình mỗi nhóm.
+        
+        Args:
+            data: Dữ liệu gốc
+            target_points: Số điểm muốn có sau khi downsample
+            
+        Returns:
+            List đã được downsample
+        """
+        n = len(data)
+        if n <= target_points:
+            return data
+        
+        # Tính số samples cần gộp thành 1 điểm
+        step = n / target_points
+        result = []
+        
+        for i in range(target_points):
+            start = int(i * step)
+            end = int((i + 1) * step)
+            # Lấy trung bình của nhóm (giữ được hình dạng sóng)
+            chunk = data[start:end]
+            if chunk:
+                result.append(sum(chunk) / len(chunk))
+        
+        return result
+    
+    def _update_signal_line(self) -> None:
+        """
+        Cập nhật toạ độ điểm của đường sóng (KHÔNG clear canvas).
+        Đây là phần tối ưu quan trọng nhất.
+        """
+        if len(self.data_points) < 2:
+            self.signal_line.points = []
+            return
+        
+        # ============================================================
+        # DOWNSAMPLE - Giảm số điểm để sóng rõ ràng hơn
+        # ============================================================
+        display_data = self._downsample(self.data_points, self.DISPLAY_POINTS)
+        
+        if len(display_data) < 2:
+            self.signal_line.points = []
+            return
+        
+        # ============================================================
+        # AUTO SCALE LOGIC - Sóng luôn full màn hình
+        # ============================================================
+        min_val = min(display_data)
+        max_val = max(display_data)
+        rng = max_val - min_val
+        
+        # Tránh phóng đại nhiễu (nếu tín hiệu quá nhỏ < 500, coi như đường thẳng)
+        if rng < 500:
+            rng = 500
+            mid = (min_val + max_val) / 2
+            min_val = mid - 250
+        
+        # ============================================================
+        # TÍNH TOẠ ĐỘ MÀN HÌNH
+        # ============================================================
+        pts = []
+        n_points = len(display_data)
+        step_x = self.width / (n_points - 1) if n_points > 1 else self.width
+        margin_y = self.height * 0.08  # 8% margin trên/dưới
+        drawable_height = self.height * 0.84
+        
+        for i, val in enumerate(display_data):
+            x = self.x + i * step_x
+            # Normalize 0-1
+            norm = (val - min_val) / rng if rng > 0 else 0.5
+            # Scale vào chiều cao (với margin)
+            y = self.y + margin_y + (norm * drawable_height)
+            pts.extend([x, y])
+        
+        # Cập nhật đường vẽ (chỉ thay đổi points, không tạo mới Line)
+        self.signal_line.points = pts
 
 
 class PulseAnimation(MDBoxLayout):
@@ -45,7 +255,7 @@ class PulseAnimation(MDBoxLayout):
         self.padding = (0, dp(4), 0, dp(4))
         self.pulse_active = False
         self.pulse_rate = 60.0
-        self.base_font_size = dp(44)
+        self.base_font_size = dp(36)  # Giảm nhẹ để nhường chỗ cho waveform
 
         self.heart_icon = MDIcon(
             icon="heart",
@@ -82,7 +292,7 @@ class PulseAnimation(MDBoxLayout):
             return
 
         anim = (
-            Animation(font_size=self.base_font_size + dp(8), duration=0.12)
+            Animation(font_size=self.base_font_size + dp(6), duration=0.12)
             + Animation(font_size=self.base_font_size, duration=0.12)
         )
         anim.start(self.heart_icon)
@@ -213,7 +423,8 @@ class HeartRateMeasurementController:
 
     def _schedule_poll(self) -> None:
         if self.poll_event is None:
-            self.poll_event = Clock.schedule_interval(self._poll_sensor, 0.2)
+            # Tăng tốc độ cập nhật lên 0.05s (20Hz) để sóng mượt
+            self.poll_event = Clock.schedule_interval(self._poll_sensor, 0.05)
 
     def _cancel_poll(self) -> None:
         if self.poll_event is not None:
@@ -227,6 +438,16 @@ class HeartRateMeasurementController:
         sensor_data = self.app.get_sensor_data() or {}
         status = self._extract_status(sensor_data)
         self.last_snapshot = {"sensor_status": {self.sensor_name: status}, **sensor_data}
+        
+        # ============================================================
+        # LẤY RAW SAMPLES TỪ SENSOR BUFFER CHO WAVEFORM
+        # ============================================================
+        sensor = self._get_sensor()
+        if sensor and hasattr(sensor, "pop_visual_samples"):
+            raw_samples = sensor.pop_visual_samples()
+            if raw_samples:
+                # Đẩy cả mảng vào waveform (widget tự auto-scale)
+                self.screen.update_waveform(raw_samples)
 
         now = time.time()
         finger_present = bool(status.get("finger_detected", sensor_data.get("finger_detected", False)))
@@ -684,39 +905,62 @@ class HeartRateScreen(Screen):
         panel_layout.add_widget(metrics_card)
 
         # ============================================================
-        # RIGHT: Pulse Animation + Signal Quality (cột phải)
+        # RIGHT: Waveform Graph + Pulse Icon (cột phải - mở rộng)
         # ============================================================
         right_column = MDBoxLayout(
             orientation="vertical",
-            size_hint_x=0.35,
-            spacing=dp(4),
+            size_hint_x=0.40,  # Tăng từ 0.35 lên 0.40 để có chỗ cho waveform
+            spacing=dp(2),
+            padding=(dp(4), dp(4), dp(4), dp(4)),
         )
 
-        # Pulse animation (to hơn, ở bên phải)
+        # Waveform graph (phần lớn diện tích - giống monitor y tế)
+        waveform_card = MDCard(
+            orientation="vertical",
+            size_hint_y=0.70,
+            radius=[dp(8)],
+            md_bg_color=(0.05, 0.15, 0.22, 1),
+            padding=(dp(2), dp(2), dp(2), dp(2)),
+        )
+        self.waveform_widget = WaveformWidget()
+        self.waveform_widget.size_hint = (1, 1)
+        waveform_card.add_widget(self.waveform_widget)
+        right_column.add_widget(waveform_card)
+        
+        # Bottom row: Heart icon + Signal quality
+        bottom_info = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=0.30,
+            spacing=dp(4),
+        )
+        
+        # Pulse animation (nhỏ hơn, bên trái)
         pulse_wrapper = AnchorLayout(
             anchor_x="center",
             anchor_y="center",
-            size_hint_x=1,
-            size_hint_y=0.65,
+            size_hint_x=0.35,
         )
         self.pulse_widget = PulseAnimation()
         self.pulse_widget.size_hint = (None, None)
-        self.pulse_widget.width = dp(70)
-        self.pulse_widget.height = dp(70)
+        self.pulse_widget.width = dp(40)
+        self.pulse_widget.height = dp(40)
         pulse_wrapper.add_widget(self.pulse_widget)
-        right_column.add_widget(pulse_wrapper)
+        bottom_info.add_widget(pulse_wrapper)
 
-        # Signal quality info
+        # Signal quality info (bên phải)
         self.signal_label = MDLabel(
-            text="Chất lượng: --",
+            text="SQI: --",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            halign="center",
-            size_hint_y=0.35,
+            halign="left",
+            valign="middle",
+            size_hint_x=0.65,
         )
         self.signal_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        right_column.add_widget(self.signal_label)
+        bottom_info.add_widget(self.signal_label)
+        
+        right_column.add_widget(bottom_info)
 
         panel_layout.add_widget(right_column)
         parent.add_widget(panel_layout)
@@ -756,36 +1000,43 @@ class HeartRateScreen(Screen):
         parent.add_widget(status_card)
 
     def _create_controls(self, parent) -> None:
-        # Compact controls cho màn hình 480×320
+        # ============================================================
+        # CONTROLS - Nút bấm lớn, màu sắc rõ ràng cho người già
+        # Dùng MDFillRoundFlatIconButton (nút đặc) thay vì viền
+        # ============================================================
         control_layout = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
-            height=dp(48),
-            spacing=dp(8),
-            padding=(dp(4), dp(2), dp(4), dp(2)),
+            height=dp(52),  # Tăng chiều cao để nút dễ bấm hơn
+            spacing=dp(10),
+            padding=(dp(6), dp(4), dp(6), dp(4)),
         )
 
-        self.start_stop_btn = MDRectangleFlatIconButton(
-            text="Bắt đầu",
+        # Nút Bắt đầu/Dừng - Màu xanh đậm nổi bật
+        self.start_stop_btn = MDFillRoundFlatIconButton(
+            text="BẮT ĐẦU",
             icon="play-circle",
-            text_color=MED_CARD_ACCENT,
-            line_color=MED_CARD_ACCENT,
-            size_hint_x=0.6,
-            font_size="14sp",
-            icon_size="20sp",
+            md_bg_color=BTN_START_COLOR,
+            text_color=TEXT_PRIMARY,
+            icon_color=TEXT_PRIMARY,
+            size_hint_x=0.55,
+            font_size="16sp",
+            icon_size="24sp",
         )
         self.start_stop_btn.bind(on_press=self._on_start_stop_pressed)
         control_layout.add_widget(self.start_stop_btn)
 
-        self.save_btn = MDRectangleFlatIconButton(
-            text="Lưu",
+        # Nút Lưu - Ban đầu xám (vô hiệu), chuyển xanh lá khi có kết quả
+        self.save_btn = MDFillRoundFlatIconButton(
+            text="LƯU",
             icon="content-save",
             disabled=True,
-            text_color=(1, 1, 1, 0.3),
-            line_color=(1, 1, 1, 0.3),
-            size_hint_x=0.4,
-            font_size="14sp",
-            icon_size="20sp",
+            md_bg_color=BTN_DISABLED_COLOR,
+            text_color=(1, 1, 1, 0.5),
+            icon_color=(1, 1, 1, 0.5),
+            size_hint_x=0.45,
+            font_size="16sp",
+            icon_size="24sp",
         )
         self.save_btn.bind(on_press=self._on_save_pressed)
         control_layout.add_widget(self.save_btn)
@@ -796,25 +1047,66 @@ class HeartRateScreen(Screen):
     # UI helpers
     # ------------------------------------------------------------------
     def _style_start_button(self, active: bool) -> None:
+        """Style nút Bắt đầu/Dừng với màu sắc nổi bật."""
         if active:
-            self.start_stop_btn.text = "Dừng"
+            self.start_stop_btn.text = "DỪNG"
             self.start_stop_btn.icon = "stop-circle"
-            self.start_stop_btn.text_color = MED_WARNING
-            self.start_stop_btn.line_color = MED_WARNING
+            self.start_stop_btn.md_bg_color = BTN_STOP_COLOR  # Đỏ
+            self.start_stop_btn.text_color = TEXT_PRIMARY
+            self.start_stop_btn.icon_color = TEXT_PRIMARY
         else:
-            self.start_stop_btn.text = "Bắt đầu"
+            self.start_stop_btn.text = "BẮT ĐẦU"
             self.start_stop_btn.icon = "play-circle"
-            self.start_stop_btn.text_color = MED_CARD_ACCENT
-            self.start_stop_btn.line_color = MED_CARD_ACCENT
+            self.start_stop_btn.md_bg_color = BTN_START_COLOR  # Xanh đậm
+            self.start_stop_btn.text_color = TEXT_PRIMARY
+            self.start_stop_btn.icon_color = TEXT_PRIMARY
 
     def _style_save_button(self, enabled: bool) -> None:
+        """Style nút Lưu - Xanh lá khi enabled, xám khi disabled."""
         self.save_btn.disabled = not enabled
         if enabled:
-            self.save_btn.text_color = MED_CARD_ACCENT
-            self.save_btn.line_color = MED_CARD_ACCENT
+            self.save_btn.md_bg_color = BTN_SAVE_COLOR  # Xanh lá
+            self.save_btn.text_color = TEXT_PRIMARY
+            self.save_btn.icon_color = TEXT_PRIMARY
         else:
-            self.save_btn.text_color = (1, 1, 1, 0.3)
-            self.save_btn.line_color = (1, 1, 1, 0.3)
+            self.save_btn.md_bg_color = BTN_DISABLED_COLOR  # Xám
+            self.save_btn.text_color = (1, 1, 1, 0.5)
+            self.save_btn.icon_color = (1, 1, 1, 0.5)
+    
+    # ============================================================
+    # DYNAMIC COLORS - Màu sắc thay đổi theo ngưỡng sức khỏe
+    # ============================================================
+    def _get_hr_color(self, hr: float) -> tuple:
+        """
+        Lấy màu cho nhịp tim theo ngưỡng sức khỏe.
+        
+        Ngưỡng (theo WHO/AHA):
+        - 60-100 BPM: Bình thường → Xanh lá
+        - 50-60 hoặc 100-120: Cần chú ý → Vàng
+        - <50 hoặc >120: Nguy hiểm → Đỏ
+        """
+        if 60 <= hr <= 100:
+            return COLOR_HEALTHY  # Xanh lá - Tốt
+        elif 50 <= hr < 60 or 100 < hr <= 120:
+            return COLOR_CAUTION  # Vàng - Cần chú ý
+        else:
+            return COLOR_DANGER  # Đỏ - Nguy hiểm
+    
+    def _get_spo2_color(self, spo2: float) -> tuple:
+        """
+        Lấy màu cho SpO2 theo ngưỡng sức khỏe.
+        
+        Ngưỡng (theo FDA/WHO):
+        - 96-100%: Bình thường → Xanh lá
+        - 90-95%: Cần chú ý → Vàng
+        - <90%: Nguy hiểm → Đỏ
+        """
+        if spo2 >= 96:
+            return COLOR_HEALTHY  # Xanh lá - Tốt
+        elif spo2 >= 90:
+            return COLOR_CAUTION  # Vàng - Cần chú ý
+        else:
+            return COLOR_DANGER  # Đỏ - Nguy hiểm
 
     def on_measurement_preparing(self) -> None:
         """Chuẩn bị đo - chờ ngón tay (KHÔNG có countdown)."""
@@ -885,27 +1177,37 @@ class HeartRateScreen(Screen):
     def show_signal_info(
         self, 
         quality: float, 
-        sqi: float,  # NEW: Signal Quality Index
+        sqi: float,  # Signal Quality Index
         detection_score: float, 
         amplitude: float, 
         ratio: float,
-        cv: float = 0.0,  # NEW: Coefficient of variation
-        peak_count: int = 0  # NEW: Number of peaks
+        cv: float = 0.0,  # Coefficient of variation
+        peak_count: int = 0  # Number of peaks
     ) -> None:
-        """Hiển thị chất lượng tín hiệu ngắn gọn cho màn hình nhỏ."""
+        """
+        Hiển thị chất lượng tín hiệu ngắn gọn.
+        
+        NOTE: Waveform giờ được cập nhật từ raw IR samples trong controller,
+        không dùng amplitude nữa để có tín hiệu real-time chính xác hơn.
+        """
         # Sử dụng SQI (0-100) để đánh giá chất lượng tổng thể
         if sqi >= 80:
             quality_text = "Tốt"
-            color = MED_CARD_ACCENT # Greenish
+            color = COLOR_HEALTHY
         elif sqi >= 50:
-            quality_text = "Trung bình"
-            color = MED_WARNING # Orangeish
+            quality_text = "TB"
+            color = COLOR_CAUTION
         else:
-            quality_text = "Kém"
-            color = MED_WARNING # Reddish
+            quality_text = "Yếu"
+            color = COLOR_DANGER
         
-        self.signal_label.text = f"Chất lượng: {quality_text} (SQI: {sqi:.0f}%)"
+        # Hiển thị SQI compact hơn
+        self.signal_label.text = f"SQI:{sqi:.0f}% {quality_text}"
         self.signal_label.text_color = color
+        
+        # Cập nhật màu waveform theo chất lượng tín hiệu
+        if hasattr(self, 'waveform_widget'):
+            self.waveform_widget.set_color(color)
 
     def update_live_metrics(
         self,
@@ -915,17 +1217,37 @@ class HeartRateScreen(Screen):
         spo2_valid: bool,
         controller_state: str,
     ) -> None:
+        """Cập nhật chỉ số realtime với màu sắc động theo ngưỡng sức khỏe."""
         if controller_state in (HeartRateMeasurementController.STATE_MEASURING, HeartRateMeasurementController.STATE_WAITING):
+            # Cập nhật HR với màu động
             if hr_valid and heart_rate > 0:
                 self.hr_value_label.text = f"{heart_rate:.0f} BPM"
+                self.hr_value_label.text_color = self._get_hr_color(heart_rate)
                 self.pulse_widget.start_pulse(max(40.0, heart_rate))
+                # Cập nhật màu waveform theo HR status
+                self.waveform_widget.set_color(self._get_hr_color(heart_rate))
             else:
                 self.hr_value_label.text = "-- BPM"
+                self.hr_value_label.text_color = TEXT_PRIMARY
 
+            # Cập nhật SpO2 với màu động
             if spo2_valid and spo2 > 0:
                 self.spo2_value_label.text = f"{spo2:.1f} %"
+                self.spo2_value_label.text_color = self._get_spo2_color(spo2)
             else:
                 self.spo2_value_label.text = "-- %"
+                self.spo2_value_label.text_color = TEXT_PRIMARY
+    
+    def update_waveform(self, samples: list) -> None:
+        """
+        Cập nhật biểu đồ sóng với batch dữ liệu từ sensor.
+        Được gọi từ controller mỗi khi có dữ liệu mới.
+        
+        Args:
+            samples: List các giá trị raw IR signal từ MAX30102
+        """
+        if hasattr(self, 'waveform_widget'):
+            self.waveform_widget.update_data(samples)
 
     def on_measurement_complete(
         self,
@@ -1027,17 +1349,29 @@ class HeartRateScreen(Screen):
                 )
 
     def reset_to_idle(self) -> None:
+        """Reset giao diện về trạng thái ban đầu."""
         self._style_start_button(False)
         self._style_save_button(False)
         self.progress_bar.value = 0
+        
+        # Reset HR/SpO2 labels với màu mặc định
         self.hr_value_label.text = "-- BPM"
+        self.hr_value_label.text_color = TEXT_PRIMARY
         self.spo2_value_label.text = "-- %"
+        self.spo2_value_label.text_color = TEXT_PRIMARY
+        
+        # Reset status
         self.status_label.text = "Sẵn sàng"
-        self.status_label.text_color = TEXT_PRIMARY # Reset màu về mặc định
-        self.signal_label.text = "Chất lượng: --"
-        self.signal_label.text_color = TEXT_MUTED # Reset màu về mặc định
+        self.status_label.text_color = TEXT_PRIMARY
+        self.signal_label.text = "SQI: --"
+        self.signal_label.text_color = TEXT_MUTED
         self.instruction_label.text = "Đặt ngón tay lên cảm biến."
+        
+        # Reset animations và waveform
         self.pulse_widget.stop_pulse()
+        if hasattr(self, 'waveform_widget'):
+            self.waveform_widget.clear()
+            self.waveform_widget.set_color(COLOR_HEALTHY)
 
     def show_error_status(self, message: str) -> None:
         self.status_label.text = message
