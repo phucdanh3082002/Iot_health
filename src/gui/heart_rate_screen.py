@@ -9,7 +9,6 @@ import time
 
 from kivy.animation import Animation
 from kivy.clock import Clock
-from kivy.core.window import Window
 from kivy.metrics import dp
 from kivy.uix.anchorlayout import AnchorLayout
 from kivy.uix.screenmanager import Screen
@@ -126,6 +125,13 @@ class HeartRateMeasurementController:
         self.deadline = 0.0
         self.finger_lost_ts: Optional[float] = None
         self.last_snapshot: Dict[str, Any] = {}
+        
+        # Best results tracking - lưu kết quả tốt nhất trong phiên đo
+        self.best_hr: float = 0.0
+        self.best_hr_valid: bool = False
+        self.best_spo2: float = 0.0
+        self.best_spo2_valid: bool = False
+        self.best_quality: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -153,6 +159,13 @@ class HeartRateMeasurementController:
         self.deadline = now + self.MEASUREMENT_DURATION + self.TIMEOUT_MARGIN
         self.finger_lost_ts = None
         self.last_snapshot = {}
+        
+        # Reset best results tracking
+        self.best_hr = 0.0
+        self.best_hr_valid = False
+        self.best_spo2 = 0.0
+        self.best_spo2_valid = False
+        self.best_quality = 0.0
 
         self.screen.on_measurement_preparing()
         self._schedule_poll()
@@ -175,6 +188,12 @@ class HeartRateMeasurementController:
         self.deadline = 0.0
         self.finger_lost_ts = None
         self.last_snapshot = {}
+        # Reset best results
+        self.best_hr = 0.0
+        self.best_hr_valid = False
+        self.best_spo2 = 0.0
+        self.best_spo2_valid = False
+        self.best_quality = 0.0
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -230,6 +249,27 @@ class HeartRateMeasurementController:
         heart_rate = float(sensor_data.get("heart_rate", 0.0) or 0.0)
         spo2 = float(sensor_data.get("spo2", 0.0) or 0.0)
         self.screen.update_live_metrics(heart_rate, hr_valid, spo2, spo2_valid, self.state)
+        
+        # ============================================================
+        # TRACK BEST RESULTS - Lưu kết quả tốt nhất trong phiên đo
+        # Lý do: Đôi khi poll cuối cùng có noise, ta cần giữ best result
+        # ============================================================
+        if hr_valid and heart_rate > 0:
+            # Ưu tiên HR với quality cao hơn, hoặc HR mới nếu quality tương đương
+            if not self.best_hr_valid or signal_quality_index >= self.best_quality:
+                self.best_hr = heart_rate
+                self.best_hr_valid = True
+                self.best_quality = max(self.best_quality, signal_quality_index)
+        
+        if spo2_valid and spo2 > 0:
+            # Ưu tiên SpO2 trong range sinh lý (90-100%) với quality cao
+            if not self.best_spo2_valid:
+                self.best_spo2 = spo2
+                self.best_spo2_valid = True
+            elif 90 <= spo2 <= 100 and (self.best_spo2 < 90 or signal_quality_index >= self.best_quality):
+                # Prefer healthy SpO2 values khi có quality tốt hơn
+                self.best_spo2 = spo2
+                self.best_quality = max(self.best_quality, signal_quality_index)
 
         # ============================================================
         # STATE: WAITING - Chờ ngón tay (KHÔNG ĐẾM NGƯỢC)
@@ -357,19 +397,50 @@ class HeartRateMeasurementController:
         except Exception as exc:  # pragma: no cover - safety log
             self.logger.debug("Không thể dừng sensor %s: %s", self.sensor_name, exc)
 
-        hr_valid = bool(snapshot.get("hr_valid"))
-        spo2_valid = bool(snapshot.get("spo2_valid"))
-        heart_rate = float(snapshot.get("heart_rate", 0.0) or 0.0)
-        spo2 = float(snapshot.get("spo2", 0.0) or 0.0)
+        # ============================================================
+        # USE BEST RESULTS - Ưu tiên kết quả tốt nhất trong phiên đo
+        # Snapshot cuối có thể bị noise, best_* giữ giá trị ổn định nhất
+        # ============================================================
+        snapshot_hr_valid = bool(snapshot.get("hr_valid"))
+        snapshot_spo2_valid = bool(snapshot.get("spo2_valid"))
+        snapshot_hr = float(snapshot.get("heart_rate", 0.0) or 0.0)
+        snapshot_spo2 = float(snapshot.get("spo2", 0.0) or 0.0)
+        
+        # Ưu tiên best results nếu có, fallback về snapshot
+        if self.best_hr_valid and self.best_hr > 0:
+            heart_rate = self.best_hr
+            hr_valid = True
+            self.logger.info("[Finalize] Dùng best HR=%.1f (snapshot HR=%.1f valid=%s)", 
+                            self.best_hr, snapshot_hr, snapshot_hr_valid)
+        else:
+            heart_rate = snapshot_hr if snapshot_hr_valid and snapshot_hr > 0 else 0.0
+            hr_valid = snapshot_hr_valid and snapshot_hr > 0
+        
+        if self.best_spo2_valid and self.best_spo2 > 0:
+            spo2 = self.best_spo2
+            spo2_valid = True
+            self.logger.info("[Finalize] Dùng best SpO2=%.1f (snapshot SpO2=%.1f valid=%s)", 
+                            self.best_spo2, snapshot_spo2, snapshot_spo2_valid)
+        else:
+            spo2 = snapshot_spo2 if snapshot_spo2_valid and snapshot_spo2 > 0 else 0.0
+            spo2_valid = snapshot_spo2_valid and snapshot_spo2 > 0
+        
         quality = float(snapshot.get("signal_quality_ir", 0.0) or 0.0)
         status = self._extract_status(snapshot)
         quality = float(status.get("signal_quality_ir", quality))
+        
+        # Nếu có best results, coi như success=True
+        has_best_results = (self.best_hr_valid and self.best_hr > 0) or (self.best_spo2_valid and self.best_spo2 > 0)
+        if has_best_results and not success:
+            success = True
+            reason = "best_results_available"
+            self.logger.info("[Finalize] Có best results → đánh dấu success=True")
 
         self.screen.on_measurement_complete(
             success=success,
             reason=reason,
-            heart_rate=heart_rate if hr_valid and heart_rate > 0 else 0.0,
-            spo2=spo2 if spo2_valid and spo2 > 0 else 0.0,
+            heart_rate=heart_rate,
+            spo2=spo2,
             hr_valid=hr_valid,
             spo2_valid=spo2_valid,
             signal_quality=quality,
@@ -773,7 +844,10 @@ class HeartRateScreen(Screen):
             self.instruction_label.text = "Giữ"
 
     def show_measurement_guidance(self, remaining_time: float) -> None:
-        # Không cập nhật status_label để tránh flicker
+        """Intentionally empty - status_label đã được cập nhật trong update_progress()."""
+        # NOTE: Method này tồn tại để Controller có thể gọi mà không cần kiểm tra.
+        # Việc cập nhật instruction_label được xử lý trong update_progress() để tập trung
+        # tất cả UI updates vào một nơi, tránh flicker do nhiều updates liên tiếp.
         pass
 
     def show_signal_warning(self) -> None:

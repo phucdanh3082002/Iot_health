@@ -617,7 +617,7 @@ class HRCalculator:
         logger = logging.getLogger(__name__)
         
         if ir_data.size < cls.BUFFER_SIZE or red_data.size < cls.BUFFER_SIZE:
-            # Always return 7 values to match signature
+            # Always return 8 values to match signature
             return -999.0, False, -999.0, False, 0.0, 0.0, 0, []
 
         # FIX: Clip data vào range hợp lý trước khi xử lý
@@ -732,8 +732,8 @@ class HRCalculator:
 
         exact_ir_valley_locs_count = n_peaks
         if exact_ir_valley_locs_count == 0:
-            # Return with proper 7-value tuple
-            return hr, hr_valid, spo2, spo2_valid, 0.0, 0.0, 0
+            # Return with proper 8-value tuple
+            return hr, hr_valid, spo2, spo2_valid, 0.0, 0.0, 0, []
 
         ratio: List[float] = []  # Changed to float for better precision
         
@@ -844,7 +844,7 @@ class HRCalculator:
         if not ratio:
             logger.warning("[SpO2 FAIL] Không có R-value hợp lệ sau %d cycles (peaks=%d)", 
                           exact_ir_valley_locs_count - 1, n_peaks)
-            # Return with proper 7-value tuple to prevent unpacking error
+            # Return with proper 8-value tuple to match signature
             return hr, hr_valid, spo2, spo2_valid, 0.0, 0.0, n_peaks, []
 
         # Use median R-value for robustness against outliers
@@ -1252,9 +1252,8 @@ class MAX30102Sensor(BaseSensor):
         self.last_valid_hr_ts = 0.0
         self.last_valid_spo2_ts = 0.0
         
-        # Trend tracking để phát hiện sudden jumps
+        # Trend tracking để phát hiện sudden jumps (chỉ cho HR)
         self._last_hr_value: float = 0.0
-        self._last_spo2_value: float = 0.0
         self._hr_jump_count: int = 0  # Đếm số lần jump liên tiếp
         
         # Configuration for finger detection hysteresis
@@ -1377,41 +1376,56 @@ class MAX30102Sensor(BaseSensor):
         hr_value, hr_valid, spo2_value, spo2_valid = self._compute_biometrics()
 
         # ============================================================
-        # PHASE 4: INTELLIGENT HR ACCEPTANCE với outlier rejection
+        # INTELLIGENT HR ACCEPTANCE - Simplified & Robust
+        # ============================================================
+        # Strategy: Accept valid HR với filtering nhẹ, không quá aggressive
+        # Lý do: PPG signal có variance tự nhiên cao, IQR quá strict sẽ reject giá trị hợp lệ
         # ============================================================
         if hr_valid and self.validate_heart_rate(hr_value):
-            # Check 1: Trend consistency - reject sudden jumps > 40% so với last value
             hr_accepted = True
             rejection_reason = ""
             
-            if self._last_hr_value > 0 and len(self.hr_history) >= 2:
-                hr_change_ratio = abs(hr_value - self._last_hr_value) / self._last_hr_value
+            # Check 1: Reject extreme jumps (> 60%) so với MEDIAN của history
+            # Dùng median thay vì last value để robust hơn với noise
+            if len(self.hr_history) >= 3:
+                current_median = float(np.median(self.hr_history))
+                hr_change_ratio = abs(hr_value - current_median) / current_median if current_median > 0 else 0
                 
-                if hr_change_ratio > 0.40:  # > 40% change
+                # 60% threshold - chỉ reject những thay đổi cực đoan
+                # VD: median=75 → accept 45-120, reject <45 hoặc >120
+                if hr_change_ratio > 0.60:
                     self._hr_jump_count += 1
                     
-                    # Chỉ accept nếu jump liên tục 3 lần (thực sự thay đổi)
-                    if self._hr_jump_count < 3:
+                    # Accept nếu jump liên tục 2 lần (có thể HR thực sự đang thay đổi)
+                    if self._hr_jump_count < 2:
                         hr_accepted = False
-                        rejection_reason = f"sudden jump {hr_change_ratio*100:.0f}% (count={self._hr_jump_count})"
+                        rejection_reason = f"extreme change {hr_change_ratio*100:.0f}% from median {current_median:.0f}"
+                    else:
+                        # Reset history vì HR có vẻ đang thay đổi thực sự
+                        self.hr_history.clear()
+                        self._hr_jump_count = 0
+                        self.logger.info("[HR] Reset history do thay đổi liên tục")
                 else:
-                    # Reset jump counter nếu giá trị ổn định
+                    # Reset jump counter nếu giá trị trong range hợp lý
                     self._hr_jump_count = 0
             
-            # Check 2: IQR-based outlier detection (nếu có đủ history)
-            if hr_accepted and len(self.hr_history) >= 4:
-                sorted_history = sorted(self.hr_history)
-                q1 = sorted_history[len(sorted_history) // 4]
-                q3 = sorted_history[3 * len(sorted_history) // 4]
-                iqr = q3 - q1
+            # Check 2: Simple range check based on physiological limits
+            # KHÔNG dùng IQR vì có thể bị "stuck" khi history đồng nhất
+            # Thay vào đó, dùng fixed tolerance từ median
+            if hr_accepted and len(self.hr_history) >= 5:
+                current_median = float(np.median(self.hr_history))
+                # Tolerance: ±25 BPM hoặc ±30% từ median, chọn giá trị lớn hơn
+                tolerance = max(25.0, current_median * 0.30)
+                lower_bound = current_median - tolerance
+                upper_bound = current_median + tolerance
                 
-                # Sử dụng 2.0 * IQR (cho phép nhiều hơn 1.5x tiêu chuẩn vì PPG có variance cao)
-                lower_bound = q1 - 2.0 * iqr
-                upper_bound = q3 + 2.0 * iqr
+                # Clamp bounds trong physiological range
+                lower_bound = max(40.0, lower_bound)
+                upper_bound = min(180.0, upper_bound)
                 
                 if hr_value < lower_bound or hr_value > upper_bound:
                     hr_accepted = False
-                    rejection_reason = f"IQR outlier: {hr_value:.1f} outside [{lower_bound:.1f}, {upper_bound:.1f}]"
+                    rejection_reason = f"outside tolerance: {hr_value:.1f} not in [{lower_bound:.0f}, {upper_bound:.0f}]"
             
             if hr_accepted:
                 self.hr_history.append(float(hr_value))
@@ -1422,9 +1436,8 @@ class MAX30102Sensor(BaseSensor):
                 self.logger.debug("[HR accepted] %.1f BPM → median=%.1f (history=%d)", 
                                   hr_value, self.measurement.heart_rate, len(self.hr_history))
             else:
-                # Log rejection nhưng KHÔNG đánh mất valid state nếu đã có giá trị tốt
                 self.logger.debug("[HR rejected] %.1f BPM - %s", hr_value, rejection_reason)
-                # Giữ measurement.hr_valid = True nếu history không rỗng
+                # Giữ valid state nếu đã có history
                 if len(self.hr_history) > 0:
                     self.measurement.heart_rate = float(np.median(self.hr_history))
                     self.measurement.hr_valid = True
@@ -1485,9 +1498,8 @@ class MAX30102Sensor(BaseSensor):
         # Reset finger detection state
         self.finger.reset()
         
-        # Reset trend tracking variables
+        # Reset trend tracking variables (chỉ cho HR)
         self._last_hr_value = 0.0
-        self._last_spo2_value = 0.0
         self._hr_jump_count = 0
 
     def end_measurement_session(self) -> None:
