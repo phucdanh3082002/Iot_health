@@ -698,6 +698,16 @@ class HeartRateScreen(Screen):
         # Không cần lưu ở Screen nữa
         self.current_hr = 0.0
         self.current_spo2 = 0.0
+        
+        # ============================================================
+        # GRACE PERIOD - Giữ giá trị cũ khi mất tín hiệu tạm thời
+        # ============================================================
+        self._last_valid_hr = 0.0
+        self._last_valid_spo2 = 0.0
+        self._hr_invalid_since = 0.0  # Timestamp khi HR bắt đầu invalid
+        self._spo2_invalid_since = 0.0  # Timestamp khi SpO2 bắt đầu invalid
+        self._grace_period = 2.5  # Giữ giá trị cũ trong 2.5 giây
+        self._dimmed_alpha = 0.5  # Độ mờ khi hiển thị giá trị cũ
 
         self._build_layout()
         self.controller = HeartRateMeasurementController(self)
@@ -1217,26 +1227,76 @@ class HeartRateScreen(Screen):
         spo2_valid: bool,
         controller_state: str,
     ) -> None:
-        """Cập nhật chỉ số realtime với màu sắc động theo ngưỡng sức khỏe."""
+        """
+        Cập nhật chỉ số realtime với Grace Period.
+        
+        Grace Period: Khi mất tín hiệu tạm thời, giữ giá trị cũ trong 2.5s
+        và làm mờ (dim) để người dùng biết đó là giá trị lịch sử.
+        """
+        import time
+        now = time.time()
+        
         if controller_state in (HeartRateMeasurementController.STATE_MEASURING, HeartRateMeasurementController.STATE_WAITING):
-            # Cập nhật HR với màu động
+            # ============================================================
+            # CẬP NHẬT HR VỚI GRACE PERIOD
+            # ============================================================
             if hr_valid and heart_rate > 0:
+                # Tín hiệu tốt - cập nhật giá trị và reset invalid timer
+                self._last_valid_hr = heart_rate
+                self._hr_invalid_since = 0.0
+                
                 self.hr_value_label.text = f"{heart_rate:.0f} BPM"
                 self.hr_value_label.text_color = self._get_hr_color(heart_rate)
                 self.pulse_widget.start_pulse(max(40.0, heart_rate))
-                # Cập nhật màu waveform theo HR status
                 self.waveform_widget.set_color(self._get_hr_color(heart_rate))
             else:
-                self.hr_value_label.text = "-- BPM"
-                self.hr_value_label.text_color = TEXT_PRIMARY
+                # Tín hiệu mất - kiểm tra Grace Period
+                if self._hr_invalid_since == 0.0:
+                    self._hr_invalid_since = now  # Bắt đầu đếm thời gian invalid
+                
+                time_invalid = now - self._hr_invalid_since
+                
+                if time_invalid < self._grace_period and self._last_valid_hr > 0:
+                    # Trong Grace Period - hiển thị giá trị cũ nhưng Mờ ĐI
+                    hr_color = self._get_hr_color(self._last_valid_hr)
+                    dimmed_color = (hr_color[0], hr_color[1], hr_color[2], self._dimmed_alpha)
+                    self.hr_value_label.text = f"{self._last_valid_hr:.0f} BPM"
+                    self.hr_value_label.text_color = dimmed_color
+                    # Giữ pulse animation với nhịp cũ
+                    self.pulse_widget.start_pulse(max(40.0, self._last_valid_hr))
+                else:
+                    # Hết Grace Period - hiển thị "--"
+                    self.hr_value_label.text = "-- BPM"
+                    self.hr_value_label.text_color = TEXT_PRIMARY
+                    self.pulse_widget.stop_pulse()
 
-            # Cập nhật SpO2 với màu động
+            # ============================================================
+            # CẬP NHẬT SPO2 VỚI GRACE PERIOD
+            # ============================================================
             if spo2_valid and spo2 > 0:
+                # Tín hiệu tốt
+                self._last_valid_spo2 = spo2
+                self._spo2_invalid_since = 0.0
+                
                 self.spo2_value_label.text = f"{spo2:.1f} %"
                 self.spo2_value_label.text_color = self._get_spo2_color(spo2)
             else:
-                self.spo2_value_label.text = "-- %"
-                self.spo2_value_label.text_color = TEXT_PRIMARY
+                # Tín hiệu mất - kiểm tra Grace Period
+                if self._spo2_invalid_since == 0.0:
+                    self._spo2_invalid_since = now
+                
+                time_invalid = now - self._spo2_invalid_since
+                
+                if time_invalid < self._grace_period and self._last_valid_spo2 > 0:
+                    # Trong Grace Period - hiển thị giá trị cũ nhưng Mờ ĐI
+                    spo2_color = self._get_spo2_color(self._last_valid_spo2)
+                    dimmed_color = (spo2_color[0], spo2_color[1], spo2_color[2], self._dimmed_alpha)
+                    self.spo2_value_label.text = f"{self._last_valid_spo2:.1f} %"
+                    self.spo2_value_label.text_color = dimmed_color
+                else:
+                    # Hết Grace Period - hiển thị "--"
+                    self.spo2_value_label.text = "-- %"
+                    self.spo2_value_label.text_color = TEXT_PRIMARY
     
     def update_waveform(self, samples: list) -> None:
         """
@@ -1372,6 +1432,12 @@ class HeartRateScreen(Screen):
         if hasattr(self, 'waveform_widget'):
             self.waveform_widget.clear()
             self.waveform_widget.set_color(COLOR_HEALTHY)
+        
+        # Reset Grace Period state
+        self._last_valid_hr = 0.0
+        self._last_valid_spo2 = 0.0
+        self._hr_invalid_since = 0.0
+        self._spo2_invalid_since = 0.0
 
     def show_error_status(self, message: str) -> None:
         self.status_label.text = message

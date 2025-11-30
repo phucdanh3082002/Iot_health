@@ -484,10 +484,10 @@ class HRCalculator:
         """
         Calculate Signal Quality Index (SQI) from 0-100%
         
-        Components:
-        - SNR (40%): Signal-to-Noise Ratio
-        - Perfusion (30%): AC/DC ratio indicating blood flow
-        - Stability (20%): Baseline drift rate
+        Components (RELAXED for DIY hardware):
+        - SNR (45%): Signal-to-Noise Ratio (relaxed: 12dB = 100%)
+        - Perfusion (35%): AC/DC ratio indicating blood flow
+        - Stability (10%): Baseline drift rate (lowered weight - less important with bandpass filter)
         - Regularity (10%): Inter-beat interval consistency
         
         Args:
@@ -504,31 +504,33 @@ class HRCalculator:
         
         sqi_scores = []
         
-        # 1. SNR Score (40%) - Signal quality based on noise
+        # 1. SNR Score (45%) - RELAXED for DIY hardware
+        # DIY hardware thường chỉ đạt 8-12dB, thay vì 15-20dB như thiết bị chuyên dụng
         try:
-            # Calculate AC component (signal)
+            # Calculate AC component (signal) using RMS of detrended signal
             ir_mean = np.mean(ir_data)
             ir_ac_rms = np.sqrt(np.mean((ir_data - ir_mean) ** 2))
             
-            # Estimate noise from high-frequency components
-            # Use difference between consecutive samples as noise proxy
-            ir_diff = np.diff(ir_data)
-            noise_rms = np.sqrt(np.mean(ir_diff ** 2)) / np.sqrt(2)  # Normalize
+            # Improved noise estimation: Use median absolute deviation of 2nd derivative
+            # This is more robust than simple diff for PPG signals
+            ir_diff2 = np.diff(ir_data, n=2)  # 2nd derivative to capture high-freq noise
+            noise_mad = np.median(np.abs(ir_diff2 - np.median(ir_diff2)))
+            noise_rms = noise_mad * 1.4826 / 2  # Convert MAD to RMS estimate, /2 for 2nd derivative
             
             if noise_rms > 0:
                 snr = ir_ac_rms / noise_rms
                 snr_db = 10 * np.log10(snr) if snr > 0 else 0
-                # Map SNR: 0dB=0%, 20dB=100%
-                snr_score = np.clip(snr_db / 20.0 * 100, 0, 100)
+                # RELAXED: Map SNR 0dB=0%, 12dB=100% (was 20dB)
+                snr_score = np.clip(snr_db / 12.0 * 100, 0, 100)
             else:
                 snr_score = 100
             
-            sqi_scores.append(('SNR', snr_score, 0.40))
+            sqi_scores.append(('SNR', snr_score, 0.45))
             
         except Exception:
-            sqi_scores.append(('SNR', 50, 0.40))
+            sqi_scores.append(('SNR', 50, 0.45))
         
-        # 2. Perfusion Index Score (30%) - AC/DC ratio
+        # 2. Perfusion Index Score (35%) - AC/DC ratio (INCREASED weight)
         try:
             ir_dc = np.mean(ir_data)
             ir_ac = np.max(ir_data) - np.min(ir_data)
@@ -540,12 +542,13 @@ class HRCalculator:
             else:
                 perfusion_score = 0
             
-            sqi_scores.append(('Perfusion', perfusion_score, 0.30))
+            sqi_scores.append(('Perfusion', perfusion_score, 0.35))
             
         except Exception:
-            sqi_scores.append(('Perfusion', 50, 0.30))
+            sqi_scores.append(('Perfusion', 50, 0.35))
         
-        # 3. Baseline Stability Score (20%) - Drift rate
+        # 3. Baseline Stability Score (10%) - LOWERED weight
+        # Less important because bandpass filter already removes drift
         try:
             # Calculate baseline drift using linear regression
             x = np.arange(len(ir_data))
@@ -555,13 +558,13 @@ class HRCalculator:
             # Convert to drift per second
             drift_per_sec = drift_per_sample * sample_rate
             
-            # Good stability: <50 counts/s, Map 0-200 → 100-0%
-            stability_score = np.clip(100 - (drift_per_sec / 200.0 * 100), 0, 100)
+            # Good stability: <100 counts/s (relaxed from 50), Map 0-300 → 100-0%
+            stability_score = np.clip(100 - (drift_per_sec / 300.0 * 100), 0, 100)
             
-            sqi_scores.append(('Stability', stability_score, 0.20))
+            sqi_scores.append(('Stability', stability_score, 0.10))
             
         except Exception:
-            sqi_scores.append(('Stability', 50, 0.20))
+            sqi_scores.append(('Stability', 50, 0.10))
         
         # 4. Peak Regularity Score (10%) - IBI consistency
         try:
@@ -630,14 +633,15 @@ class HRCalculator:
         red_raw = np.clip(red_raw, 0, 250000)
         
         # ============================================================
-        # NEW: Bandpass Filter 0.5-5 Hz CHỈ CHO PEAK DETECTION
+        # NEW: Bandpass Filter 0.5-3 Hz CHO PEAK DETECTION
         # CRITICAL: SpO2 calculation cần RAW data (có DC component)
+        # Giảm từ 5Hz xuống 3Hz để loại bỏ nhiễu tần số cao và sóng dội
         # ============================================================
         ir_for_peaks = ir_raw.copy()  # For peak detection
         try:
             nyquist = sample_rate / 2.0
-            low_cutoff = 0.5 / nyquist   # 0.5 Hz = 30 BPM
-            high_cutoff = 5.0 / nyquist  # 5 Hz = 300 BPM
+            low_cutoff = 0.5 / nyquist   # 0.5 Hz = 30 BPM (lower bound)
+            high_cutoff = 3.0 / nyquist  # 3 Hz = 180 BPM (upper bound - physiological max)
             
             # Butterworth bandpass filter order 2 (gentle roll-off, no ringing)
             b, a = scipy_signal.butter(2, [low_cutoff, high_cutoff], btype='band')
@@ -673,7 +677,10 @@ class HRCalculator:
 
         n_th = int(np.mean(x))
         n_th = max(30, min(60, n_th))
-        min_dist = max(4, int(sample_rate * 0.25))
+        # Tăng min_dist từ 0.25s lên 0.37s để loại bỏ Dicrotic Notch (sóng dội)
+        # 0.37s = ~162 BPM max, đủ cho mọi trường hợp sinh lý bình thường
+        # Với sample_rate=50Hz: min_dist = 18 mẫu (0.36s)
+        min_dist = max(6, int(sample_rate * 0.37))
         ir_valley_locs, n_peaks = cls.find_peaks(x, x.shape[0], n_th, min_dist, cls.MAX_NUM_PEAKS)
         
         hr = -999.0
@@ -939,8 +946,9 @@ class HRCalculator:
             spo2 = float(np.clip(spo2, 70.0, 100.0))
             
             # Confidence check: reject if variance too high
-            # Relaxed threshold from 15% to 20% due to hardware variability
-            if coefficient_of_variation < 0.20:  # CV < 20% → stable measurement
+            # RELAXED threshold from 20% to 35% for DIY hardware
+            # DIY sensors have higher variance due to optical path inconsistency
+            if coefficient_of_variation < 0.35:  # CV < 35% → acceptable measurement
                 spo2_valid = True
                 
                 # Determine region for logging
@@ -959,7 +967,7 @@ class HRCalculator:
                              spo2, ratio_median, coefficient_of_variation * 100, region)
             else:
                 spo2_valid = False
-                logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%%)", 
+                logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%% > 35%%)", 
                              spo2, coefficient_of_variation * 100)
         else:
             logger.warning("[HRCalc] R-value %.3f ngoài khoảng hợp lệ 0.4-2.5 (SpO2 không tính được)", ratio_median)
@@ -1234,7 +1242,9 @@ class MAX30102Sensor(BaseSensor):
         self.min_measurement_seconds = min_window
 
         self.validity_timeout = float(config.get("validity_timeout", 3.0))
-        self.hr_algorithm_rate = 25
+        # Tăng từ 25 lên 50 Hz để tăng độ phân giải, loại bỏ sóng dội (Dicrotic Notch)
+        # 50Hz là đủ chuẩn y tế cho PPG, giảm tải CPU hơn 100Hz
+        self.hr_algorithm_rate = 50
         default_samples = self.hardware_sample_rate // 4 or 4
         self.max_samples_per_read = max(1, int(config.get("max_samples_per_read", default_samples)))
 
