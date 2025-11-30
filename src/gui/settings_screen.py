@@ -577,9 +577,44 @@ class SettingsScreen(Screen):
     def _on_back_pressed(self, instance):
         """Handle back button press."""
         if self.changes_made:
-            # TODO: Show save confirmation dialog
-            pass
+            # Show save confirmation dialog if changes were made
+            if self.save_dialog is None:
+                self.save_dialog = MDDialog(
+                    title="Cài đặt chưa lưu",
+                    text="Bạn có các thay đổi chưa được lưu. Bạn có muốn lưu chúng?",
+                    buttons=[
+                        MDFlatButton(
+                            text="HỦY BỎ",
+                            on_release=lambda x: self.save_dialog.dismiss()
+                        ),
+                        MDFlatButton(
+                            text="KHÔNG LƯU",
+                            on_release=lambda x: self._discard_changes_and_navigate()
+                        ),
+                        MDFlatButton(
+                            text="LƯU",
+                            text_color=MED_CARD_ACCENT,
+                            on_release=lambda x: self._confirm_save_settings_and_navigate()
+                        ),
+                    ],
+                )
+            self.save_dialog.open()
+        else:
+            self.app_instance.navigate_to_screen('dashboard')
+
+    def _discard_changes_and_navigate(self):
+        """Dismiss dialog, reset changes_made, and navigate to dashboard."""
+        if self.save_dialog:
+            self.save_dialog.dismiss()
+        self.changes_made = False
         self.app_instance.navigate_to_screen('dashboard')
+
+    def _confirm_save_settings_and_navigate(self, instance):
+        """Confirm save settings, then navigate to dashboard."""
+        if self.save_dialog:
+            self.save_dialog.dismiss()
+        # Save settings, then navigate after save completes
+        self._save_settings(instance, navigate_after_save=True)
     
     def _show_save_dialog(self, instance):
         """Show save confirmation dialog."""
@@ -680,8 +715,36 @@ class SettingsScreen(Screen):
             # System settings
             settings['patient_name'] = self.setting_widgets['patient_name'].text
             
-            # Apply settings (placeholder - should save to config file)
-            self.logger.info(f"Settings saved: {settings}")
+            config_data = self.app_instance.config_data
+            
+            # Update config_data dictionary with new values
+            # Sensor settings
+            config_data.setdefault('sensors', {}).setdefault('max30102', {})['enabled'] = settings['max30102_enabled']
+            config_data['sensors']['max30102']['led_brightness'] = settings['max30102_led_brightness']
+            config_data.setdefault('sensors', {}).setdefault('mlx90614', {})['enabled'] = settings['mlx90614_enabled']
+            config_data['sensors']['mlx90614']['temperature_offset'] = settings['temp_offset']
+            config_data.setdefault('sensors', {}).setdefault('blood_pressure', {})['enabled'] = settings['bp_enabled']
+            config_data['sensors']['blood_pressure']['max_pressure_mmhg'] = settings['bp_max_pressure']
+            
+            # Display settings (assuming these are managed by app_instance attributes for now)
+            setattr(self.app_instance, 'screen_brightness', settings['screen_brightness'])
+            setattr(self.app_instance, 'auto_screen_off', settings['auto_screen_off'])
+            setattr(self.app_instance, 'update_freq', settings['update_freq'])
+            
+            # Alert settings
+            config_data.setdefault('audio', {})['voice_enabled'] = settings['voice_alerts']
+            config_data['audio']['volume'] = settings['voice_volume']
+            config_data.setdefault('thresholds', {}).setdefault('heart_rate', {})['min_normal'] = settings['hr_low_threshold']
+            config_data['thresholds']['heart_rate']['max_normal'] = settings['hr_high_threshold']
+            
+            # System settings - Patient Name (this needs special handling for device-centric)
+            # For now, update a temporary patient_name in app_instance.current_data
+            # In a real device-centric flow, this would update a patient record in the cloud DB.
+            self.app_instance.current_data['patient_name'] = settings['patient_name']
+
+            # Persist the updated configuration to app_config.yaml
+            self.app_instance.persist_config()
+            self.logger.info(f"Settings saved to app_config.yaml and applied.")
             self._play_voice_feedback("Đã lưu cài đặt thành công")
             
             self.changes_made = False
@@ -694,7 +757,7 @@ class SettingsScreen(Screen):
             Clock.schedule_once(lambda dt: self._reset_action_ui(), 1.0)
             
         except Exception as e:
-            self.logger.error(f"Error saving settings: {e}")
+            self.logger.error(f"Error saving settings: {e}", exc_info=True)
             self._play_voice_feedback("Lỗi khi lưu cài đặt")
             self._reset_action_ui()
     
@@ -726,8 +789,12 @@ class SettingsScreen(Screen):
             self.setting_widgets['patient_name'].text = 'Bệnh nhân'
             
             self._play_voice_feedback("Đã khôi phục cài đặt mặc định")
-            self.changes_made = True
+            self.changes_made = False # No changes needed if we reset to defaults and save
             
+            # Persist default configuration to app_config.yaml
+            self.app_instance.persist_config()
+            self.logger.info("Default settings restored and persisted to app_config.yaml")
+
             # Complete progress
             self.action_progress.value = 100
             
@@ -736,7 +803,8 @@ class SettingsScreen(Screen):
             Clock.schedule_once(lambda dt: self._reset_action_ui(), 1.0)
             
         except Exception as e:
-            self.logger.error(f"Error resetting settings: {e}")
+            self.logger.error(f"Error resetting settings: {e}", exc_info=True)
+            self._play_voice_feedback("Lỗi khi khôi phục cài đặt mặc định")
             self._reset_action_ui()
     
     # ------------------------------------------------------------------
@@ -780,15 +848,15 @@ class SettingsScreen(Screen):
             if volume is None:
                 volume = int(self.setting_widgets['voice_volume'].value)
             
-            speak_fn = getattr(self.app_instance, 'speak', None)
+            speak_fn = getattr(self.app_instance, 'speak_text', None)
             if speak_fn is None:
-                self.logger.warning("TTS engine not available on app instance")
+                self.logger.warning("TTS engine (speak_text) not available on app instance")
                 return
 
-            speak_fn(message, volume)
+            speak_fn(message, volume=volume, force=True) # Force to play, even if other TTS is active
             
         except Exception as e:
-            self.logger.error(f"Error playing voice feedback: {e}")
+            self.logger.error(f"Error playing voice feedback: {e}", exc_info=True)
     
     def _reset_action_ui(self):
         """Reset action buttons and progress bar to default state"""
@@ -807,8 +875,40 @@ class SettingsScreen(Screen):
         """Load settings from configuration"""
         try:
             # TODO: Load from actual config file
-            # For now, settings are initialized with default values
-            self.logger.info("Settings loaded")
+            config_data = self.app_instance.config_data
+            
+            # Sensor settings
+            self.setting_widgets['max30102_enabled'].active = config_data.get('sensors', {}).get('max30102', {}).get('enabled', True)
+            self.setting_widgets['max30102_led_brightness'].value = config_data.get('sensors', {}).get('max30102', {}).get('led_brightness', 127)
+            self.setting_widgets['mlx90614_enabled'].active = config_data.get('sensors', {}).get('mlx90614', {}).get('enabled', True)
+            self.setting_widgets['temp_offset'].value = config_data.get('sensors', {}).get('mlx90614', {}).get('temperature_offset', 0.0)
+            self.setting_widgets['bp_enabled'].active = config_data.get('sensors', {}).get('blood_pressure', {}).get('enabled', True)
+            self.setting_widgets['bp_max_pressure'].value = config_data.get('sensors', {}).get('blood_pressure', {}).get('max_pressure_mmhg', 180)
+            
+            # Display settings (not in config yet, use app_instance attributes if they exist or defaults)
+            # Assuming screen_brightness, auto_screen_off, update_freq might be managed differently
+            # For now, these are not directly linked to app_config.yaml in the provided structure
+            self.setting_widgets['screen_brightness'].value = getattr(self.app_instance, 'screen_brightness', 80)
+            self.setting_widgets['auto_screen_off'].active = getattr(self.app_instance, 'auto_screen_off', False)
+            self.setting_widgets['update_freq'].value = getattr(self.app_instance, 'update_freq', 1.0)
+            
+            # Alert settings
+            self.setting_widgets['voice_alerts'].active = config_data.get('audio', {}).get('voice_enabled', True)
+            self.setting_widgets['voice_volume'].value = config_data.get('audio', {}).get('volume', 80)
+            # Thresholds are in a nested 'thresholds' key in config
+            self.setting_widgets['hr_low_threshold'].value = config_data.get('thresholds', {}).get('heart_rate', {}).get('min_normal', 60)
+            self.setting_widgets['hr_high_threshold'].value = config_data.get('thresholds', {}).get('heart_rate', {}).get('max_normal', 100)
+            
+            # System settings
+            # Patient name is dynamic and not directly in config for device-centric.
+            # Instead, it might be in app_instance.current_data or resolved from DB.
+            # For now, display a placeholder or device_id if patient_id is not resolved
+            patient_name = self.app_instance.current_data.get('patient_name', 'Bệnh nhân') 
+            if not patient_name or patient_name == 'Bệnh nhân': # If not resolved yet, try device_id
+                patient_name = self.app_instance.device_id
+            self.setting_widgets['patient_name'].text = patient_name
+            
+            self.logger.info("Settings loaded from config")
         except Exception as e:
             self.logger.error(f"Error loading settings: {e}")
     

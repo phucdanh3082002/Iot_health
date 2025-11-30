@@ -20,6 +20,9 @@ from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDIcon, MDLabel
 from kivymd.uix.progressbar import MDProgressBar
 
+# Import ScenarioID cho TTS
+from src.utils.tts_manager import ScenarioID
+
 
 MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
 MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
@@ -295,8 +298,9 @@ class HeartRateMeasurementController:
             remaining_time = max(0.0, self.MEASUREMENT_DURATION - measurement_elapsed)
             progress_percent = (measurement_elapsed / self.MEASUREMENT_DURATION * 100.0) if self.MEASUREMENT_DURATION else 0.0
             
-            # Cập nhật UI - progress phụ thuộc vào window_fill hoặc elapsed
-            progress_display = max(window_fill * 100.0, progress_percent)
+            # Cập nhật UI - progress dựa trên thời gian đo (trong giai đoạn measuring)
+            # Window fill chỉ dùng để tham khảo hoặc trong giai đoạn chờ
+            progress_display = progress_percent
             self.screen.update_progress(progress_display, measurement_status, remaining_time)
             
             # Hiển thị hướng dẫn phù hợp
@@ -750,7 +754,7 @@ class HeartRateScreen(Screen):
         self.spo2_value_label.text = "-- %"
         self.status_label.text = "Đang khởi động cảm biến..."
         self.signal_label.text = "Chất lượng tín hiệu: --"
-        self.instruction_label.text = "Đặt ngón tay lên cảm biến - không giới hạn thời gian"
+        self.instruction_label.text = f"Đặt ngón tay lên cảm biến. Đo tối thiểu {self.controller.MINIMUM_MEASUREMENT_TIME:.0f}s."
         self.pulse_widget.start_pulse(60.0)
 
     def show_waiting_instructions(self) -> None:
@@ -779,16 +783,30 @@ class HeartRateScreen(Screen):
         """Cập nhật thanh tiến trình (compact cho màn hình nhỏ)."""
         self.progress_bar.value = max(0.0, min(100.0, percent))
         
+        # Calculate total measurement duration for display
+        total_duration = self.controller.MEASUREMENT_DURATION
+        
         if measurement_status == "waiting":
-            self.status_label.text = "Chờ..."
+            self.status_label.text = "Chờ ngón tay..."
+            self.instruction_label.text = f"Đặt ngón tay lên cảm biến. Đo tối thiểu {self.controller.MINIMUM_MEASUREMENT_TIME:.0f}s."
+            self.status_label.text_color = TEXT_PRIMARY
         elif measurement_status == "paused":
-            self.status_label.text = f"Đặt lại ({remaining_time:.0f}s)"
+            self.status_label.text = f"Mất ngón tay! Đặt lại ({remaining_time:.0f}s)"
+            self.instruction_label.text = "Giữ yên tĩnh, tín hiệu sẽ ổn định."
+            self.status_label.text_color = MED_WARNING
         elif measurement_status == "poor_signal":
             self.status_label.text = "Tín hiệu yếu"
+            self.instruction_label.text = "Cố định ngón tay, tránh rung lắc."
+            self.status_label.text_color = MED_WARNING
         elif remaining_time > 0:
-            self.status_label.text = f"Đang đo {remaining_time:.0f}s"
+            # Display elapsed time / total duration
+            self.status_label.text = f"Đang đo {total_duration - remaining_time:.0f}/{total_duration:.0f}s"
+            self.instruction_label.text = "Giữ ngón tay cố định trong suốt quá trình đo."
+            self.status_label.text_color = TEXT_PRIMARY
         else:
-            self.status_label.text = "Xử lý..."
+            self.status_label.text = "Đang xử lý kết quả..."
+            self.instruction_label.text = "Vui lòng chờ."
+            self.status_label.text_color = TEXT_PRIMARY
 
     def show_signal_info(
         self, 
@@ -801,13 +819,19 @@ class HeartRateScreen(Screen):
         peak_count: int = 0  # NEW: Number of peaks
     ) -> None:
         """Hiển thị chất lượng tín hiệu ngắn gọn cho màn hình nhỏ."""
-        # Hiển thị compact cho màn hình 480×320
-        if quality > 70:
-            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
-        elif quality > 50:
-            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
+        # Sử dụng SQI (0-100) để đánh giá chất lượng tổng thể
+        if sqi >= 80:
+            quality_text = "Tốt"
+            color = MED_CARD_ACCENT # Greenish
+        elif sqi >= 50:
+            quality_text = "Trung bình"
+            color = MED_WARNING # Orangeish
         else:
-            self.signal_label.text = f"Chất lượng: {quality:.0f}%"
+            quality_text = "Kém"
+            color = MED_WARNING # Reddish
+        
+        self.signal_label.text = f"Chất lượng: {quality_text} (SQI: {sqi:.0f}%)"
+        self.signal_label.text_color = color
 
     def update_live_metrics(
         self,
@@ -843,6 +867,15 @@ class HeartRateScreen(Screen):
         self.pulse_widget.stop_pulse()
         self._style_start_button(False)
 
+        # ============================================================
+        # CRITICAL: Reset HR announcement state to prevent TTS loop
+        # Đánh dấu session đã kết thúc - không cho TTS đọc thêm
+        # ============================================================
+        self.app_instance._hr_last_announced = None
+        # KHÔNG reset _hr_result_announced_this_session ở đây
+        # vì chúng ta muốn ngăn TTS đọc lại sau khi đo xong
+        # Flag này sẽ chỉ reset khi vào màn hình mới hoặc bắt đầu session mới
+
         if success and ((hr_valid and heart_rate > 0) or (spo2_valid and spo2 > 0)):
             self.current_hr = heart_rate if hr_valid and heart_rate > 0 else 0.0
             self.current_spo2 = spo2 if spo2_valid and spo2 > 0 else 0.0
@@ -853,6 +886,39 @@ class HeartRateScreen(Screen):
             self.progress_bar.value = 100.0
             self.instruction_label.text = "Kết quả OK"
             self._style_save_button(True)
+            
+            # ============================================================
+            # STEP 1: TTS - Đọc kết quả cuối cùng (CHỈ ở đây, sau khi đo hoàn tất)
+            # ============================================================
+            if self.current_hr > 0 and self.current_spo2 > 0:
+                hr_int = int(round(self.current_hr))
+                spo2_int = int(round(self.current_spo2))
+                self.app_instance._speak_scenario(
+                    ScenarioID.HR_RESULT, 
+                    bpm=hr_int, 
+                    spo2=spo2_int
+                )
+                self.logger.info("TTS đọc kết quả: HR=%d, SpO2=%d", hr_int, spo2_int)
+            
+            # ============================================================
+            # STEP 2: Kiểm tra ngưỡng & TTS đọc cảnh báo nếu cần
+            # Gọi ngay sau khi đo hoàn tất, TRƯỚC khi user nhấn "Lưu"
+            # Để TTS có thể đọc cảnh báo ngay lập tức
+            # ============================================================
+            try:
+                # Chuẩn bị health_data cho alert checking
+                health_data_for_alert = {
+                    'heart_rate': self.current_hr,
+                    'spo2': self.current_spo2,
+                    'timestamp': time.time()
+                }
+                
+                # Gọi hàm kiểm tra alert (sẽ tạo alert nếu cần và TTS đọc cảnh báo)
+                self.app_instance._check_and_create_alert_immediate(health_data_for_alert)
+                
+            except Exception as e:
+                self.logger.error("Error checking alerts: %s", e)
+            
             self.logger.info(
                 "Đo nhịp tim thành công (HR=%.1f valid=%s, SpO2=%.1f valid=%s)",
                 self.current_hr,
@@ -893,8 +959,10 @@ class HeartRateScreen(Screen):
         self.hr_value_label.text = "-- BPM"
         self.spo2_value_label.text = "-- %"
         self.status_label.text = "Sẵn sàng"
+        self.status_label.text_color = TEXT_PRIMARY # Reset màu về mặc định
         self.signal_label.text = "Chất lượng: --"
-        self.instruction_label.text = "Đặt ngón tay"
+        self.signal_label.text_color = TEXT_MUTED # Reset màu về mặc định
+        self.instruction_label.text = "Đặt ngón tay lên cảm biến."
         self.pulse_widget.stop_pulse()
 
     def show_error_status(self, message: str) -> None:
@@ -941,6 +1009,18 @@ class HeartRateScreen(Screen):
             })
         
         try:
+            # ============================================================
+            # CRITICAL: Stop sensor & reset state to avoid TTS loop
+            # ============================================================
+            # Stop sensor immediately to stop callbacks
+            try:
+                self.app_instance.stop_sensor("MAX30102")
+            except Exception as e:
+                self.logger.debug("Could not stop MAX30102: %s", e)
+            
+            # Reset the last announced HR/SpO2 to prevent repeated TTS
+            self.app_instance._hr_last_announced = None
+            
             self.app_instance.save_measurement_to_database(measurement_data)
             self.logger.info(
                 "Đã lưu kết quả HR/SpO2: HR=%.1f BPM, SpO2=%.1f%%",
@@ -958,6 +1038,10 @@ class HeartRateScreen(Screen):
         self.logger.info("Heart rate measurement screen entered")
         self.controller.reset()
         self.reset_to_idle()
+        
+        # Reset TTS announcement flag cho session mới
+        self.app_instance._hr_result_announced_this_session = False
+        self.app_instance._hr_last_announced = None
 
     def on_leave(self) -> None:
         self.logger.info("Heart rate measurement screen left")
@@ -968,3 +1052,7 @@ class HeartRateScreen(Screen):
         except Exception:
             pass
         self.pulse_widget.stop_pulse()
+        
+        # Reset TTS state khi rời màn hình
+        self.app_instance._hr_result_announced_this_session = False
+        self.app_instance._hr_last_announced = None

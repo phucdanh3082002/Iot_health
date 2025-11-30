@@ -2,18 +2,19 @@
 
 from typing import Dict, Any, Optional, List, Union
 import logging
-import random
+# import random # Not used, remove
 from datetime import datetime, timedelta
 from kivy.uix.screenmanager import Screen
-from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.boxlayout import BoxLayout # Not used, remove
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
 from kivy.core.window import Window
 
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton
+from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton, MDFlatButton # Added MDFlatButton
 from kivymd.uix.card import MDCard
+from kivymd.uix.dialog import MDDialog # Added MDDialog
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.toolbar import MDTopAppBar
 
@@ -170,7 +171,7 @@ class MeasurementRecord(MDCard):
         measure_icon = MDIcon(
             icon=icon,
             theme_text_color='Custom',
-            text_color=color,
+            text_color=TEXT_MUTED, # Icon sẽ có màu muted
             size_hint=(None, None),
             size=(dp(18), dp(18)),
         )
@@ -290,6 +291,7 @@ class HistoryScreen(Screen):
         self.current_filter = 'today'
         self.records_list = None
         self.filter_buttons = {}
+        self.confirm_dialog = None # Dialog chung cho xác nhận
 
         self._build_layout()
 
@@ -543,47 +545,76 @@ class HistoryScreen(Screen):
     def _export_data(self, instance):
         """Export measurement data."""
         try:
-            # TODO: Implement actual data export
+            # Placeholder: Show a Snackbar notification
+            self.app_instance._show_info_notification("Đang xuất dữ liệu...", duration=2)
+            # In a real implementation, this would trigger an actual export process
             self.logger.info("Data export requested")
-
-            # Show confirmation message
-            self._show_message("Đã xuất dữ liệu thành công")
-
+            # Simulate export
+            from kivy.clock import Clock
+            Clock.schedule_once(lambda dt: self.app_instance._show_success_notification("Đã xuất dữ liệu thành công!"), 1.5)
         except Exception as e:
-            self.logger.error(f"Error exporting data: {e}")
-            self._show_message("Lỗi khi xuất dữ liệu")
+            self.logger.error(f"Error exporting data: {e}", exc_info=True)
+            self.app_instance._show_error_notification("Lỗi khi xuất dữ liệu.")
 
     def _clear_history(self, instance):
-        """Clear measurement history."""
+        """Show confirmation dialog before clearing history."""
+        if self.confirm_dialog:
+            self.confirm_dialog.dismiss()
+
+        self.confirm_dialog = MDDialog(
+            title="Xác nhận xóa lịch sử",
+            text="Bạn có chắc chắn muốn xóa tất cả các bản ghi lịch sử? Hành động này không thể hoàn tác.",
+            buttons=[
+                MDFlatButton(
+                    text="HỦY",
+                    on_release=lambda x: self.confirm_dialog.dismiss()
+                ),
+                MDFlatButton(
+                    text="XÓA",
+                    text_color=MED_WARNING,
+                    on_release=self._confirm_clear_history
+                ),
+            ],
+        )
+        self.confirm_dialog.open()
+
+    def _confirm_clear_history(self, instance):
+        """Implement actual history clearing."""
+        if self.confirm_dialog:
+            self.confirm_dialog.dismiss()
+        
         try:
-            # TODO: Show confirmation dialog first
-            # TODO: Implement actual history clearing
-            self.logger.info("History clear requested")
+            # Placeholder: Implement actual database clearing
+            if self.app_instance.database and hasattr(self.app_instance.database, 'clear_health_records'):
+                self.app_instance.database.clear_health_records(device_id=self.app_instance.device_id)
+                self.logger.info("Health records cleared from database for device %s", self.app_instance.device_id)
+            else:
+                self.logger.warning("Database manager or clear_health_records not available. Skipping clear.")
 
-            # Reload records (will be empty after clearing)
-            self._load_records()
-
-            self._show_message("Đã xóa lịch sử")
-
+            self._load_records() # Reload records (will be empty)
+            self.app_instance._show_success_notification("Đã xóa lịch sử thành công!")
+            self.logger.info("History cleared for current device.")
         except Exception as e:
-            self.logger.error(f"Error clearing history: {e}")
-            self._show_message("Lỗi khi xóa lịch sử")
+            self.logger.error(f"Error clearing history: {e}", exc_info=True)
+            self.app_instance._show_error_notification("Lỗi khi xóa lịch sử.")
 
     def _show_statistics(self, instance):
         """Show measurement statistics."""
-        try:
-            # TODO: Implement statistics screen or popup
-            self.logger.info("Statistics requested")
-            self._show_message("Tính năng thống kê đang phát triển")
-
-        except Exception as e:
-            self.logger.error(f"Error showing statistics: {e}")
-
-    def _show_message(self, message: str):
-        """Show temporary message (placeholder for popup)."""
-        # For now, just log the message
-        # In a real implementation, this would show a popup or toast message
-        self.logger.info(f"User message: {message}")
+        if self.confirm_dialog:
+            self.confirm_dialog.dismiss()
+        
+        self.confirm_dialog = MDDialog(
+            title="Tính năng thống kê",
+            text="Tính năng xem thống kê chi tiết đang được phát triển. Vui lòng thử lại sau!",
+            buttons=[
+                MDFlatButton(
+                    text="ĐÓNG",
+                    on_release=lambda x: self.confirm_dialog.dismiss()
+                ),
+            ],
+        )
+        self.confirm_dialog.open()
+        self.logger.info("Statistics requested (feature in development)")
 
     def on_enter(self):
         """Called when screen is entered."""

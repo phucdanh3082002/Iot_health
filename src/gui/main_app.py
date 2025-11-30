@@ -151,6 +151,7 @@ class HealthMonitorApp(MDApp):
         self.tts_manager = self._init_tts_manager()
         self._hr_finger_present: Optional[bool] = None
         self._hr_last_announced: Optional[tuple[int, int]] = None
+        self._hr_result_announced_this_session: bool = False  # Track nếu đã đọc kết quả trong session
         self._temp_last_status: Optional[str] = None
 
         # Default sensor status map aligns with available sensors
@@ -628,21 +629,29 @@ class HealthMonitorApp(MDApp):
             spo2_valid = bool(self.current_data.get('spo2_valid'))
             heart_rate_value = self.current_data.get('heart_rate')
             spo2_value = self.current_data.get('spo2')
-
-            if hr_valid and spo2_valid and finger_detected:
-                if heart_rate_value is not None and spo2_value is not None:
-                    hr_int = int(round(heart_rate_value))
-                    spo2_int = int(round(spo2_value))
-                    if self._hr_last_announced != (hr_int, spo2_int):
-                        self._speak_scenario(ScenarioID.HR_RESULT, bpm=hr_int, spo2=spo2_int)
-                        self._hr_last_announced = (hr_int, spo2_int)
-            else:
-                if finger_detected and not hr_valid:
-                    signal_quality = self.current_data.get('signal_quality_ir')
-                    if isinstance(signal_quality, (int, float)) and signal_quality < 40:
-                        self._speak_scenario(ScenarioID.HR_SIGNAL_WEAK)
-                if not hr_valid or not spo2_valid:
-                    self._hr_last_announced = None
+            
+            # ============================================================
+            # TTS LOGIC: KHÔNG đọc kết quả ở đây!
+            # Kết quả sẽ được đọc trong on_measurement_complete() của HeartRateScreen
+            # để đảm bảo đọc đúng giá trị cuối cùng sau khi controller kết thúc đo
+            # ============================================================
+            measurement_ready = bool(self.current_data.get('measurement_ready', False))
+            session_active = bool(self.current_data.get('sensor_status', {}).get('MAX30102', {}).get('session_active', False))
+            
+            # Reset flag khi session mới bắt đầu
+            if session_active and not measurement_ready:
+                self._hr_result_announced_this_session = False
+            
+            # Reset khi finger rời
+            if not finger_detected:
+                self._hr_last_announced = None
+                self._hr_result_announced_this_session = False
+                
+            # Cảnh báo tín hiệu yếu (chỉ khi đang đo, chưa ready)
+            if finger_detected and not hr_valid and session_active and not measurement_ready:
+                signal_quality = self.current_data.get('signal_quality_ir')
+                if isinstance(signal_quality, (int, float)) and signal_quality < 40:
+                    self._speak_scenario(ScenarioID.HR_SIGNAL_WEAK)
             
             # Update timestamp
             self.current_data['timestamp'] = data.get('timestamp', time.time())
@@ -1234,6 +1243,83 @@ class HealthMonitorApp(MDApp):
             }
         
         return result
+    
+    def _check_and_create_alert_immediate(self, health_data: Dict[str, Any]):
+        """
+        Kiểm tra ngưỡng và phát TTS cảnh báo NGAY LẬP TỨC (không chờ lưu DB)
+        
+        Gọi từ on_measurement_complete() để TTS đọc cảnh báo ngay sau khi đo xong
+        Cảnh báo thực sự sẽ được lưu vào DB khi user nhấn "Lưu"
+        
+        Args:
+            health_data: Health record data với heart_rate, spo2, etc.
+        """
+        try:
+            # ============================================================
+            # IMMEDIATE CHECK: Chỉ lấy default thresholds từ config
+            # Không query database (để speed up)
+            # ============================================================
+            thresholds = self._get_default_thresholds_from_config()
+            if not thresholds:
+                self.logger.debug("No thresholds available for immediate alert check")
+                return
+            
+            # Helper function để lấy threshold value
+            def get_threshold(vital_sign: str, bound: str, default: float) -> float:
+                if vital_sign in thresholds and isinstance(thresholds[vital_sign], dict):
+                    return thresholds[vital_sign].get(bound, default)
+                return thresholds.get(f"{vital_sign}_{bound}", default)
+            
+            alerts_to_announce = []
+            
+            # ============================================================
+            # Kiểm tra Heart Rate
+            # ============================================================
+            hr = health_data.get('heart_rate')
+            if hr and hr > 0:
+                hr_min = get_threshold('heart_rate', 'min_normal', 60)
+                hr_max = get_threshold('heart_rate', 'max_normal', 100)
+                hr_critical_min = get_threshold('heart_rate', 'min_critical', 40)
+                hr_critical_max = get_threshold('heart_rate', 'max_critical', 150)
+                
+                if hr < hr_min:
+                    severity = 'critical' if hr < hr_critical_min else 'medium'
+                    alerts_to_announce.append({
+                        'message': f'Cảnh báo: Nhịp tim thấp {hr:.0f} BPM',
+                        'severity': severity
+                    })
+                elif hr > hr_max:
+                    severity = 'critical' if hr > hr_critical_max else 'high'
+                    alerts_to_announce.append({
+                        'message': f'Cảnh báo: Nhịp tim cao {hr:.0f} BPM',
+                        'severity': severity
+                    })
+            
+            # ============================================================
+            # Kiểm tra SpO2
+            # ============================================================
+            spo2 = health_data.get('spo2')
+            if spo2 and spo2 > 0:
+                spo2_min = get_threshold('spo2', 'min_normal', 95)
+                spo2_critical_min = get_threshold('spo2', 'min_critical', 90)
+                
+                if spo2 < spo2_min:
+                    severity = 'critical' if spo2 < spo2_critical_min else 'high'
+                    alerts_to_announce.append({
+                        'message': f'Cảnh báo: SpO2 thấp {spo2:.0f}%',
+                        'severity': severity
+                    })
+            
+            # ============================================================
+            # TTS: Phát cảnh báo nếu có
+            # ============================================================
+            for alert in alerts_to_announce:
+                self.logger.warning(f"Alert (immediate): {alert['message']} (severity={alert['severity']})")
+                # Phát TTS cảnh báo
+                self.speak_text(alert['message'], force=True)
+                
+        except Exception as e:
+            self.logger.error(f"Error in immediate alert check: {e}")
     
     def _check_and_create_alert(self, patient_id: str, health_data: Dict[str, Any], record_id: int):
         """

@@ -335,18 +335,87 @@ class DashboardScreen(Screen):
             if cardio_values:
                 self.cardio_button.update_state("\n".join(cardio_values), "Đã đo", subtitle="Nhấn để xem chi tiết")
             else:
-                self.cardio_button.update_state("--", "Nhấn để đo", subtitle="Nhấn để đo trực tiếp")
+                # Cập nhật trạng thái cho thẻ Cardio (MAX30102)
+                hr_status_data = sensor_data.get('sensor_status', {}).get('MAX30102', {})
+                finger_detected = hr_status_data.get('finger_detected', False)
+                hr_status = hr_status_data.get('hr_status', 'idle')
+                spo2_status = hr_status_data.get('spo2_status', 'idle')
+                
+                status_text = "Nhấn để đo"
+                subtitle_text = "Nhấn để đo trực tiếp"
 
-            # Luôn giữ ô nhiệt độ ở trạng thái chờ đo, không hiển thị giá trị
-            self.temp_button.update_state("--", "Nhấn để đo", subtitle="Đưa cảm biến gần trán")
+                if not hr_status_data: # Sensor unavailable
+                    status_text = "Không khả dụng"
+                    subtitle_text = "Cảm biến không kết nối"
+                elif hr_status == 'error':
+                    status_text = "Lỗi cảm biến"
+                    subtitle_text = "Kiểm tra kết nối"
+                elif hr_status_data.get('session_active', False):
+                    if not finger_detected:
+                        status_text = "Chờ ngón tay"
+                        subtitle_text = "Đặt ngón tay lên cảm biến"
+                    elif hr_status == 'poor_signal' or spo2_status == 'poor_signal':
+                        status_text = "Tín hiệu yếu"
+                        subtitle_text = "Giữ ngón tay ổn định"
+                    elif hr_status_data.get('measurement_ready', False):
+                        status_text = "Đang đo..."
+                        subtitle_text = "Giữ ngón tay cố định"
+                
+                self.cardio_button.update_state("--", status_text, subtitle=subtitle_text)
+
+            # Cập nhật trạng thái cho thẻ nhiệt độ (MLX90614)
+            temp_status_data = sensor_data.get('sensor_status', {}).get('MLX90614', {})
+            temp_status = temp_status_data.get('status', 'idle')
+            object_temp = sensor_data.get('object_temperature')
+
+            temp_value_display = "--"
+            temp_status_text = "Nhấn để đo"
+            temp_subtitle_text = "Đưa cảm biến gần trán"
+            
+            if not temp_status_data: # Sensor unavailable
+                temp_status_text = "Không khả dụng"
+                temp_subtitle_text = "Cảm biến không kết nối"
+            elif temp_status == 'error':
+                temp_status_text = "Lỗi cảm biến"
+                temp_subtitle_text = "Kiểm tra kết nối"
+            elif object_temp is not None and object_temp > 0 and self.app_instance.sensors.get('MLX90614', False):
+                temp_value_display = f"{object_temp:.1f}°C"
+                temp_status_text = "Đã đo" # Nếu đang hiển thị giá trị, coi như đã đo gần nhất
+                temp_subtitle_text = "Nhấn để xem chi tiết"
+                if temp_status in ('high', 'critical_high', 'low', 'critical_low'):
+                    temp_status_text = "Bất thường" # Thêm cảnh báo nếu nhiệt độ không bình thường
+
+            self.temp_button.update_state(temp_value_display, temp_status_text, subtitle=temp_subtitle_text)
 
             systolic = sensor_data.get("blood_pressure_systolic")
             diastolic = sensor_data.get("blood_pressure_diastolic")
+            bp_sensor_status_data = sensor_data.get('sensor_status', {}).get('BloodPressure', {})
+            bp_sensor_status = bp_sensor_status_data.get('status', 'unknown')
+
             if systolic and diastolic and systolic > 0 and diastolic > 0:
                 value = f"{systolic:.0f}/{diastolic:.0f} mmHg"
                 self.bp_button.update_state(value, "Đã đo", subtitle="Nhấn để xem chi tiết")
             else:
-                self.bp_button.update_state("--", "Chờ phần cứng", subtitle="HX710B chưa sẵn sàng")
+                bp_status_text = "Chờ phần cứng"
+                bp_subtitle_text = "HX710B chưa sẵn sàng"
+
+                if not bp_sensor_status_data: # Sensor unavailable
+                    bp_status_text = "Không khả dụng"
+                    bp_subtitle_text = "Cảm biến không kết nối"
+                elif bp_sensor_status == 'error':
+                    bp_status_text = "Lỗi cảm biến"
+                    bp_subtitle_text = "Kiểm tra kết nối"
+                elif bp_sensor_status == 'inflating':
+                    bp_status_text = "Đang bơm"
+                    bp_subtitle_text = "Giữ yên tĩnh"
+                elif bp_sensor_status == 'deflating':
+                    bp_status_text = "Đang đo"
+                    bp_subtitle_text = "Giữ yên tĩnh"
+                elif bp_sensor_status == 'analyzing':
+                    bp_status_text = "Phân tích"
+                    bp_subtitle_text = "Đang xử lý kết quả"
+                
+                self.bp_button.update_state("--", bp_status_text, subtitle=bp_subtitle_text)
 
             if self.time_label:
                 self.time_label.text = datetime.now().strftime("%H:%M:%S - %d/%m/%Y")

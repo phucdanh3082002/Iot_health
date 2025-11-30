@@ -195,14 +195,14 @@ sensors:
     adc_range: 4096
     buffer_size: 100
     enabled: true
-    hardware_sample_rate: 50
+    hardware_sample_rate: 100
     ir_threshold: 50000
     led_mode: 3
-    max_samples_per_read: 16
+    max_samples_per_read: 24
     min_readings_for_calc: 50
     pulse_amplitude_ir: 127
     pulse_amplitude_red: 127
-    sample_average: 4
+    sample_average: 1
     sample_rate: 5
   mlx90614:
     enabled: true

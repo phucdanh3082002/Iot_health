@@ -79,8 +79,11 @@ class BPMeasurementScreen(Screen):
         
         # Row 1: Pressure display + Status
         self._create_status_row(content)
+
+        # Row 2: Progress bar + Safety/Instruction label
+        self._create_progress_and_info_row(content)
         
-        # Row 2: Results grid (2x2)
+        # Row 3: Results grid (2x2)
         self._create_results_grid(content)
         
         main_layout.add_widget(content)
@@ -102,6 +105,38 @@ class BPMeasurementScreen(Screen):
             height=dp(30),
         )
         parent.add_widget(toolbar)
+
+    def _create_progress_and_info_row(self, parent):
+        """Tạo hàng chứa thanh tiến trình và thông tin/hướng dẫn an toàn."""
+        row = MDBoxLayout(
+            orientation='vertical',
+            spacing=dp(5),
+            size_hint_y=None,
+            height=dp(50) # Adjusted height to fit progress bar and a label
+        )
+
+        self.progress_bar = MDProgressBar(
+            max=100,
+            value=0,
+            color=MED_CARD_ACCENT,
+            size_hint_y=None,
+            height=dp(4),
+        )
+        row.add_widget(self.progress_bar)
+
+        self.info_label = MDLabel(
+            text="Chuẩn bị đo huyết áp",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="center",
+            valign="middle",
+            size_hint_y=None,
+            height=dp(35)
+        )
+        row.add_widget(self.info_label)
+        
+        parent.add_widget(row)
     
     def _on_back_pressed(self):
         """Handle back button press"""
@@ -334,7 +369,7 @@ class BPMeasurementScreen(Screen):
         button_layout.add_widget(self.start_btn)
         
         self.stop_btn = MDRaisedButton(
-            text="Dừng",
+            text="Xả khẩn", # Changed to "Xả khẩn"
             md_bg_color=MED_WARNING,
             on_press=self._stop_measurement,
             size_hint_x=0.3,
@@ -448,8 +483,29 @@ class BPMeasurementScreen(Screen):
                 BPState.EMERGENCY_DEFLATE: ("Xả khẩn", 0)
             }
             
-            state_text, progress = state_map.get(self.current_state, ("Không rõ", 0))
+            state_text, progress_value = state_map.get(self.current_state, ("Không rõ", 0))
             self.state_label.text = state_text
+            
+            # Update progress bar
+            self.progress_bar.value = progress_value
+
+            # Update info_label with instructions/safety messages based on state
+            if self.current_state == BPState.IDLE:
+                self.info_label.text = "Nhấn Bắt đầu để đo. Giữ yên tĩnh."
+            elif self.current_state == BPState.INITIALIZING:
+                self.info_label.text = "Đang khởi động bơm và van."
+            elif self.current_state == BPState.INFLATING:
+                self.info_label.text = "Đang bơm căng còng. Giữ tay yên."
+            elif self.current_state == BPState.DEFLATING:
+                self.info_label.text = "Đang xả áp và ghi nhận dao động."
+            elif self.current_state == BPState.ANALYZING:
+                self.info_label.text = "Đang phân tích kết quả..."
+            elif self.current_state == BPState.COMPLETED:
+                self.info_label.text = "Đo hoàn tất. Xem kết quả."
+            elif self.current_state == BPState.ERROR:
+                self.info_label.text = "Lỗi trong quá trình đo. Thử lại."
+            elif self.current_state == BPState.EMERGENCY_DEFLATE:
+                self.info_label.text = "Xả áp khẩn cấp đã kích hoạt."
             
             # TTS feedback at state transitions (announce only once per state)
             if self.current_state == BPState.INFLATING:
@@ -465,7 +521,7 @@ class BPMeasurementScreen(Screen):
                     self.logger.debug("TTS: BP_DEFLATE announced")
             
         except Exception as e:
-            self.logger.error(f"Error updating UI: {e}")
+            self.logger.error(f"Error updating UI: {e}", exc_info=True)
     
     def _on_measurement_complete(self, result: BloodPressureMeasurement):
         """
