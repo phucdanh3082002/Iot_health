@@ -1,43 +1,75 @@
 """
 Blood Pressure Measurement Screen
 Màn hình đo chi tiết cho huyết áp (oscillometric method)
+
+Thiết kế cho người già:
+- Chữ to, màu sắc rõ ràng (SYS/DIA lớn)
+- Nút bấm lớn, dễ bấm
+- Màu động theo ngưỡng AHA
+- Sync style với temperature_screen.py
 """
 import logging
 import time
 from typing import Optional
+
 from kivy.uix.screenmanager import Screen
 from kivy.clock import Clock
+from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDRaisedButton
+from kivymd.uix.button import MDIconButton, MDFillRoundFlatIconButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.progressbar import MDProgressBar
-from kivymd.uix.toolbar import MDTopAppBar
 
 from src.sensors.blood_pressure_sensor import BPState, BloodPressureMeasurement
 from src.utils.tts_manager import ScenarioID
 
-# Medical-themed colors (same as temperature_screen.py)
-MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
-MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
-MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
-MED_PRIMARY = (0.12, 0.55, 0.76, 1)
-MED_WARNING = (0.96, 0.4, 0.3, 1)
-TEXT_PRIMARY = (1, 1, 1, 1)
-TEXT_MUTED = (0.78, 0.88, 0.95, 1)
+
+# ============================================================
+# THEME COLORS - Màu sắc giao diện y tế (sync với temperature_screen)
+# ============================================================
+MED_BG_COLOR = (0.02, 0.18, 0.27, 1)       # Nền chính (xanh đậm)
+MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)     # Nền card
+MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)     # Màu nhấn (xanh lục)
+MED_PRIMARY = (0.12, 0.55, 0.76, 1)        # Màu chính (xanh dương)
+MED_WARNING = (0.96, 0.4, 0.3, 1)          # Cảnh báo (đỏ cam)
+TEXT_PRIMARY = (1, 1, 1, 1)                # Chữ chính (trắng)
+TEXT_MUTED = (0.78, 0.88, 0.95, 1)         # Chữ phụ (xám nhạt)
+
+# ============================================================
+# HEALTH STATUS COLORS - Màu theo ngưỡng AHA (cho người già)
+# ============================================================
+COLOR_NORMAL = (0.3, 0.85, 0.4, 1)         # Xanh lá - Bình thường (<120/<80)
+COLOR_ELEVATED = (1.0, 0.85, 0.2, 1)       # Vàng - Tăng cao (120-129/<80)
+COLOR_STAGE1 = (1.0, 0.6, 0.2, 1)          # Cam - Tăng HA giai đoạn 1 (130-139/80-89)
+COLOR_STAGE2 = (1.0, 0.4, 0.2, 1)          # Đỏ cam - Giai đoạn 2 (≥140/≥90)
+COLOR_CRISIS = (1.0, 0.2, 0.2, 1)          # Đỏ đậm - Khủng hoảng (>180/>120)
+COLOR_LOW = (0.3, 0.6, 0.95, 1)            # Xanh dương - Huyết áp thấp
+
+# ============================================================
+# BUTTON COLORS - Màu nút bấm nổi bật (sync với temperature_screen)
+# ============================================================
+BTN_START_COLOR = (0.1, 0.5, 0.7, 1)       # Xanh đậm - Bắt đầu
+BTN_STOP_COLOR = (0.9, 0.35, 0.25, 1)      # Đỏ - Dừng/Xả khẩn
+BTN_SAVE_COLOR = (0.2, 0.7, 0.4, 1)        # Xanh lá - Lưu
+BTN_DISABLED_COLOR = (0.4, 0.4, 0.4, 1)    # Xám - Vô hiệu
 
 
 class BPMeasurementScreen(Screen):
     """
     Màn hình đo chi tiết huyết áp theo phương pháp oscillometric
     
-    Features:
-    - Real-time pressure display during inflate/deflate
-    - State-based progress indicators
-    - SYS/DIA/MAP/HR results with AHA color coding
-    - Safety warnings and TTS feedback
+    Thiết kế tối ưu cho người già:
+    - Giá trị SYS/DIA lớn, rõ ràng
+    - Màu sắc thay đổi theo ngưỡng AHA
+    - Nút bấm lớn, dễ thao tác
+    - Layout đồng bộ với temperature_screen
     """
+    
+    # ------------------------------------------------------------------
+    # Initialization & Lifecycle
+    # ------------------------------------------------------------------
     
     def __init__(self, app_instance, **kwargs):
         super().__init__(**kwargs)
@@ -59,334 +91,612 @@ class BPMeasurementScreen(Screen):
         
         self._build_layout()
     
+    # ------------------------------------------------------------------
+    # UI Construction & Layout
+    # ------------------------------------------------------------------
+    
     def _build_layout(self):
-        """Build BP measurement layout - optimized for 480x320"""
+        """Build BP measurement screen - sync với temperature_screen."""
         main_layout = MDBoxLayout(
             orientation='vertical',
-            md_bg_color=MED_BG_COLOR,
-            spacing=dp(5),
-            padding=dp(5)
+            spacing=dp(4),
+            padding=(dp(6), dp(0), dp(6), dp(4)),
         )
-        
-        # Top bar: Title + Back button (compact)
-        self._create_top_bar(main_layout)
-        
-        # Main content area
-        content = MDBoxLayout(
-            orientation='vertical',
-            spacing=dp(5)
-        )
-        
-        # Row 1: Pressure display + Status
-        self._create_status_row(content)
 
-        # Row 2: Progress bar + Safety/Instruction label
-        self._create_progress_and_info_row(content)
-        
-        # Row 3: Results grid (2x2)
-        self._create_results_grid(content)
-        
-        main_layout.add_widget(content)
-        
-        # Bottom: Control buttons
-        self._create_control_buttons(main_layout)
-        
+        with main_layout.canvas.before:
+            Color(*MED_BG_COLOR)
+            self.bg_rect = Rectangle(size=main_layout.size, pos=main_layout.pos)
+        main_layout.bind(size=self._update_bg, pos=self._update_bg)
+
+        self._create_header(main_layout)
+        self._create_measurement_panel(main_layout)
+        self._create_secondary_results(main_layout)
+        self._create_status_display(main_layout)
+        self._create_controls(main_layout)
+
         self.add_widget(main_layout)
     
-    def _create_top_bar(self, parent):
-        """Create header toolbar (same style as temperature_screen)"""
-        toolbar = MDTopAppBar(
-            title='ĐO HUYẾT ÁP',
-            elevation=0,
+    def _update_bg(self, instance, value):
+        self.bg_rect.size = instance.size
+        self.bg_rect.pos = instance.pos
+    
+    def _create_header(self, parent):
+        """Create header card - giống temperature_screen."""
+        header_card = MDCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(54),
+            padding=(dp(4), dp(6), dp(8), dp(6)),
+            radius=[dp(14)],
             md_bg_color=MED_PRIMARY,
-            specific_text_color=TEXT_PRIMARY,
-            left_action_items=[["arrow-left", lambda _: self._on_back_pressed()]],
-            size_hint_y=None,
-            height=dp(30),
-        )
-        parent.add_widget(toolbar)
-
-    def _create_progress_and_info_row(self, parent):
-        """Tạo hàng chứa thanh tiến trình và thông tin/hướng dẫn an toàn."""
-        row = MDBoxLayout(
-            orientation='vertical',
-            spacing=dp(5),
-            size_hint_y=None,
-            height=dp(50) # Adjusted height to fit progress bar and a label
         )
 
-        self.progress_bar = MDProgressBar(
-            max=100,
-            value=0,
-            color=MED_CARD_ACCENT,
-            size_hint_y=None,
-            height=dp(4),
-        )
-        row.add_widget(self.progress_bar)
-
-        self.info_label = MDLabel(
-            text="Chuẩn bị đo huyết áp",
-            font_style="Caption",
-            theme_text_color="Custom",
-            text_color=TEXT_MUTED,
-            halign="center",
-            valign="middle",
-            size_hint_y=None,
-            height=dp(35)
-        )
-        row.add_widget(self.info_label)
-        
-        parent.add_widget(row)
-    
-    def _on_back_pressed(self):
-        """Handle back button press"""
-        if self.measuring:
-            self._stop_measurement()
-        self.app_instance.navigate_to_screen('dashboard')
-    
-    def _create_status_row(self, parent):
-        """Create compact status row: Pressure | State"""
-        row = MDBoxLayout(
-            orientation='horizontal',
-            spacing=dp(5),
-            size_hint_y=None,
-            height=dp(70)
-        )
-        
-        # Pressure display (left)
-        pressure_card = MDCard(
-            orientation='vertical',
-            md_bg_color=MED_CARD_BG,
-            padding=dp(8),
-            radius=[dp(8)],
-            size_hint_x=0.5
-        )
-        
-        # Title with icon
-        pressure_header = MDBoxLayout(
-            orientation='horizontal',
-            size_hint_y=0.3,
-            spacing=dp(4)
-        )
-        pressure_icon = MDIcon(
-            icon='gauge',
-            theme_text_color='Custom',
-            text_color=MED_CARD_ACCENT,
+        # Back button
+        back_btn = MDIconButton(
+            icon="arrow-left",
+            theme_icon_color="Custom",
+            icon_color=TEXT_PRIMARY,
             size_hint=(None, None),
-            size=(dp(18), dp(18))
+            pos_hint={"center_y": 0.5},
         )
-        pressure_icon.icon_size = dp(16)
-        pressure_header.add_widget(pressure_icon)
-        
-        pressure_title = MDLabel(
-            text="Áp suất (mmHg)",
+        back_btn.bind(on_release=self._on_back_pressed)
+        header_card.add_widget(back_btn)
+
+        # Title box
+        title_box = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(0),
+            size_hint_x=1,
+            pos_hint={"center_y": 0.5},
+        )
+
+        title_label = MDLabel(
+            text="HUYẾT ÁP",
+            font_style="Subtitle1",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            halign="left",
+            valign="center",
+        )
+        title_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        title_box.add_widget(title_label)
+
+        subtitle_label = MDLabel(
+            text="Quấn còng cách khuỷu tay 2cm",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
             halign="left",
-            valign="center"
+            valign="center",
         )
-        pressure_header.add_widget(pressure_title)
-        pressure_card.add_widget(pressure_header)
-        
-        self.pressure_label = MDLabel(
-            text="0",
-            font_style="H5",
+        subtitle_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        title_box.add_widget(subtitle_label)
+
+        header_card.add_widget(title_box)
+        parent.add_widget(header_card)
+
+    def _create_measurement_panel(self, parent):
+        """
+        Create measurement panel - 2 cột: Áp suất/Trạng thái (trái) + SYS/DIA lớn (phải).
+        """
+        panel_layout = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_y=None,
+            height=dp(115),
+            padding=(dp(4), dp(2), dp(4), dp(2)),
+        )
+
+        # ============================================================
+        # LEFT: Pressure & State (cột trái - readings nhỏ)
+        # ============================================================
+        left_card = MDCard(
+            orientation="vertical",
+            size_hint_x=0.38,
+            padding=(dp(6), dp(4), dp(6), dp(4)),
+            spacing=dp(2),
+            radius=[dp(12)],
+            md_bg_color=MED_CARD_BG,
+        )
+
+        # Current Pressure Row
+        pressure_row = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_y=None,
+            height=dp(48),
+        )
+        pressure_icon = MDIcon(
+            icon="gauge",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
-            halign="center",
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+        )
+        pressure_icon.icon_size = dp(20)
+        pressure_row.add_widget(pressure_icon)
+
+        pressure_box = MDBoxLayout(orientation="vertical", spacing=dp(0), size_hint_x=1)
+        pressure_label = MDLabel(
+            text="Áp suất",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="left",
+            valign="middle",
+        )
+        pressure_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        pressure_box.add_widget(pressure_label)
+
+        self.pressure_label = MDLabel(
+            text="0 mmHg",
+            font_style="H6",
+            theme_text_color="Custom",
+            text_color=MED_CARD_ACCENT,
+            halign="left",
+            valign="middle",
             bold=True,
-            size_hint_y=0.7
         )
-        pressure_card.add_widget(self.pressure_label)
-        row.add_widget(pressure_card)
-        
-        # State display (right)
-        state_card = MDCard(
-            orientation='vertical',
-            md_bg_color=MED_CARD_BG,
-            padding=dp(8),
-            radius=[dp(8)],
-            size_hint_x=0.5
-        )
-        
-        # Title with icon
-        state_header = MDBoxLayout(
-            orientation='horizontal',
-            size_hint_y=0.3,
-            spacing=dp(4)
+        self.pressure_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        pressure_box.add_widget(self.pressure_label)
+        pressure_row.add_widget(pressure_box)
+        left_card.add_widget(pressure_row)
+
+        # State Row
+        state_row = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_y=None,
+            height=dp(48),
         )
         state_icon = MDIcon(
-            icon='heart-pulse',
-            theme_text_color='Custom',
+            icon="heart-pulse",
+            theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
-            size=(dp(18), dp(18))
+            size=(dp(24), dp(24)),
         )
-        state_icon.icon_size = dp(16)
-        state_header.add_widget(state_icon)
-        
+        state_icon.icon_size = dp(20)
+        state_row.add_widget(state_icon)
+
+        state_box = MDBoxLayout(orientation="vertical", spacing=dp(0), size_hint_x=1)
         state_title = MDLabel(
             text="Trạng thái",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
             halign="left",
-            valign="center"
+            valign="middle",
         )
-        state_header.add_widget(state_title)
-        state_card.add_widget(state_header)
-        
+        state_title.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        state_box.add_widget(state_title)
+
         self.state_label = MDLabel(
             text="Chờ đo",
-            font_style="Body1",
+            font_style="Subtitle2",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
-            halign="center",
-            size_hint_y=0.7
+            halign="left",
+            valign="middle",
         )
-        state_card.add_widget(self.state_label)
-        row.add_widget(state_card)
-        
-        parent.add_widget(row)
-    
-    def _create_results_grid(self, parent):
-        """Create compact 2x2 grid for SYS/DIA/MAP/HR"""
-        results_card = MDCard(
-            orientation='vertical',
+        self.state_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        state_box.add_widget(self.state_label)
+        state_row.add_widget(state_box)
+        left_card.add_widget(state_row)
+
+        panel_layout.add_widget(left_card)
+
+        # ============================================================
+        # RIGHT: Main Result Display - SYS/DIA (cột phải - giá trị LỚN)
+        # ============================================================
+        result_card = MDCard(
+            orientation="vertical",
+            size_hint_x=0.62,
+            padding=(dp(8), dp(4), dp(8), dp(4)),
+            spacing=dp(1),
+            radius=[dp(12)],
             md_bg_color=MED_CARD_BG,
-            padding=dp(8),
-            radius=[dp(8)],
-            size_hint_y=None,
-            height=dp(100)
         )
-        
-        # Title
-        results_card.add_widget(MDLabel(
+
+        # Header với icon
+        result_header = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(18),
+            spacing=dp(4),
+        )
+        result_icon = MDIcon(
+            icon="heart-box",
+            theme_text_color="Custom",
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(16), dp(16)),
+        )
+        result_icon.icon_size = dp(14)
+        result_header.add_widget(result_icon)
+
+        result_title = MDLabel(
             text="Kết quả",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
-            size_hint_y=0.15
-        ))
-        
-        # 2x2 Grid (compact)
-        grid = MDBoxLayout(orientation='vertical', spacing=dp(3), size_hint_y=0.85)
-        
-        # Row 1: SYS | DIA
-        row1 = MDBoxLayout(orientation='horizontal', spacing=dp(5))
-        row1.add_widget(self._create_compact_result("SYS", "sys_label"))
-        row1.add_widget(self._create_compact_result("DIA", "dia_label"))
-        grid.add_widget(row1)
-        
-        # Row 2: MAP | HR
-        row2 = MDBoxLayout(orientation='horizontal', spacing=dp(5))
-        row2.add_widget(self._create_compact_result("MAP", "map_label"))
-        row2.add_widget(self._create_compact_result("HR", "hr_label"))
-        grid.add_widget(row2)
-        
-        results_card.add_widget(grid)
-        parent.add_widget(results_card)
-    
-    def _create_compact_result(self, label_text, attr_name):
-        """Create compact result item with icon"""
-        container = MDBoxLayout(
-            orientation='horizontal',
-            padding=dp(5),
-            spacing=dp(5)
+            halign="left",
+            valign="middle",
+        )
+        result_title.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        result_header.add_widget(result_title)
+        result_card.add_widget(result_header)
+
+        # Main BP value - SYS/DIA LỚN cho người già
+        bp_value_box = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_y=1,
         )
         
-        # Icon mapping for each result type
-        icon_map = {
-            "SYS": "arrow-up-bold",      # Systolic - up arrow
-            "DIA": "arrow-down-bold",    # Diastolic - down arrow
-            "MAP": "heart-pulse",        # Mean arterial pressure
-            "HR": "heart-flash"          # Heart rate
-        }
+        # SYS value
+        self.sys_label = MDLabel(
+            text="---",
+            font_style="H4",
+            halign="right",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            bold=True,
+            size_hint_x=0.45,
+        )
+        self.sys_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        bp_value_box.add_widget(self.sys_label)
         
-        # Icon
-        icon = MDIcon(
-            icon=icon_map.get(label_text, "circle"),
-            theme_text_color='Custom',
+        # Separator "/"
+        separator = MDLabel(
+            text="/",
+            font_style="H4",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            size_hint_x=0.1,
+        )
+        separator.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        bp_value_box.add_widget(separator)
+        
+        # DIA value
+        self.dia_label = MDLabel(
+            text="---",
+            font_style="H4",
+            halign="left",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            bold=True,
+            size_hint_x=0.45,
+        )
+        self.dia_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        bp_value_box.add_widget(self.dia_label)
+        
+        result_card.add_widget(bp_value_box)
+
+        # Unit label
+        unit_label = MDLabel(
+            text="mmHg",
+            font_style="Caption",
+            halign="center",
+            valign="top",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            size_hint_y=None,
+            height=dp(14),
+        )
+        unit_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        result_card.add_widget(unit_label)
+
+        # Status label (Bình thường / Tăng cao / Cao...)
+        self.bp_status_label = MDLabel(
+            text="Chờ đo",
+            font_style="Caption",
+            halign="center",
+            valign="middle",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            size_hint_y=None,
+            height=dp(16),
+        )
+        self.bp_status_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        result_card.add_widget(self.bp_status_label)
+
+        panel_layout.add_widget(result_card)
+        parent.add_widget(panel_layout)
+
+    def _create_secondary_results(self, parent):
+        """Create secondary results row: MAP + HR (compact)."""
+        secondary_card = MDCard(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(40),
+            padding=(dp(8), dp(4), dp(8), dp(4)),
+            spacing=dp(12),
+            radius=[dp(10)],
+            md_bg_color=MED_CARD_BG,
+        )
+
+        # MAP
+        map_box = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_x=0.5,
+        )
+        map_icon = MDIcon(
+            icon="chart-line",
+            theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
-            size=(dp(18), dp(18)),
-            pos_hint={'center_y': 0.5}
+            size=(dp(20), dp(20)),
         )
-        icon.icon_size = dp(16)
-        container.add_widget(icon)
-        
-        # Label + Value in vertical layout
-        text_layout = MDBoxLayout(
-            orientation='vertical',
-            spacing=dp(2)
-        )
-        
-        # Label
-        label = MDLabel(
-            text=label_text,
+        map_icon.icon_size = dp(16)
+        map_box.add_widget(map_icon)
+
+        map_text_box = MDBoxLayout(orientation="vertical", spacing=dp(0))
+        map_title = MDLabel(
+            text="MAP",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
             halign="left",
-            valign="bottom"
         )
-        text_layout.add_widget(label)
-        
-        # Value
-        value_label = MDLabel(
-            text="--",
-            font_style="H6",
+        map_title.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        map_text_box.add_widget(map_title)
+
+        self.map_label = MDLabel(
+            text="-- mmHg",
+            font_style="Subtitle2",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
-            bold=True,
             halign="left",
-            valign="top"
+            bold=True,
         )
-        setattr(self, attr_name, value_label)
-        text_layout.add_widget(value_label)
-        
-        container.add_widget(text_layout)
-        
-        return container
-    
-    def _create_control_buttons(self, parent):
-        """Create compact control buttons"""
-        button_layout = MDBoxLayout(
-            orientation='horizontal',
-            spacing=dp(5),
+        self.map_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        map_text_box.add_widget(self.map_label)
+        map_box.add_widget(map_text_box)
+        secondary_card.add_widget(map_box)
+
+        # HR
+        hr_box = MDBoxLayout(
+            orientation="horizontal",
+            spacing=dp(4),
+            size_hint_x=0.5,
+        )
+        hr_icon = MDIcon(
+            icon="heart-flash",
+            theme_text_color="Custom",
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(20), dp(20)),
+        )
+        hr_icon.icon_size = dp(16)
+        hr_box.add_widget(hr_icon)
+
+        hr_text_box = MDBoxLayout(orientation="vertical", spacing=dp(0))
+        hr_title = MDLabel(
+            text="Nhịp tim",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="left",
+        )
+        hr_title.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        hr_text_box.add_widget(hr_title)
+
+        self.hr_label = MDLabel(
+            text="-- BPM",
+            font_style="Subtitle2",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            halign="left",
+            bold=True,
+        )
+        self.hr_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        hr_text_box.add_widget(self.hr_label)
+        hr_box.add_widget(hr_text_box)
+        secondary_card.add_widget(hr_box)
+
+        parent.add_widget(secondary_card)
+
+    def _create_status_display(self, parent):
+        """Create compact status bar with progress - giống temperature_screen."""
+        status_card = MDCard(
+            orientation="vertical",
             size_hint_y=None,
-            height=dp(45),
-            padding=[0, dp(5), 0, dp(5)]
+            height=dp(36),
+            padding=(dp(6), dp(4), dp(6), dp(4)),
+            spacing=dp(1),
+            radius=[dp(10)],
+            md_bg_color=MED_CARD_BG,
         )
-        
-        self.start_btn = MDRaisedButton(
-            text="Bắt đầu",
-            md_bg_color=MED_PRIMARY,
-            on_press=self._start_measurement,
-            size_hint_x=0.4
+
+        self.info_label = MDLabel(
+            text="Sẵn sàng đo",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_PRIMARY,
+            halign="left",
+            valign="middle",
         )
-        button_layout.add_widget(self.start_btn)
-        
-        self.stop_btn = MDRaisedButton(
-            text="Xả khẩn", # Changed to "Xả khẩn"
-            md_bg_color=MED_WARNING,
-            on_press=self._stop_measurement,
+        self.info_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        status_card.add_widget(self.info_label)
+
+        self.progress_bar = MDProgressBar(
+            max=100,
+            value=0,
+            color=MED_CARD_ACCENT,
+            size_hint_y=None,
+            height=dp(2),
+        )
+        status_card.add_widget(self.progress_bar)
+
+        parent.add_widget(status_card)
+
+    def _create_controls(self, parent):
+        """
+        Create control buttons - nút đặc màu sắc nổi bật cho người già.
+        Sync style với temperature_screen (MDFillRoundFlatIconButton).
+        """
+        control_layout = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(46),
+            spacing=dp(6),
+            padding=(dp(4), dp(2), dp(4), dp(2)),
+        )
+
+        # Nút Bắt đầu - Màu xanh đậm nổi bật
+        self.start_btn = MDFillRoundFlatIconButton(
+            text="BẮT ĐẦU",
+            icon="play-circle",
+            md_bg_color=BTN_START_COLOR,
+            text_color=TEXT_PRIMARY,
+            icon_color=TEXT_PRIMARY,
+            size_hint_x=0.4,
+            font_size="14sp",
+            icon_size="20sp",
+        )
+        self.start_btn.bind(on_press=self._start_measurement)
+        control_layout.add_widget(self.start_btn)
+
+        # Nút Xả khẩn - Màu đỏ
+        self.stop_btn = MDFillRoundFlatIconButton(
+            text="XẢ KHẨN",
+            icon="alert-octagon",
+            disabled=True,
+            md_bg_color=BTN_DISABLED_COLOR,
+            text_color=(1, 1, 1, 0.5),
+            icon_color=(1, 1, 1, 0.5),
             size_hint_x=0.3,
-            disabled=True
+            font_size="14sp",
+            icon_size="20sp",
         )
-        button_layout.add_widget(self.stop_btn)
-        
-        self.save_btn = MDRaisedButton(
-            text="Lưu",
-            md_bg_color=MED_CARD_ACCENT,
-            on_press=self._save_measurement,
+        self.stop_btn.bind(on_press=self._stop_measurement)
+        control_layout.add_widget(self.stop_btn)
+
+        # Nút Lưu - Xám khi disabled, xanh lá khi enabled
+        self.save_btn = MDFillRoundFlatIconButton(
+            text="LƯU",
+            icon="content-save",
+            disabled=True,
+            md_bg_color=BTN_DISABLED_COLOR,
+            text_color=(1, 1, 1, 0.5),
+            icon_color=(1, 1, 1, 0.5),
             size_hint_x=0.3,
-            disabled=True
+            font_size="14sp",
+            icon_size="20sp",
         )
-        button_layout.add_widget(self.save_btn)
+        self.save_btn.bind(on_press=self._save_measurement)
+        control_layout.add_widget(self.save_btn)
+
+        parent.add_widget(control_layout)
+
+    # ------------------------------------------------------------------
+    # Event Handlers
+    # ------------------------------------------------------------------
+
+    def _on_back_pressed(self, instance=None):
+        """Handle back button press"""
+        if self.measuring:
+            self._stop_measurement()
+        self.app_instance.navigate_to_screen('dashboard')
+    
+    # ------------------------------------------------------------------
+    # Button Styling - Sync với temperature_screen
+    # ------------------------------------------------------------------
+
+    def _style_start_button(self, active: bool) -> None:
+        """Style nút Bắt đầu với màu sắc nổi bật."""
+        if active:
+            self.start_btn.text = "ĐANG ĐO..."
+            self.start_btn.icon = "loading"
+            self.start_btn.md_bg_color = BTN_DISABLED_COLOR
+            self.start_btn.text_color = (1, 1, 1, 0.5)
+            self.start_btn.icon_color = (1, 1, 1, 0.5)
+            self.start_btn.disabled = True
+        else:
+            self.start_btn.text = "BẮT ĐẦU"
+            self.start_btn.icon = "play-circle"
+            self.start_btn.md_bg_color = BTN_START_COLOR
+            self.start_btn.text_color = TEXT_PRIMARY
+            self.start_btn.icon_color = TEXT_PRIMARY
+            self.start_btn.disabled = False
+
+    def _style_stop_button(self, enabled: bool) -> None:
+        """Style nút Xả khẩn - Đỏ khi enabled, xám khi disabled."""
+        self.stop_btn.disabled = not enabled
+        if enabled:
+            self.stop_btn.md_bg_color = BTN_STOP_COLOR
+            self.stop_btn.text_color = TEXT_PRIMARY
+            self.stop_btn.icon_color = TEXT_PRIMARY
+        else:
+            self.stop_btn.md_bg_color = BTN_DISABLED_COLOR
+            self.stop_btn.text_color = (1, 1, 1, 0.5)
+            self.stop_btn.icon_color = (1, 1, 1, 0.5)
+
+    def _style_save_button(self, enabled: bool) -> None:
+        """Style nút Lưu - Xanh lá khi enabled, xám khi disabled."""
+        self.save_btn.disabled = not enabled
+        if enabled:
+            self.save_btn.md_bg_color = BTN_SAVE_COLOR
+            self.save_btn.text_color = TEXT_PRIMARY
+            self.save_btn.icon_color = TEXT_PRIMARY
+        else:
+            self.save_btn.md_bg_color = BTN_DISABLED_COLOR
+            self.save_btn.text_color = (1, 1, 1, 0.5)
+            self.save_btn.icon_color = (1, 1, 1, 0.5)
+
+    # ------------------------------------------------------------------
+    # Dynamic Colors - Màu theo ngưỡng AHA
+    # ------------------------------------------------------------------
+    
+    def _get_bp_color(self, sys: float, dia: float) -> tuple:
+        """
+        Lấy màu cho huyết áp theo ngưỡng AHA.
         
-        parent.add_widget(button_layout)
+        Ngưỡng (theo AHA 2017):
+        - SYS < 90 hoặc DIA < 60: Huyết áp thấp → Xanh dương
+        - SYS < 120 và DIA < 80: Bình thường → Xanh lá
+        - SYS 120-129 và DIA < 80: Tăng cao → Vàng
+        - SYS 130-139 hoặc DIA 80-89: Giai đoạn 1 → Cam
+        - SYS 140-179 hoặc DIA 90-119: Giai đoạn 2 → Đỏ cam
+        - SYS ≥ 180 hoặc DIA ≥ 120: Khủng hoảng → Đỏ đậm
+        """
+        if sys < 90 or dia < 60:
+            return COLOR_LOW
+        elif sys < 120 and dia < 80:
+            return COLOR_NORMAL
+        elif sys < 130 and dia < 80:
+            return COLOR_ELEVATED
+        elif sys < 140 or dia < 90:
+            return COLOR_STAGE1
+        elif sys < 180 and dia < 120:
+            return COLOR_STAGE2
+        else:
+            return COLOR_CRISIS
+    
+    def _get_bp_status_text(self, sys: float, dia: float) -> str:
+        """Lấy text status cho huyết áp theo ngưỡng AHA."""
+        if sys < 90 or dia < 60:
+            return "Huyết áp thấp"
+        elif sys < 120 and dia < 80:
+            return "Bình thường"
+        elif sys < 130 and dia < 80:
+            return "Tăng cao"
+        elif sys < 140 or dia < 90:
+            return "Cao - Giai đoạn 1"
+        elif sys < 180 and dia < 120:
+            return "Cao - Giai đoạn 2"
+        else:
+            return "⚠️ Khủng hoảng HA"
+
+    # ------------------------------------------------------------------
+    # Measurement Control
+    # ------------------------------------------------------------------
     
     def _start_measurement(self, *args):
         """Start BP measurement"""
@@ -404,17 +714,21 @@ class BPMeasurementScreen(Screen):
             self.measuring = True
             self.last_result = None
             
-            # Update UI
-            self.start_btn.disabled = True
-            self.stop_btn.disabled = False
-            self.save_btn.disabled = True
+            # Update UI với styling mới
+            self._style_start_button(active=True)
+            self._style_stop_button(enabled=True)
+            self._style_save_button(enabled=False)
             self.state_label.text = "Đang chuẩn bị..."
             
             # Clear results
-            self.sys_label.text = "--"
-            self.dia_label.text = "--"
-            self.map_label.text = "--"
-            self.hr_label.text = "--"
+            self.sys_label.text = "---"
+            self.sys_label.text_color = TEXT_PRIMARY
+            self.dia_label.text = "---"
+            self.dia_label.text_color = TEXT_PRIMARY
+            self.map_label.text = "-- mmHg"
+            self.hr_label.text = "-- BPM"
+            self.bp_status_label.text = "Đang đo..."
+            self.bp_status_label.text_color = TEXT_MUTED
             
             # Reset TTS announce flags
             self._inflate_announced = False
@@ -435,15 +749,16 @@ class BPMeasurementScreen(Screen):
             self._reset_ui()
     
     def _stop_measurement(self, *args):
-        """Emergency stop"""
+        """Emergency stop - Xả khẩn cấp"""
         try:
             bp_sensor = self.app_instance.sensors.get('BloodPressure')
             if bp_sensor and hasattr(bp_sensor, 'stop_measurement'):
-                bp_sensor.stop_measurement()
+                bp_sensor.stop_measurement(emergency=True)
             
             self._reset_ui()
             self._speak_scenario(ScenarioID.SAFETY_EMERGENCY_RELEASE)
-            self.logger.info("BP measurement stopped")
+            self.info_label.text = "Đã xả khẩn cấp"
+            self.logger.info("BP measurement stopped (emergency)")
             
         except Exception as e:
             self.logger.error(f"Error stopping: {e}")
@@ -468,8 +783,8 @@ class BPMeasurementScreen(Screen):
             except (AttributeError, IndexError):
                 self.current_pressure = 0.0
             
-            # Update pressure display
-            self.pressure_label.text = f"{self.current_pressure:.0f}"
+            # Update pressure display với đơn vị
+            self.pressure_label.text = f"{self.current_pressure:.0f} mmHg"
             
             # Update state and progress
             state_map = {
@@ -491,21 +806,21 @@ class BPMeasurementScreen(Screen):
 
             # Update info_label with instructions/safety messages based on state
             if self.current_state == BPState.IDLE:
-                self.info_label.text = "Nhấn Bắt đầu để đo. Giữ yên tĩnh."
+                self.info_label.text = 'Nhấn "BẮT ĐẦU" để đo. Giữ yên tĩnh.'
             elif self.current_state == BPState.INITIALIZING:
-                self.info_label.text = "Đang khởi động bơm và van."
+                self.info_label.text = "Đang khởi động bơm và van..."
             elif self.current_state == BPState.INFLATING:
-                self.info_label.text = "Đang bơm căng còng. Giữ tay yên."
+                self.info_label.text = "🔵 Đang bơm căng còng. Giữ tay yên."
             elif self.current_state == BPState.DEFLATING:
-                self.info_label.text = "Đang xả áp và ghi nhận dao động."
+                self.info_label.text = "🟢 Đang xả áp và ghi nhận dao động..."
             elif self.current_state == BPState.ANALYZING:
-                self.info_label.text = "Đang phân tích kết quả..."
+                self.info_label.text = "⏳ Đang phân tích kết quả..."
             elif self.current_state == BPState.COMPLETED:
-                self.info_label.text = "Đo hoàn tất. Xem kết quả."
+                self.info_label.text = "✅ Đo hoàn tất. Xem kết quả bên dưới."
             elif self.current_state == BPState.ERROR:
-                self.info_label.text = "Lỗi trong quá trình đo. Thử lại."
+                self.info_label.text = "❌ Lỗi trong quá trình đo. Thử lại."
             elif self.current_state == BPState.EMERGENCY_DEFLATE:
-                self.info_label.text = "Xả áp khẩn cấp đã kích hoạt."
+                self.info_label.text = "⚠️ Xả áp khẩn cấp đã kích hoạt."
             
             # TTS feedback at state transitions (announce only once per state)
             if self.current_state == BPState.INFLATING:
@@ -554,7 +869,7 @@ class BPMeasurementScreen(Screen):
             self.measuring = False
             self.last_result = result
             
-            # Display results
+            # Display results với màu động
             self._display_results(result)
             
             # TTS announcement
@@ -562,13 +877,20 @@ class BPMeasurementScreen(Screen):
             dia_int = int(round(result.diastolic))
             map_int = int(round(result.map_value))
             self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int, map=map_int)
-            # Update UI state
+            
+            # Update UI state với styling mới
+            self.start_btn.text = "ĐO LẠI"
+            self.start_btn.icon = "reload"
+            self.start_btn.md_bg_color = BTN_START_COLOR
+            self.start_btn.text_color = TEXT_PRIMARY
+            self.start_btn.icon_color = TEXT_PRIMARY
             self.start_btn.disabled = False
-            self.start_btn.text = "Đo lại"
-            self.stop_btn.disabled = True
-            self.save_btn.disabled = False
+            
+            self._style_stop_button(enabled=False)
+            self._style_save_button(enabled=True)
+            
             self.state_label.text = "Hoàn thành"
-            self.pressure_label.text = "0"
+            self.pressure_label.text = "0 mmHg"
             
         except Exception as e:
             self.logger.error(f"Error handling result on main thread: {e}", exc_info=True)
@@ -576,32 +898,31 @@ class BPMeasurementScreen(Screen):
             Clock.schedule_once(lambda dt: self._reset_ui(), 0)
     
     def _display_results(self, result: BloodPressureMeasurement):
-        """Display results with AHA color coding"""
+        """Display results with AHA color coding - màu động theo ngưỡng."""
         try:
-            self.sys_label.text = f"{result.systolic:.0f}"
-            self.dia_label.text = f"{result.diastolic:.0f}"
-            self.map_label.text = f"{result.map_value:.0f}"
-            self.hr_label.text = f"{result.heart_rate:.0f}" if result.heart_rate else "--"
-            
-            # AHA color coding
             sys_val = result.systolic
             dia_val = result.diastolic
             
-            if sys_val < 90 or dia_val < 60:
-                color = (0.3, 0.6, 1.0, 1)  # Blue - Low
-            elif sys_val < 120 and dia_val < 80:
-                color = (0.2, 0.8, 0.2, 1)  # Green - Normal
-            elif sys_val < 130 and dia_val < 80:
-                color = (1.0, 0.8, 0.0, 1)  # Yellow - Elevated
-            elif sys_val < 140 or dia_val < 90:
-                color = (1.0, 0.6, 0.0, 1)  # Orange - Stage 1
-            elif sys_val < 180 and dia_val < 120:
-                color = (1.0, 0.3, 0.0, 1)  # Red-Orange - Stage 2
-            else:
-                color = (1.0, 0.0, 0.0, 1)  # Red - Crisis
+            # Lấy màu và status text theo ngưỡng AHA
+            color = self._get_bp_color(sys_val, dia_val)
+            status_text = self._get_bp_status_text(sys_val, dia_val)
             
+            # Update SYS/DIA với màu động
+            self.sys_label.text = f"{sys_val:.0f}"
             self.sys_label.text_color = color
+            
+            self.dia_label.text = f"{dia_val:.0f}"
             self.dia_label.text_color = color
+            
+            # Update MAP/HR
+            self.map_label.text = f"{result.map_value:.0f} mmHg"
+            self.hr_label.text = f"{result.heart_rate:.0f} BPM" if result.heart_rate else "-- BPM"
+            
+            # Update status label với màu
+            self.bp_status_label.text = status_text
+            self.bp_status_label.text_color = color
+            
+            self.logger.info(f"Displayed BP: {sys_val:.0f}/{dia_val:.0f} - {status_text}")
             
         except Exception as e:
             self.logger.error(f"Error displaying results: {e}")
@@ -632,7 +953,9 @@ class BPMeasurementScreen(Screen):
             self.app_instance.current_data['blood_pressure_systolic'] = self.last_result.systolic
             self.app_instance.current_data['blood_pressure_diastolic'] = self.last_result.diastolic
             
-            self.save_btn.disabled = True
+            # Disable save button sau khi lưu
+            self._style_save_button(enabled=False)
+            self.info_label.text = "✅ Đã lưu kết quả"
             self.logger.info("Measurement saved")
             
         except Exception as e:
@@ -648,19 +971,27 @@ class BPMeasurementScreen(Screen):
             self.update_event.cancel()
             self.update_event = None
         
-        self.start_btn.disabled = False
-        self.start_btn.text = "Bắt đầu"
-        self.stop_btn.disabled = True
-        self.save_btn.disabled = True
+        # Reset buttons với styling mới
+        self._style_start_button(active=False)
+        self._style_stop_button(enabled=False)
+        self._style_save_button(enabled=False)
         
         self.state_label.text = "Chờ đo"
-        self.pressure_label.text = "0"
+        self.pressure_label.text = "0 mmHg"
+        self.info_label.text = 'Nhấn "BẮT ĐẦU" để đo huyết áp'
         
         # Clear results
-        self.sys_label.text = "--"
-        self.dia_label.text = "--"
-        self.map_label.text = "--"
-        self.hr_label.text = "--"
+        self.sys_label.text = "---"
+        self.sys_label.text_color = TEXT_PRIMARY
+        self.dia_label.text = "---"
+        self.dia_label.text_color = TEXT_PRIMARY
+        self.map_label.text = "-- mmHg"
+        self.hr_label.text = "-- BPM"
+        self.bp_status_label.text = "Chờ đo"
+        self.bp_status_label.text_color = TEXT_MUTED
+        
+        # Reset progress
+        self.progress_bar.value = 0
         
         # Reset TTS announce flags
         self._inflate_announced = False
