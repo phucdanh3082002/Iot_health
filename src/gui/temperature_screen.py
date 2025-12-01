@@ -484,6 +484,9 @@ class TemperatureScreen(Screen):
             self.app_instance.save_measurement_to_database(measurement_data)
             self.logger.info(f"Saved temperature measurement: {self.current_temp}°C")
             
+            # TTS: Announce measurement complete
+            self._speak_scenario(ScenarioID.MEASUREMENT_COMPLETE)
+            
             # Reset for next measurement
             self._style_save_button(enabled=False)
 

@@ -18,6 +18,14 @@ from kivy.config import Config
 from kivymd.app import MDApp
 from kivymd.uix.snackbar import Snackbar
 
+# GPIO for physical emergency button
+try:
+    import RPi.GPIO as GPIO
+    GPIO_AVAILABLE = True
+except (ImportError, RuntimeError):
+    GPIO_AVAILABLE = False
+    logging.warning("RPi.GPIO not available - physical emergency button disabled")
+
 # Add project root to path for imports
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
@@ -87,6 +95,113 @@ class HealthMonitorApp(MDApp):
         current_data (Dict): Latest sensor data
     """
 
+    # ------------------------------------------------------------------
+    # GPIO Emergency Button Setup
+    # ------------------------------------------------------------------
+    
+    def _setup_gpio_emergency_button(self):
+        """
+        Setup GPIO interrupt for physical emergency button
+        
+        Hardware:
+        - GPIO 25 (BCM) - Input with pull-up resistor
+        - Button connects GPIO 25 to GND when pressed
+        - Debounce: 300ms
+        """
+        if not GPIO_AVAILABLE:
+            self.logger.info("⚠️ GPIO not available - physical emergency button disabled")
+            return
+        
+        try:
+            # Set GPIO mode
+            GPIO.setmode(GPIO.BCM)
+            
+            # Setup GPIO 25 as input with pull-up
+            GPIO.setup(self.EMERGENCY_BUTTON_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            
+            # Add interrupt on falling edge (button press = LOW)
+            GPIO.add_event_detect(
+                self.EMERGENCY_BUTTON_GPIO,
+                GPIO.FALLING,
+                callback=self._on_physical_emergency_pressed,
+                bouncetime=300  # 300ms debounce
+            )
+            
+            self.gpio_emergency_enabled = True
+            self.logger.info(f"✅ GPIO emergency button setup on GPIO {self.EMERGENCY_BUTTON_GPIO}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to setup GPIO emergency button: {e}")
+            self.gpio_emergency_enabled = False
+    
+    def _on_physical_emergency_pressed(self, channel):
+        """
+        GPIO interrupt callback - physical emergency button pressed
+        
+        Args:
+            channel: GPIO channel number (should be 25)
+        """
+        self.logger.critical(f"🚨 PHYSICAL EMERGENCY BUTTON PRESSED (GPIO {channel})")
+        
+        # Schedule on main thread (GPIO callback runs in separate thread)
+        Clock.schedule_once(lambda dt: self._trigger_emergency_from_gpio(), 0)
+    
+    def _trigger_emergency_from_gpio(self):
+        """
+        Trigger emergency from GPIO button (runs on main Kivy thread)
+        
+        Logic:
+        1. Get emergency button from dashboard screen
+        2. Trigger same flow as GUI button
+        3. If dashboard not available, fallback to direct MQTT alert
+        """
+        try:
+            # Try to get dashboard screen's emergency button
+            if self.screen_manager and hasattr(self.screen_manager, 'get_screen'):
+                try:
+                    dashboard = self.screen_manager.get_screen('dashboard')
+                    if hasattr(dashboard, 'emergency_button'):
+                        # Trigger GUI emergency button
+                        dashboard.emergency_button._on_emergency_pressed(None)
+                        self.logger.info("✅ Triggered GUI emergency button from GPIO")
+                        return
+                except Exception as e:
+                    self.logger.warning(f"Could not access dashboard emergency button: {e}")
+            
+            # Fallback: Direct emergency handling
+            self.logger.warning("Dashboard unavailable - using fallback emergency handling")
+            self._speak_scenario(ScenarioID.EMERGENCY_BUTTON_PRESSED)
+            
+            # Send MQTT emergency alert directly
+            if self.mqtt_integration:
+                alert_data = {
+                    'timestamp': time.time(),
+                    'device_id': self.device_id,
+                    'patient_id': self.patient_id,
+                    'alert_type': 'emergency_button_physical',
+                    'severity': 'critical',
+                    'message': 'Physical emergency button pressed (GPIO 25)',
+                    'vital_sign': None,
+                    'current_value': None,
+                    'threshold_value': None,
+                }
+                self.mqtt_integration.mqtt_client.publish_alert(alert_data)
+                self.logger.info("📡 Emergency MQTT alert sent from fallback")
+            
+        except Exception as e:
+            self.logger.error(f"Error handling GPIO emergency: {e}", exc_info=True)
+    
+    def _cleanup_gpio(self):
+        """
+        Cleanup GPIO on app shutdown
+        """
+        if self.gpio_emergency_enabled and GPIO_AVAILABLE:
+            try:
+                GPIO.cleanup(self.EMERGENCY_BUTTON_GPIO)
+                self.logger.info(f"✅ GPIO {self.EMERGENCY_BUTTON_GPIO} cleaned up")
+            except Exception as e:
+                self.logger.error(f"Error cleaning up GPIO: {e}")
+    
     # ------------------------------------------------------------------
     # Initialization & Lifecycle
     # ------------------------------------------------------------------
@@ -174,6 +289,11 @@ class HealthMonitorApp(MDApp):
         # Screen manager
         self.screen_manager = None
         self.data_update_event = None
+        
+        # GPIO Emergency Button (Physical)
+        self.gpio_emergency_enabled = False
+        self.EMERGENCY_BUTTON_GPIO = 25  # GPIO 25
+        self._setup_gpio_emergency_button()
 
         # Pre-register callbacks for sensors
         self.sensor_callbacks = {
@@ -1684,6 +1804,9 @@ class HealthMonitorApp(MDApp):
         
         # Stop data updates
         self.stop_data_updates()
+        
+        # Cleanup GPIO emergency button
+        self._cleanup_gpio()
         
         if self.tts_manager:
             try:

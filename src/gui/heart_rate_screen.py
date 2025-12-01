@@ -1501,6 +1501,10 @@ class HeartRateScreen(Screen):
                 self.current_hr,
                 self.current_spo2,
             )
+            
+            # TTS: Announce measurement complete
+            self._speak_scenario(ScenarioID.MEASUREMENT_COMPLETE)
+            
             self._style_save_button(False)
         except Exception as exc:  # pragma: no cover - safety log
             self.logger.error("Không thể lưu kết quả HR/SpO2: %s", exc)

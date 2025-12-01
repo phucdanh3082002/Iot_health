@@ -953,6 +953,9 @@ class BPMeasurementScreen(Screen):
             self.app_instance.current_data['blood_pressure_systolic'] = self.last_result.systolic
             self.app_instance.current_data['blood_pressure_diastolic'] = self.last_result.diastolic
             
+            # TTS: Announce measurement complete
+            self._speak_scenario(ScenarioID.MEASUREMENT_COMPLETE)
+            
             # Disable save button sau khi lưu
             self._style_save_button(enabled=False)
             self.info_label.text = "✅ Đã lưu kết quả"

@@ -14,6 +14,7 @@ from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton
+from src.gui.emergency_button import EmergencyButton
 
 MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
 MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
@@ -230,17 +231,14 @@ class DashboardScreen(Screen):
         self.history_btn.bind(on_release=lambda *_: self.app_instance.navigate_to_screen("history"))
         button_row.add_widget(self.history_btn)
 
-        self.emergency_btn = MDRectangleFlatIconButton(
-            text="Khẩn cấp",
-            icon="alert",
-            text_color=MED_WARNING,
-            line_color=MED_WARNING,
+        # Emergency Button - Lớn, đỏ, nổi bật
+        self.emergency_button = EmergencyButton(
+            app_instance=self.app_instance,
+            on_emergency_confirmed=self._on_emergency_confirmed,
             size_hint=(None, None),
-            height=dp(36),
-            width=dp(120),
+            size=(dp(80), dp(80)),
         )
-        self.emergency_btn.bind(on_release=self._on_emergency_pressed)
-        button_row.add_widget(self.emergency_btn)
+        button_row.add_widget(self.emergency_button)
 
         info_card.add_widget(button_row)
 
@@ -309,8 +307,32 @@ class DashboardScreen(Screen):
         self.logger.info("Auto-measure sequence requested")
         self.auto_button.update_state("--", "Đang chuẩn bị", subtitle="Giữ bệnh nhân ổn định")
 
-    def _on_emergency_pressed(self, *_):
-        self.logger.warning("Emergency button pressed from dashboard")
+    def _on_emergency_confirmed(self):
+        """
+        Callback khi emergency được confirm (sau countdown hoặc nhấn XÁC NHẬN).
+        
+        Additional actions có thể thêm ở đây:
+        - Log to local database
+        - Send SMS/email
+        - Activate alarm sound
+        """
+        self.logger.critical("🚨 EMERGENCY CONFIRMED from dashboard")
+        
+        # Log emergency event to database
+        try:
+            import time
+            emergency_data = {
+                'timestamp': time.time(),
+                'alert_type': 'emergency_button',
+                'severity': 'critical',
+                'message': 'Emergency button pressed from dashboard',
+                'vital_sign': None,
+                'current_value': None,
+                'threshold_value': None,
+            }
+            self.app_instance.save_alert_to_database(emergency_data)
+        except Exception as e:
+            self.logger.error(f"Failed to log emergency to database: {e}")
 
     def _on_bp_pressed(self, *_):
         self.logger.info("Blood pressure button pressed, navigating to BP measurement screen")

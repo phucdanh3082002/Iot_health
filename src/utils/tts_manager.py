@@ -247,15 +247,27 @@ def _format_decimal(value: Union[int, float, str], decimals: int = 1, fallback: 
 class ScenarioID(str, Enum):
     """Identifiers for speech scenarios."""
 
+    # System
     SYSTEM_START = "system_start"
+    SYSTEM_SHUTDOWN = "system_shutdown"
     NAVIGATE_DASHBOARD = "navigate_dashboard"
+    SETTINGS_UPDATED = "settings_updated"
+    
+    # Network & Sync
     NETWORK_CONNECTED = "network_connected"
     NETWORK_DISCONNECTED = "network_disconnected"
+    MQTT_PUBLISH_OK = "mqtt_publish_ok"
+    MQTT_PUBLISH_FAIL = "mqtt_publish_fail"
+    STORE_FORWARD_ACTIVE = "store_forward_active"
+    
+    # Heart Rate & SpO2
     HR_PROMPT_FINGER = "hr_prompt_finger"
     HR_NO_FINGER = "hr_no_finger"
     HR_MEASURING = "hr_measuring"
     HR_RESULT = "hr_result"
     HR_SIGNAL_WEAK = "hr_signal_weak"
+    
+    # Temperature
     TEMP_PREP = "temp_prep"
     TEMP_MEASURING = "temp_measuring"
     TEMP_NORMAL = "temp_normal"
@@ -266,23 +278,67 @@ class ScenarioID(str, Enum):
     TEMP_RESULT_FEVER = "temp_result_fever"
     TEMP_RESULT_HIGH_FEVER = "temp_result_high_fever"
     TEMP_RESULT_CRITICAL_HIGH = "temp_result_critical_high"
+    
+    # Blood Pressure
     BP_INFLATE = "bp_inflate"
     BP_OVERPRESSURE = "bp_overpressure"
     BP_DEFLATE = "bp_deflate"
     BP_RESULT = "bp_result"
     SAFETY_EMERGENCY_RELEASE = "safety_emergency_release"
+    
+    # Errors & Maintenance
     SENSOR_FAILURE = "sensor_failure"
     PUMP_VALVE_FAILURE = "pump_valve_failure"
-    MQTT_PUBLISH_OK = "mqtt_publish_ok"
-    MQTT_PUBLISH_FAIL = "mqtt_publish_fail"
-    STORE_FORWARD_ACTIVE = "store_forward_active"
+    
+    # Navigation & Interaction
     NAVIGATION_TAP_HEART = "navigation_tap_heart"
-    SETTINGS_UPDATED = "settings_updated"
     HISTORY_OPEN = "history_open"
     ANOMALY_DETECTED = "anomaly_detected"
     CHATBOT_PROMPT = "chatbot_prompt"
     REMINDER_DAILY = "reminder_daily"
-    SYSTEM_SHUTDOWN = "system_shutdown"
+    
+    # ============================================================
+    # NEW SCENARIOS - Emergency & Safety (5 scenarios)
+    # ============================================================
+    EMERGENCY_BUTTON_PRESSED = "emergency_button_pressed"
+    EMERGENCY_CALL_INITIATED = "emergency_call_initiated"
+    EMERGENCY_CONTACT_NOTIFIED = "emergency_contact_notified"
+    CRITICAL_VITALS_ALERT = "critical_vitals_alert"
+    EMERGENCY_CANCELLED = "emergency_cancelled"
+    
+    # ============================================================
+    # NEW SCENARIOS - Vital Signs Alerts (8 scenarios)
+    # ============================================================
+    HR_TOO_LOW = "hr_too_low"
+    HR_TOO_HIGH = "hr_too_high"
+    SPO2_LOW = "spo2_low"
+    SPO2_CRITICAL = "spo2_critical"
+    BP_HYPERTENSION = "bp_hypertension"
+    BP_HYPOTENSION = "bp_hypotension"
+    BP_HYPERTENSIVE_CRISIS = "bp_hypertensive_crisis"
+    IRREGULAR_HEARTBEAT = "irregular_heartbeat"
+    
+    # ============================================================
+    # NEW SCENARIOS - User Guidance (6 scenarios)
+    # ============================================================
+    FIRST_TIME_SETUP = "first_time_setup"
+    SENSOR_PLACEMENT_GUIDE = "sensor_placement_guide"
+    MEASUREMENT_TIPS = "measurement_tips"
+    DEVICE_READY = "device_ready"
+    CALIBRATION_NEEDED = "calibration_needed"
+    MAINTENANCE_REMINDER = "maintenance_reminder"
+    
+    # ============================================================
+    # NEW SCENARIOS - Results & Reports (3 scenarios)
+    # ============================================================
+    MEASUREMENT_COMPLETE = "measurement_complete"
+    DAILY_SUMMARY = "daily_summary"
+    TREND_IMPROVING = "trend_improving"
+    
+    # ============================================================
+    # NEW SCENARIOS - Device Connection (1 scenario)
+    # ============================================================
+    QR_PAIRING_SUCCESS = "qr_pairing_success"
 
 
 @dataclass(frozen=True)
@@ -533,6 +589,168 @@ SCENARIO_LIBRARY: Dict[ScenarioID, ScenarioTemplate] = {
     ScenarioID.SYSTEM_SHUTDOWN: ScenarioTemplate(
         template_vi="Đang tắt hệ thống IoT Health, hẹn gặp lại.",
         template_en="Shutting down the IoT Health system, see you next time.",
+        cooldown_seconds=5.0,
+    ),
+    
+    # ============================================================
+    # NEW SCENARIOS - Emergency & Safety
+    # ============================================================
+    ScenarioID.EMERGENCY_BUTTON_PRESSED: ScenarioTemplate(
+        template_vi="Đã kích hoạt cảnh báo khẩn cấp. Đang gửi thông báo đến người thân và trung tâm y tế.",
+        template_en="Emergency alert activated. Notifying family members and medical center.",
+        cooldown_seconds=3.0,
+    ),
+    ScenarioID.EMERGENCY_CALL_INITIATED: ScenarioTemplate(
+        template_vi="Đang kết nối với số khẩn cấp. Vui lòng giữ máy.",
+        template_en="Connecting to emergency services. Please stay on the line.",
+        cooldown_seconds=5.0,
+    ),
+    ScenarioID.EMERGENCY_CONTACT_NOTIFIED: ScenarioTemplate(
+        template_vi="Đã gửi tin nhắn khẩn cấp đến {contact_name}.",
+        template_en="Emergency message sent to {contact_name}.",
+        required_fields=("contact_name",),
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.CRITICAL_VITALS_ALERT: ScenarioTemplate(
+        template_vi="Cảnh báo: Chỉ số sức khỏe ở mức nguy hiểm. Vui lòng liên hệ y tế ngay.",
+        template_en="Warning: Critical health vitals detected. Contact medical assistance immediately.",
+        cooldown_seconds=5.0,
+    ),
+    ScenarioID.EMERGENCY_CANCELLED: ScenarioTemplate(
+        template_vi="Đã hủy cảnh báo khẩn cấp.",
+        template_en="Emergency alert cancelled.",
+        cooldown_seconds=5.0,
+    ),
+    
+    # ============================================================
+    # NEW SCENARIOS - Vital Signs Alerts
+    # ============================================================
+    ScenarioID.HR_TOO_LOW: ScenarioTemplate(
+        template_vi="Cảnh báo: Nhịp tim quá thấp, {bpm} nhịp mỗi phút. Hãy nghỉ ngơi và theo dõi.",
+        template_en="Warning: Heart rate too low at {bpm} beats per minute. Rest and monitor closely.",
+        required_fields=("bpm",),
+        formatters={"bpm": lambda value: _format_int(value, "0")},
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.HR_TOO_HIGH: ScenarioTemplate(
+        template_vi="Cảnh báo: Nhịp tim quá cao, {bpm} nhịp mỗi phút. Hãy ngồi xuống và thở sâu.",
+        template_en="Warning: Heart rate too high at {bpm} beats per minute. Sit down and breathe deeply.",
+        required_fields=("bpm",),
+        formatters={"bpm": lambda value: _format_int(value, "0")},
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.SPO2_LOW: ScenarioTemplate(
+        template_vi="Cảnh báo: Nồng độ oxy trong máu thấp, {spo2} phần trăm. Hãy thở sâu và kiểm tra lại.",
+        template_en="Warning: Blood oxygen level low at {spo2} percent. Breathe deeply and recheck.",
+        required_fields=("spo2",),
+        formatters={"spo2": lambda value: _format_int(value, "0")},
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.SPO2_CRITICAL: ScenarioTemplate(
+        template_vi="Nguy hiểm: Oxy máu rất thấp, {spo2} phần trăm. Cần hỗ trợ y tế khẩn cấp.",
+        template_en="Critical: Blood oxygen critically low at {spo2} percent. Emergency medical assistance required.",
+        required_fields=("spo2",),
+        formatters={"spo2": lambda value: _format_int(value, "0")},
+        cooldown_seconds=5.0,
+    ),
+    ScenarioID.BP_HYPERTENSION: ScenarioTemplate(
+        template_vi="Cảnh báo: Huyết áp cao, {sys} trên {dia}. Hãy nghỉ ngơi và uống thuốc nếu có chỉ định.",
+        template_en="Warning: High blood pressure at {sys} over {dia}. Rest and take medication if prescribed.",
+        required_fields=("sys", "dia"),
+        formatters={
+            "sys": lambda value: _format_int(value, "0"),
+            "dia": lambda value: _format_int(value, "0"),
+        },
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.BP_HYPOTENSION: ScenarioTemplate(
+        template_vi="Cảnh báo: Huyết áp thấp, {sys} trên {dia}. Hãy nằm xuống và nâng chân lên.",
+        template_en="Warning: Low blood pressure at {sys} over {dia}. Lie down and elevate your legs.",
+        required_fields=("sys", "dia"),
+        formatters={
+            "sys": lambda value: _format_int(value, "0"),
+            "dia": lambda value: _format_int(value, "0"),
+        },
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.BP_HYPERTENSIVE_CRISIS: ScenarioTemplate(
+        template_vi="Nguy hiểm: Huyết áp rất cao, {sys} trên {dia}. Cần đến bệnh viện ngay.",
+        template_en="Critical: Blood pressure dangerously high at {sys} over {dia}. Go to hospital immediately.",
+        required_fields=("sys", "dia"),
+        formatters={
+            "sys": lambda value: _format_int(value, "0"),
+            "dia": lambda value: _format_int(value, "0"),
+        },
+        cooldown_seconds=5.0,
+    ),
+    ScenarioID.IRREGULAR_HEARTBEAT: ScenarioTemplate(
+        template_vi="Phát hiện nhịp tim không đều. Hãy đo lại và liên hệ bác sĩ nếu tình trạng kéo dài.",
+        template_en="Irregular heartbeat detected. Retest and contact your doctor if it persists.",
+        cooldown_seconds=15.0,
+    ),
+    
+    # ============================================================
+    # NEW SCENARIOS - User Guidance
+    # ============================================================
+    ScenarioID.FIRST_TIME_SETUP: ScenarioTemplate(
+        template_vi="Chào mừng đến với IoT Health. Hãy làm theo hướng dẫn trên màn hình để thiết lập.",
+        template_en="Welcome to IoT Health. Please follow the on-screen instructions to set up.",
+        cooldown_seconds=0.0,
+    ),
+    ScenarioID.SENSOR_PLACEMENT_GUIDE: ScenarioTemplate(
+        template_vi="Để đo chính xác, hãy đặt cảm biến {sensor} đúng vị trí như hình minh họa.",
+        template_en="For accurate readings, place the {sensor} sensor in the correct position as illustrated.",
+        required_fields=("sensor",),
+        cooldown_seconds=10.0,
+    ),
+    ScenarioID.MEASUREMENT_TIPS: ScenarioTemplate(
+        template_vi="Để kết quả chính xác, hãy ngồi yên, thư giãn và không nói chuyện trong khi đo.",
+        template_en="For accurate results, sit still, relax, and avoid talking during measurement.",
+        cooldown_seconds=20.0,
+    ),
+    ScenarioID.DEVICE_READY: ScenarioTemplate(
+        template_vi="Thiết bị đã sẵn sàng. Chạm vào nút đo để bắt đầu.",
+        template_en="Device ready. Tap the measure button to begin.",
+        cooldown_seconds=5.0,
+    ),
+    ScenarioID.CALIBRATION_NEEDED: ScenarioTemplate(
+        template_vi="Cảm biến cần hiệu chuẩn. Vui lòng liên hệ nhân viên kỹ thuật.",
+        template_en="Sensor calibration required. Please contact technical support.",
+        cooldown_seconds=30.0,
+    ),
+    ScenarioID.MAINTENANCE_REMINDER: ScenarioTemplate(
+        template_vi="Đã đến lịch bảo trì định kỳ. Vui lòng vệ sinh cảm biến và kiểm tra kết nối.",
+        template_en="Scheduled maintenance due. Please clean sensors and check connections.",
+        cooldown_seconds=60.0,
+    ),
+    
+    # ============================================================
+    # NEW SCENARIOS - Results & Reports
+    # ============================================================
+    ScenarioID.MEASUREMENT_COMPLETE: ScenarioTemplate(
+        template_vi="Đo xong. Kết quả đã được lưu vào lịch sử.",
+        template_en="Measurement complete. Results saved to history.",
+        cooldown_seconds=3.0,
+    ),
+    ScenarioID.DAILY_SUMMARY: ScenarioTemplate(
+        template_vi="Hôm nay bạn đã đo {count} lần. Các chỉ số trung bình trong giới hạn bình thường.",
+        template_en="You measured {count} times today. Average vitals are within normal range.",
+        required_fields=("count",),
+        formatters={"count": lambda value: _format_int(value, "0")},
+        cooldown_seconds=0.0,
+    ),
+    ScenarioID.TREND_IMPROVING: ScenarioTemplate(
+        template_vi="Chúc mừng! Các chỉ số sức khỏe của bạn đang cải thiện trong tuần qua.",
+        template_en="Congratulations! Your health vitals are improving over the past week.",
+        cooldown_seconds=0.0,
+    ),
+    
+    # ============================================================
+    # NEW SCENARIOS - Device Connection
+    # ============================================================
+    ScenarioID.QR_PAIRING_SUCCESS: ScenarioTemplate(
+        template_vi="Đã ghép nối với ứng dụng di động thành công.",
+        template_en="Successfully paired with mobile application.",
         cooldown_seconds=5.0,
     ),
 }
