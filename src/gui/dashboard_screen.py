@@ -13,7 +13,7 @@ from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.gridlayout import MDGridLayout
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel, MDIcon
-from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton
+from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton, MDFillRoundFlatIconButton
 from src.gui.emergency_button import EmergencyButton
 
 MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
@@ -26,7 +26,7 @@ TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 
 
 class FeatureCard(MDCard):
-    """Thẻ chức năng đồng bộ màu sắc với TemperatureScreen."""
+    """Thẻ chức năng với màu nền tối, sync với theme y tế."""
 
     def __init__(self, title: str, subtitle: str, icon: str, card_color: tuple[float, ...], **kwargs):
         super().__init__(**kwargs)
@@ -38,15 +38,16 @@ class FeatureCard(MDCard):
 
         self.orientation = "vertical"
         self.size_hint = (0.5, None)
-        self.height = dp(96)
+        self.height = dp(115)  # Tăng height để tận dụng không gian
         self.padding = (dp(12), dp(10), dp(12), dp(10))
-        self.spacing = dp(2)
-        self.radius = [dp(18)]
-        self.md_bg_color = self.card_color
+        self.spacing = dp(4)
+        self.radius = [dp(16)]
+        self.md_bg_color = self.card_color  # Màu nền tối
         self.ripple_behavior = True
 
         content = MDBoxLayout(orientation="vertical", spacing=dp(4))
 
+        # Icon + Title row
         icon_row = MDBoxLayout(
             orientation="horizontal",
             size_hint_y=None,
@@ -56,7 +57,7 @@ class FeatureCard(MDCard):
         icon_widget = MDIcon(
             icon=icon,
             theme_text_color="Custom",
-            text_color=TEXT_PRIMARY,
+            text_color=(1, 1, 1, 0.9),  # Trắng
             size_hint=(None, None),
             size=(dp(22), dp(22)),
         )
@@ -65,41 +66,45 @@ class FeatureCard(MDCard):
 
         title_label = MDLabel(
             text=title,
-            font_style="Subtitle2",
+            font_style="Caption",
             halign="left",
             valign="middle",
             theme_text_color="Custom",
-            text_color=TEXT_PRIMARY,
+            text_color=(1, 1, 1, 0.85),  # Trắng nhạt
         )
         title_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         icon_row.add_widget(title_label)
         content.add_widget(icon_row)
 
+        # Value (lớn, nổi bật, TRẮNG)
         self.value_label = MDLabel(
             text="--",
             font_style="H5",
             halign="left",
             valign="middle",
             theme_text_color="Custom",
-            text_color=TEXT_PRIMARY,
+            text_color=(1, 1, 1, 1),  # Trắng sáng
+            bold=True,
         )
         self.value_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         content.add_widget(self.value_label)
 
+        # Status (màu accent - xanh lục nhạt)
         self.status_label = MDLabel(
             text="Nhấn để đo",
-            font_style="Caption",
+            font_style="Body2",
             theme_text_color="Custom",
-            text_color=TEXT_MUTED,
+            text_color=(0.4, 0.9, 0.7, 1),  # Xanh lục accent
         )
         self.status_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         content.add_widget(self.status_label)
 
+        # Subtitle (trắng mờ)
         self.subtitle_label = MDLabel(
             text=subtitle,
             font_style="Caption",
             theme_text_color="Custom",
-            text_color=TEXT_MUTED,
+            text_color=(1, 1, 1, 0.6),  # Trắng mờ
         )
         self.subtitle_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         content.add_widget(self.subtitle_label)
@@ -134,10 +139,11 @@ class DashboardScreen(Screen):
     # ------------------------------------------------------------------
 
     def _build_layout(self):
+        """Build layout tối ưu cho màn hình 3.5 inch (480×320)."""
         main_layout = MDBoxLayout(
             orientation="vertical",
-            spacing=dp(6),
-            padding=(dp(8), dp(6), dp(8), dp(8)),
+            spacing=dp(4),
+            padding=(dp(6), dp(4), dp(6), dp(6)),
         )
 
         with main_layout.canvas.before:
@@ -145,7 +151,7 @@ class DashboardScreen(Screen):
             self._bg_rect = Rectangle(size=main_layout.size, pos=main_layout.pos)
         main_layout.bind(size=self._update_bg, pos=self._update_bg)
 
-        self._create_info_banner(main_layout)
+        self._create_header_row(main_layout)
         self._create_measurement_grid(main_layout)
 
         self.add_widget(main_layout)
@@ -154,138 +160,162 @@ class DashboardScreen(Screen):
         self._bg_rect.size = instance.size
         self._bg_rect.pos = instance.pos
 
-    def _create_info_banner(self, parent):
-        info_card = MDCard(
-            orientation="vertical",
-            md_bg_color=MED_CARD_BG,
-            radius=[dp(16)],
-            padding=(dp(12), dp(8), dp(12), dp(10)),
-            spacing=dp(2),
-            size_hint_y=None,
-            height=dp(100),
-        )
-
-        top_row = MDBoxLayout(
+    def _create_header_row(self, parent):
+        """
+        Header compact: Title + Time | Action Buttons
+        """
+        header_card = MDCard(
             orientation="horizontal",
-            spacing=dp(10),
+            md_bg_color=MED_CARD_BG,
+            radius=[dp(12)],
+            padding=(dp(6), dp(8), dp(4), dp(8)),
+            spacing=dp(4),
             size_hint_y=None,
-            height=dp(38),
+            height=dp(64),
         )
 
-        text_column = MDBoxLayout(
+        # ------------------------------------------------------------------
+        # LEFT: Title + DateTime (vertical layout)
+        # ------------------------------------------------------------------
+        text_box = MDBoxLayout(
             orientation="vertical",
             spacing=dp(2),
-            size_hint_x=1,
+            size_hint_x=0.55,  # Chiếm 55% width
         )
 
         self.title_label = MDLabel(
-            text="IoT Health Monitor",
-            font_style="Subtitle1",
+            text="HỆ THỐNG GIÁM SÁT SỨC KHOẺ",
+            font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
+            bold=True,
+            size_hint_y=None,
+            height=dp(30),
+            halign="left",
+            valign="center",
         )
         self.title_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        text_column.add_widget(self.title_label)
+        text_box.add_widget(self.title_label)
 
         self.time_label = MDLabel(
-            text=datetime.now().strftime("%H:%M:%S - %d/%m/%Y"),
+            text=datetime.now().strftime("%d/%m/%Y - %H:%M"),
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
+            size_hint_y=None,
+            height=dp(18),
+            halign="left",
+            valign="center",
         )
         self.time_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        text_column.add_widget(self.time_label)
+        text_box.add_widget(self.time_label)
 
-        top_row.add_widget(text_column)
+        header_card.add_widget(text_box)
 
-        settings_btn = MDIconButton(
-            icon="cog",
-            theme_icon_color="Custom",
-            icon_color=TEXT_PRIMARY,
-            size_hint=(None, None),
-            pos_hint={"center_y": 0.5},
-        )
-        settings_btn.bind(on_release=lambda *_: self.app_instance.navigate_to_screen("settings"))
-        top_row.add_widget(settings_btn)
-
-        info_card.add_widget(top_row)
-
-        button_row = MDBoxLayout(
+        # ------------------------------------------------------------------
+        # RIGHT: Action Buttons (icon-only for compact) + Emergency Button
+        # ------------------------------------------------------------------
+        action_box = MDBoxLayout(
             orientation="horizontal",
-            spacing=dp(8),
+            spacing=dp(4),
+            size_hint_x=0.45,  # Chiếm 45% width
             size_hint_y=None,
             height=dp(40),
         )
 
-        button_row.add_widget(MDBoxLayout(size_hint_x=1))
-
-        self.history_btn = MDRectangleFlatIconButton(
-            text="Lịch sử",
-            icon="book-open",
-            text_color=TEXT_PRIMARY,
-            line_color=TEXT_PRIMARY,
+        # Settings Button
+        self.settings_btn = MDIconButton(
+            icon="cog-outline",
+            theme_icon_color="Custom",
+            icon_color=TEXT_PRIMARY,
+            md_bg_color=(0.2, 0.35, 0.5, 1),
             size_hint=(None, None),
-            height=dp(36),
-            width=dp(110),
+            size=(dp(40), dp(40)),
+        )
+        self.settings_btn.bind(on_release=lambda *_: self.app_instance.navigate_to_screen("settings"))
+        action_box.add_widget(self.settings_btn)
+
+        # History Button
+        self.history_btn = MDIconButton(
+            icon="history",
+            theme_icon_color="Custom",
+            icon_color=TEXT_PRIMARY,
+            md_bg_color=(0.15, 0.45, 0.35, 1),
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
         )
         self.history_btn.bind(on_release=lambda *_: self.app_instance.navigate_to_screen("history"))
-        button_row.add_widget(self.history_btn)
+        action_box.add_widget(self.history_btn)
 
-        # Emergency Button - Lớn, đỏ, nổi bật
+        # QR Code Button
+        self.qr_btn = MDIconButton(
+            icon="qrcode-scan",
+            theme_icon_color="Custom",
+            icon_color=TEXT_PRIMARY,
+            md_bg_color=(0.45, 0.28, 0.5, 1),
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
+        )
+        self.qr_btn.bind(on_release=self._on_qr_pressed)
+        action_box.add_widget(self.qr_btn)
+
+        # Emergency Button (4th button in action_box)
         self.emergency_button = EmergencyButton(
             app_instance=self.app_instance,
             on_emergency_confirmed=self._on_emergency_confirmed,
             size_hint=(None, None),
-            size=(dp(80), dp(80)),
+            size=(dp(40), dp(40)),
         )
-        button_row.add_widget(self.emergency_button)
+        action_box.add_widget(self.emergency_button)
 
-        info_card.add_widget(button_row)
+        header_card.add_widget(action_box)
 
-        parent.add_widget(info_card)
+        parent.add_widget(header_card)
 
     def _create_measurement_grid(self, parent):
+        """Grid 2x2 cho 4 chức năng đo - màu nền tối, sync theme."""
         grid = MDGridLayout(
             cols=2,
             spacing=dp(8),
             size_hint_y=None,
-            row_default_height=dp(96),
+            row_default_height=dp(115),
             row_force_default=True,
             adaptive_height=True,
         )
 
+        # Màu nền tối cho cards - sync với MED_CARD_BG
         self.cardio_button = FeatureCard(
-            title="Đo nhịp tim + SpO2",
-            subtitle="Nhấn để đo trực tiếp",
+            title="Nhịp tim + SpO2",
+            subtitle="Đặt ngón tay lên cảm biến",
             icon="heart-pulse",
-            card_color=(0.47, 0.2, 0.4, 1),
+            card_color=(0.35, 0.15, 0.30, 1),  # Tím đậm
         )
         self.cardio_button.bind(on_release=self._on_cardio_pressed)
         grid.add_widget(self.cardio_button)
 
         self.temp_button = FeatureCard(
-            title="Đo nhiệt độ",
+            title="Nhiệt độ cơ thể",
             subtitle="Đưa cảm biến gần trán",
             icon="thermometer",
-            card_color=(0.16, 0.45, 0.4, 1),
+            card_color=(0.12, 0.35, 0.32, 1),  # Xanh lục đậm
         )
         self.temp_button.bind(on_release=self._on_temperature_pressed)
         grid.add_widget(self.temp_button)
 
         self.auto_button = FeatureCard(
-            title="Chế độ tự động",
+            title="Đo tự động",
             subtitle="HR → SpO2 → Temp",
-            icon="repeat",
-            card_color=(0.24, 0.32, 0.52, 1),
+            icon="autorenew",
+            card_color=(0.18, 0.25, 0.42, 1),  # Xanh dương đậm
         )
         self.auto_button.bind(on_release=self._on_auto_sequence_pressed)
         grid.add_widget(self.auto_button)
 
         self.bp_button = FeatureCard(
-            title="Đo huyết áp",
-            subtitle="Chờ phần cứng HX710B",
-            icon="stethoscope",
-            card_color=(0.45, 0.28, 0.18, 1),
+            title="Huyết áp",
+            subtitle="Quấn vòng bít vào cánh tay",
+            icon="water",
+            card_color=(0.38, 0.22, 0.15, 1),  # Nâu cam đậm
         )
         self.bp_button.bind(on_release=self._on_bp_pressed)
         grid.add_widget(self.bp_button)
@@ -306,6 +336,13 @@ class DashboardScreen(Screen):
     def _on_auto_sequence_pressed(self, *_):
         self.logger.info("Auto-measure sequence requested")
         self.auto_button.update_state("--", "Đang chuẩn bị", subtitle="Giữ bệnh nhân ổn định")
+
+    def _on_qr_pressed(self, *_):
+        """Handler cho QR Code button - hiển thị QR để pair với app mobile."""
+        self.logger.info("QR Code button pressed")
+        # TODO: Implement QR code display screen
+        # self.app_instance.navigate_to_screen("qr_code")
+        self.logger.warning("QR Code feature not yet implemented")
 
     def _on_emergency_confirmed(self):
         """
@@ -418,7 +455,7 @@ class DashboardScreen(Screen):
                 value = f"{systolic:.0f}/{diastolic:.0f} mmHg"
                 self.bp_button.update_state(value, "Đã đo", subtitle="Nhấn để xem chi tiết")
             else:
-                bp_status_text = "Chờ phần cứng"
+                bp_status_text = "Nhấn để đo"
                 bp_subtitle_text = "HX710B chưa sẵn sàng"
 
                 if not bp_sensor_status_data: # Sensor unavailable
@@ -440,7 +477,7 @@ class DashboardScreen(Screen):
                 self.bp_button.update_state("--", bp_status_text, subtitle=bp_subtitle_text)
 
             if self.time_label:
-                self.time_label.text = datetime.now().strftime("%H:%M:%S - %d/%m/%Y")
+                self.time_label.text = datetime.now().strftime("%d/%m/%Y - %H:%M")
 
         except Exception as exc:
             self.logger.error(f"Error updating dashboard data: {exc}")

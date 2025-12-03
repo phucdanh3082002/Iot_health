@@ -30,10 +30,10 @@ EMERGENCY_GLOW = (1.0, 0.3, 0.2, 0.3)       # Glow effect
 
 class EmergencyButton(FloatLayout):
     """
-    Nút khẩn cấp lớn, đỏ với countdown 5 giây để hủy
+    Nút khẩn cấp compact (44dp) với countdown 5 giây để hủy
     
     Features:
-    - Kích thước lớn (80dp) dễ nhấn cho người già
+    - Kích thước 44dp phù hợp với header bar
     - Màu đỏ nổi bật với icon cảnh báo
     - Popup xác nhận với countdown 5s
     - TTS thông báo + MQTT alert
@@ -60,26 +60,26 @@ class EmergencyButton(FloatLayout):
         self._build_button()
     
     def _build_button(self):
-        """Tạo nút khẩn cấp lớn với glow effect."""
-        # Glow background (larger circle behind)
+        """Tạo nút khẩn cấp compact với glow effect nhẹ."""
+        # Glow background (circle behind) - nhỏ hơn
         with self.canvas.before:
             Color(*EMERGENCY_GLOW)
             self.glow_ellipse = Ellipse(
-                size=(dp(90), dp(90)),
-                pos=(self.width / 2 - dp(45), self.height / 2 - dp(45))
+                size=(dp(42), dp(42)),
+                pos=(self.width / 2 - dp(21), self.height / 2 - dp(21))
             )
         
         self.bind(size=self._update_glow, pos=self._update_glow)
         
-        # Main emergency button
+        # Main emergency button - compact 40dp
         self.btn = MDIconButton(
             icon="alert-octagon",
-            icon_size=dp(48),
+            icon_size=dp(20),
             theme_icon_color="Custom",
             icon_color=(1, 1, 1, 1),
             md_bg_color=EMERGENCY_COLOR,
             size_hint=(None, None),
-            size=(dp(80), dp(80)),
+            size=(dp(38), dp(38)),
             pos_hint={"center_x": 0.5, "center_y": 0.5},
         )
         self.btn.bind(on_press=self._on_emergency_pressed)
@@ -88,8 +88,8 @@ class EmergencyButton(FloatLayout):
     def _update_glow(self, *args):
         """Update glow position khi layout thay đổi."""
         self.glow_ellipse.pos = (
-            self.x + self.width / 2 - dp(45),
-            self.y + self.height / 2 - dp(45)
+            self.x + self.width / 2 - dp(21),
+            self.y + self.height / 2 - dp(21)
         )
     
     def _on_emergency_pressed(self, instance):
@@ -102,7 +102,7 @@ class EmergencyButton(FloatLayout):
         3. Nếu không hủy sau 5s → trigger emergency
         4. MQTT alert được gửi khi confirmed
         """
-        self.logger.warning("🚨 EMERGENCY BUTTON PRESSED")
+        self.logger.warning("[EMERGENCY] Emergency button pressed")
         
         # TTS warning
         self._speak_scenario(ScenarioID.EMERGENCY_BUTTON_PRESSED)
@@ -115,20 +115,20 @@ class EmergencyButton(FloatLayout):
         self.countdown_remaining = 5
         
         self.emergency_dialog = MDDialog(
-            title="🚨 KHẨN CẤP",
+            title="CẢNH BÁO KHẨN CẤP",
             text=f"Đang gửi cảnh báo khẩn cấp...\nHủy trong {self.countdown_remaining} giây",
-            size_hint=(0.8, None),
+            size_hint=(0.85, None),
             buttons=[
                 MDFlatButton(
                     text="HỦY",
                     theme_text_color="Custom",
-                    text_color=(0.2, 0.7, 0.3, 1),
+                    text_color=(0.15, 0.65, 0.25, 1),  # Xanh lá
                     on_release=self._cancel_emergency
                 ),
                 MDFlatButton(
                     text="XÁC NHẬN NGAY",
                     theme_text_color="Custom",
-                    text_color=(0.9, 0.2, 0.2, 1),
+                    text_color=(0.95, 0.25, 0.2, 1),  # Đỏ
                     on_release=self._confirm_emergency_now
                 ),
             ],
@@ -180,7 +180,7 @@ class EmergencyButton(FloatLayout):
             self.countdown_event.cancel()
             self.countdown_event = None
         
-        self.logger.critical("🚨 EMERGENCY CONFIRMED - Sending alerts")
+        self.logger.critical("[EMERGENCY] Emergency confirmed - Sending alerts")
         
         # TTS: Đang kết nối khẩn cấp
         self._speak_scenario(ScenarioID.EMERGENCY_CALL_INITIATED)
@@ -266,14 +266,14 @@ class EmergencyButton(FloatLayout):
     def _show_emergency_sent_dialog(self):
         """Hiển thị dialog xác nhận đã gửi thành công."""
         sent_dialog = MDDialog(
-            title="✅ Đã gửi cảnh báo",
+            title="ĐÃ GỬI CẢNH BÁO",
             text="Đã gửi thông báo khẩn cấp đến người thân và trung tâm y tế.",
-            size_hint=(0.8, None),
+            size_hint=(0.85, None),
             buttons=[
                 MDFlatButton(
                     text="ĐÓNG",
                     theme_text_color="Custom",
-                    text_color=(0.2, 0.6, 0.8, 1),
+                    text_color=(0.12, 0.55, 0.76, 1),  # MED_PRIMARY
                     on_release=lambda x: sent_dialog.dismiss()
                 ),
             ],
