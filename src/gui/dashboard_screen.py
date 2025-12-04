@@ -15,6 +15,8 @@ from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton, MDFillRoundFlatIconButton
 from src.gui.emergency_button import EmergencyButton
+from src.utils.qr_generator import generate_pairing_qr, check_qr_dependencies
+from src.gui.qr_pairing_popup import QRPairingPopup
 
 MED_BG_COLOR = (0.02, 0.18, 0.27, 1)
 MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
@@ -185,7 +187,7 @@ class DashboardScreen(Screen):
 
         self.title_label = MDLabel(
             text="HỆ THỐNG GIÁM SÁT SỨC KHOẺ",
-            font_style="Caption",
+            font_style="Body2",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
             bold=True,
@@ -199,7 +201,7 @@ class DashboardScreen(Screen):
 
         self.time_label = MDLabel(
             text=datetime.now().strftime("%d/%m/%Y - %H:%M"),
-            font_style="Caption",
+            font_style="Body2",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
             size_hint_y=None,
@@ -338,11 +340,94 @@ class DashboardScreen(Screen):
         self.auto_button.update_state("--", "Đang chuẩn bị", subtitle="Giữ bệnh nhân ổn định")
 
     def _on_qr_pressed(self, *_):
-        """Handler cho QR Code button - hiển thị QR để pair với app mobile."""
+        """
+        Handler cho QR Code button - hiển thị QR để pair với app mobile.
+        
+        Flow:
+        1. Đọc pairing_code, device_id từ config (cố định)
+        2. Đọc api_url từ config
+        3. Generate QR code
+        4. Hiển thị popup với QR + pairing code text
+        """
         self.logger.info("QR Code button pressed")
-        # TODO: Implement QR code display screen
-        # self.app_instance.navigate_to_screen("qr_code")
-        self.logger.warning("QR Code feature not yet implemented")
+        
+        try:
+            # Kiểm tra dependencies
+            if not check_qr_dependencies():
+                self._show_qr_error("Thiếu thư viện QR Code.\nChạy: pip install qrcode[pil]")
+                return
+            
+            # Lấy config từ app_instance (config_data chứa YAML config)
+            config = getattr(self.app_instance, 'config_data', {})
+            if not config:
+                # Fallback: thử đọc trực tiếp từ file
+                config = self._load_yaml_config()
+            
+            cloud_config = config.get('cloud', {})
+            device_config = cloud_config.get('device', {})
+            comm_config = config.get('communication', {})
+            rest_config = comm_config.get('rest_api', {})
+            
+            # Đọc pairing_code cố định từ config
+            pairing_code = device_config.get('pairing_code', 'UNKNOWN')
+            device_id = device_config.get('device_id', 'rpi_bp_001')
+            api_url = rest_config.get('server_url', 'http://localhost:8000')
+            
+            self.logger.info(f"Generating QR for device={device_id}, code={pairing_code}")
+            
+            # Generate QR code
+            qr_buffer = generate_pairing_qr(
+                pairing_code=pairing_code,
+                device_id=device_id,
+                api_url=api_url,
+            )
+            
+            # Hiển thị popup
+            popup = QRPairingPopup(
+                qr_buffer=qr_buffer,
+                pairing_code=pairing_code,
+                device_id=device_id,
+            )
+            popup.open()
+            
+        except Exception as e:
+            self.logger.error(f"QR pairing error: {e}", exc_info=True)
+            self._show_qr_error(f"Lỗi tạo QR Code: {str(e)}")
+    
+    def _load_yaml_config(self) -> dict:
+        """
+        Fallback: Đọc config trực tiếp từ file YAML.
+        
+        Returns:
+            dict: Config data hoặc {} nếu lỗi
+        """
+        try:
+            import yaml
+            from pathlib import Path
+            config_path = Path(__file__).parent.parent.parent / "config" / "app_config.yaml"
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f) or {}
+        except Exception as e:
+            self.logger.error(f"Failed to load YAML config: {e}")
+        return {}
+    
+    def _show_qr_error(self, message: str):
+        """Hiển thị thông báo lỗi QR."""
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton
+        
+        dialog = MDDialog(
+            title="Lỗi QR Code",
+            text=message,
+            buttons=[
+                MDFlatButton(
+                    text="ĐÓNG",
+                    on_release=lambda *_: dialog.dismiss()
+                ),
+            ],
+        )
+        dialog.open()
 
     def _on_emergency_confirmed(self):
         """

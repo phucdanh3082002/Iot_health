@@ -12,9 +12,19 @@ from datetime import datetime, timedelta
 from contextlib import closing
 import sqlite3
 import yaml
+from kivy.config import Config
+
+# ============================================================
+# IMPORTANT: Config MUST be set BEFORE importing MDApp
+# ============================================================
+Config.set('graphics', 'width', '480')
+Config.set('graphics', 'height', '320')
+Config.set('graphics', 'resizable', False)
+Config.set('graphics', 'fullscreen', 'auto')
+Config.set('graphics', 'show_cursor', False)
+
 from kivy.uix.screenmanager import ScreenManager
 from kivy.clock import Clock
-from kivy.config import Config
 from kivymd.app import MDApp
 from kivymd.uix.snackbar import Snackbar
 
@@ -71,13 +81,6 @@ except ImportError:
     from src.gui.bp_measurement_screen import BPMeasurementScreen
     from src.gui.settings_screen import SettingsScreen
     from src.gui.history_screen import HistoryScreen
-
-# Configure for touchscreen
-Config.set('graphics', 'width', '480')
-Config.set('graphics', 'height', '320')
-Config.set('graphics', 'resizable', False)
-Config.set('graphics', 'fullscreen', 'auto')
-Config.set('graphics', 'show_cursor', False)
 
 
 class HealthMonitorApp(MDApp):

@@ -207,7 +207,7 @@ class BPMeasurementScreen(Screen):
             height=dp(48),
         )
         pressure_icon = MDIcon(
-            icon="gauge",
+            icon="gauge-full",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
@@ -250,7 +250,7 @@ class BPMeasurementScreen(Screen):
             height=dp(48),
         )
         state_icon = MDIcon(
-            icon="heart-pulse",
+            icon="pulse",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
@@ -306,7 +306,7 @@ class BPMeasurementScreen(Screen):
             spacing=dp(4),
         )
         result_icon = MDIcon(
-            icon="heart-box",
+            icon="heart",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
@@ -427,7 +427,7 @@ class BPMeasurementScreen(Screen):
             size_hint_x=0.5,
         )
         map_icon = MDIcon(
-            icon="chart-line",
+            icon="trending-up",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
@@ -467,11 +467,11 @@ class BPMeasurementScreen(Screen):
             size_hint_x=0.5,
         )
         hr_icon = MDIcon(
-            icon="heart-flash",
+            icon="heart-multiple",
             theme_text_color="Custom",
             text_color=MED_CARD_ACCENT,
             size_hint=(None, None),
-            size=(dp(20), dp(20)),
+            size=(dp(18), dp(20)),
         )
         hr_icon.icon_size = dp(16)
         hr_box.add_widget(hr_icon)
@@ -503,11 +503,11 @@ class BPMeasurementScreen(Screen):
         parent.add_widget(secondary_card)
 
     def _create_status_display(self, parent):
-        """Create compact status bar with progress - giống temperature_screen."""
+        """Create compact status display - giống temperature_screen."""
         status_card = MDCard(
             orientation="vertical",
             size_hint_y=None,
-            height=dp(36),
+            height=dp(32),
             padding=(dp(6), dp(4), dp(6), dp(4)),
             spacing=dp(1),
             radius=[dp(10)],
@@ -524,15 +524,6 @@ class BPMeasurementScreen(Screen):
         )
         self.info_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         status_card.add_widget(self.info_label)
-
-        self.progress_bar = MDProgressBar(
-            max=100,
-            value=0,
-            color=MED_CARD_ACCENT,
-            size_hint_y=None,
-            height=dp(2),
-        )
-        status_card.add_widget(self.progress_bar)
 
         parent.add_widget(status_card)
 
@@ -692,7 +683,7 @@ class BPMeasurementScreen(Screen):
         elif sys < 180 and dia < 120:
             return "Cao - Giai đoạn 2"
         else:
-            return "⚠️ Khủng hoảng HA"
+            return "Khủng hoảng HA"
 
     # ------------------------------------------------------------------
     # Measurement Control
@@ -801,8 +792,7 @@ class BPMeasurementScreen(Screen):
             state_text, progress_value = state_map.get(self.current_state, ("Không rõ", 0))
             self.state_label.text = state_text
             
-            # Update progress bar
-            self.progress_bar.value = progress_value
+
 
             # Update info_label with instructions/safety messages based on state
             if self.current_state == BPState.IDLE:
@@ -810,17 +800,17 @@ class BPMeasurementScreen(Screen):
             elif self.current_state == BPState.INITIALIZING:
                 self.info_label.text = "Đang khởi động bơm và van..."
             elif self.current_state == BPState.INFLATING:
-                self.info_label.text = "🔵 Đang bơm căng còng. Giữ tay yên."
+                self.info_label.text = "Đang bơm căng còng. Giữ tay yên."
             elif self.current_state == BPState.DEFLATING:
-                self.info_label.text = "🟢 Đang xả áp và ghi nhận dao động..."
+                self.info_label.text = "Đang xả áp và ghi nhận dao động..."
             elif self.current_state == BPState.ANALYZING:
-                self.info_label.text = "⏳ Đang phân tích kết quả..."
+                self.info_label.text = "Đang phân tích kết quả..."
             elif self.current_state == BPState.COMPLETED:
-                self.info_label.text = "✅ Đo hoàn tất. Xem kết quả bên dưới."
+                self.info_label.text = "Đo hoàn tất. Xem kết quả bên dưới."
             elif self.current_state == BPState.ERROR:
-                self.info_label.text = "❌ Lỗi trong quá trình đo. Thử lại."
+                self.info_label.text = "Lỗi trong quá trình đo. Thử lại."
             elif self.current_state == BPState.EMERGENCY_DEFLATE:
-                self.info_label.text = "⚠️ Xả áp khẩn cấp đã kích hoạt."
+                self.info_label.text = "Xả áp khẩn cấp đã kích hoạt."
             
             # TTS feedback at state transitions (announce only once per state)
             if self.current_state == BPState.INFLATING:
@@ -958,7 +948,7 @@ class BPMeasurementScreen(Screen):
             
             # Disable save button sau khi lưu
             self._style_save_button(enabled=False)
-            self.info_label.text = "✅ Đã lưu kết quả"
+            self.info_label.text = "Đã lưu kết quả"
             self.logger.info("Measurement saved")
             
         except Exception as e:
@@ -992,9 +982,6 @@ class BPMeasurementScreen(Screen):
         self.hr_label.text = "-- BPM"
         self.bp_status_label.text = "Chờ đo"
         self.bp_status_label.text_color = TEXT_MUTED
-        
-        # Reset progress
-        self.progress_bar.value = 0
         
         # Reset TTS announce flags
         self._inflate_announced = False
