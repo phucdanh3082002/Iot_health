@@ -1,0 +1,19 @@
+{
+	"servers": {
+		"mysql": {
+			"type": "stdio",
+			"command": "uvx",
+			"args": [
+				"mysql_mcp_server==0.2.2",
+				"mysql_mcp_server"
+			],
+			"env": {
+				"MYSQL_HOST": "database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com",
+				"MYSQL_PORT": "3306",
+				"MYSQL_USER": "pi_sync",
+				"MYSQL_PASSWORD": "Danhsidoi123",
+				"MYSQL_DATABASE": "iot_health_cloud"
+			}
+		}
+	}
+}

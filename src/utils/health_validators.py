@@ -140,17 +140,18 @@ class HealthDataValidator:
                     f"tâm trương ({diastolic})"
                 )
             
-            # Pulse pressure check (normal range: 30-50 mmHg)
+            # Pulse pressure check (normal range: 30-50 mmHg, elderly can reach 70+ mmHg)
+            # Adjusted for hardware sensor variability (HX710B calibration tolerance)
             pulse_pressure = systolic - diastolic
             if pulse_pressure < 20:
                 errors.append(
                     f"Chênh lệch huyết áp quá thấp: {pulse_pressure} mmHg "
                     f"(tâm thu - tâm trương < 20)"
                 )
-            elif pulse_pressure > 100:
+            elif pulse_pressure > 120:  # Adjusted from 100 to 120 (medical tolerance + sensor margin)
                 errors.append(
                     f"Chênh lệch huyết áp quá cao: {pulse_pressure} mmHg "
-                    f"(tâm thu - tâm trương > 100)"
+                    f"(tâm thu - tâm trương > 120)"
                 )
         
         # Validate metadata (if present)

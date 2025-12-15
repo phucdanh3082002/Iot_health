@@ -4,7 +4,7 @@ import sys
 
 # --- Cấu hình chân GPIO (ĐÃ CẬP NHẬT) ---
 PUMP_PIN = 26  # GPIO26 điều khiển Bơm
-VALVE_PIN = 16  # GPIO16 điều khiển Van (Loại Thường Mở - NO)
+VALVE_PIN = 20  # GPIO20 điều khiển Van (Loại Thường Mở - NO)
 
 # Chân cho HX710B (chưa dùng trong bài test này)
 # HX710B_DT_PIN = 6
