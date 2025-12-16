@@ -994,6 +994,144 @@ class CloudSyncManager:
         
         return results
     
+    def sync_patient_thresholds(self, patient_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Sync patient thresholds from cloud to local database
+        Pulls AI-generated personalized thresholds from MySQL → SQLite
+        
+        Args:
+            patient_id: Specific patient to sync, or None to sync all active patients
+            
+        Returns:
+            Dict with sync results: {
+                'thresholds_synced': int,
+                'thresholds_updated': int,
+                'errors': []
+            }
+        """
+        results = {
+            'thresholds_synced': 0,
+            'thresholds_updated': 0,
+            'errors': []
+        }
+        
+        try:
+            if not self.check_cloud_connection():
+                self.logger.warning("[SYNC_THRESHOLDS] Cloud offline, skipping threshold sync")
+                results['errors'].append("Cloud offline")
+                return results
+            
+            # Query cloud thresholds
+            with self.get_cloud_session() as cloud_session:
+                # Get thresholds from cloud (only for patients assigned to this device)
+                if patient_id:
+                    query = text("""
+                        SELECT pt.*, p.patient_id 
+                        FROM patient_thresholds pt
+                        JOIN patients p ON pt.patient_id = p.patient_id
+                        WHERE pt.patient_id = :patient_id 
+                        AND p.device_id = :device_id
+                        AND p.is_active = 1
+                    """)
+                    cloud_thresholds = cloud_session.execute(
+                        query, 
+                        {'patient_id': patient_id, 'device_id': self.device_id}
+                    ).fetchall()
+                else:
+                    query = text("""
+                        SELECT pt.*, p.patient_id 
+                        FROM patient_thresholds pt
+                        JOIN patients p ON pt.patient_id = p.patient_id
+                        WHERE p.device_id = :device_id
+                        AND p.is_active = 1
+                    """)
+                    cloud_thresholds = cloud_session.execute(
+                        query, 
+                        {'device_id': self.device_id}
+                    ).fetchall()
+                
+                if not cloud_thresholds:
+                    self.logger.debug(f"[SYNC_THRESHOLDS] No thresholds found in cloud for device {self.device_id}")
+                    return results
+                
+                self.logger.info(f"[SYNC_THRESHOLDS] Found {len(cloud_thresholds)} threshold records in cloud")
+            
+            # Update local database
+            with self.local_db.get_session() as local_session:
+                from src.data.models import PatientThreshold
+                
+                for cloud_threshold in cloud_thresholds:
+                    try:
+                        # Check if threshold exists locally
+                        local_threshold = local_session.query(PatientThreshold).filter_by(
+                            patient_id=cloud_threshold.patient_id,
+                            vital_sign=cloud_threshold.vital_sign
+                        ).first()
+                        
+                        # Compare generation_timestamp to decide if update is needed
+                        cloud_gen_time = cloud_threshold.generation_timestamp
+                        
+                        if local_threshold:
+                            local_gen_time = local_threshold.generation_timestamp
+                            
+                            # Update if cloud version is newer
+                            if cloud_gen_time and (not local_gen_time or cloud_gen_time > local_gen_time):
+                                self.logger.debug(f"[SYNC_THRESHOLDS] Updating local threshold: {cloud_threshold.vital_sign} for patient {cloud_threshold.patient_id}")
+                                
+                                # Update all fields
+                                local_threshold.min_normal = cloud_threshold.min_normal
+                                local_threshold.max_normal = cloud_threshold.max_normal
+                                local_threshold.min_critical = cloud_threshold.min_critical
+                                local_threshold.max_critical = cloud_threshold.max_critical
+                                local_threshold.min_warning = cloud_threshold.min_warning
+                                local_threshold.max_warning = cloud_threshold.max_warning
+                                local_threshold.generation_method = cloud_threshold.generation_method
+                                local_threshold.generation_timestamp = cloud_threshold.generation_timestamp
+                                local_threshold.confidence_score = cloud_threshold.confidence_score
+                                local_threshold.applied_rules = cloud_threshold.applied_rules
+                                local_threshold.threshold_metadata = cloud_threshold.metadata  # Note: column name is 'metadata' in DB
+                                
+                                results['thresholds_updated'] += 1
+                            else:
+                                self.logger.debug(f"[SYNC_THRESHOLDS] Local threshold is up-to-date: {cloud_threshold.vital_sign} for patient {cloud_threshold.patient_id}")
+                        else:
+                            # Insert new threshold
+                            self.logger.debug(f"[SYNC_THRESHOLDS] Inserting new threshold: {cloud_threshold.vital_sign} for patient {cloud_threshold.patient_id}")
+                            
+                            new_threshold = PatientThreshold(
+                                patient_id=cloud_threshold.patient_id,
+                                vital_sign=cloud_threshold.vital_sign,
+                                min_normal=cloud_threshold.min_normal,
+                                max_normal=cloud_threshold.max_normal,
+                                min_critical=cloud_threshold.min_critical,
+                                max_critical=cloud_threshold.max_critical,
+                                min_warning=cloud_threshold.min_warning,
+                                max_warning=cloud_threshold.max_warning,
+                                generation_method=cloud_threshold.generation_method,
+                                generation_timestamp=cloud_threshold.generation_timestamp,
+                                confidence_score=cloud_threshold.confidence_score,
+                                applied_rules=cloud_threshold.applied_rules,
+                                threshold_metadata=cloud_threshold.metadata
+                            )
+                            local_session.add(new_threshold)
+                            results['thresholds_synced'] += 1
+                        
+                    except Exception as e:
+                        error_msg = f"Failed to sync threshold {cloud_threshold.vital_sign} for patient {cloud_threshold.patient_id}: {e}"
+                        self.logger.error(f"[SYNC_THRESHOLDS] {error_msg}")
+                        results['errors'].append(error_msg)
+                
+                # Commit all changes
+                local_session.commit()
+                self.logger.info(f"[SYNC_THRESHOLDS] Sync complete: {results['thresholds_synced']} new, {results['thresholds_updated']} updated")
+        
+        except Exception as e:
+            error_msg = f"Threshold sync failed: {e}"
+            self.logger.error(f"[SYNC_THRESHOLDS] {error_msg}", exc_info=True)
+            results['errors'].append(error_msg)
+        
+        return results
+    
     def sync_incremental(self, since: datetime) -> Dict[str, Any]:
         """
         Perform incremental sync (only changes since timestamp)
@@ -1008,6 +1146,7 @@ class CloudSyncManager:
             'since': since,
             'records_synced': 0,
             'alerts_synced': 0,
+            'thresholds_synced': 0,
             'errors': []
         }
         
@@ -1094,6 +1233,14 @@ class CloudSyncManager:
                 for alert in new_alerts:
                     if self.push_alert(alert.id):
                         results['alerts_synced'] += 1
+                
+                # ============================================================
+                # STEP 4: Sync patient thresholds from cloud (pull)
+                # ============================================================
+                threshold_sync_results = self.sync_patient_thresholds()
+                results['thresholds_synced'] = threshold_sync_results.get('thresholds_synced', 0) + threshold_sync_results.get('thresholds_updated', 0)
+                if threshold_sync_results.get('errors'):
+                    results['errors'].extend(threshold_sync_results['errors'])
             
             self.logger.info(f"Incremental sync completed: {results}")
             

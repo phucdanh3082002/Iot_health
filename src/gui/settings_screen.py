@@ -734,8 +734,10 @@ class SettingsScreen(Screen):
             # Alert settings
             config_data.setdefault('audio', {})['voice_enabled'] = settings['voice_alerts']
             config_data['audio']['volume'] = settings['voice_volume']
-            config_data.setdefault('thresholds', {}).setdefault('heart_rate', {})['min_normal'] = settings['hr_low_threshold']
-            config_data['thresholds']['heart_rate']['max_normal'] = settings['hr_high_threshold']
+            # Lưu vào threshold_management.baseline (format mới)
+            baseline = config_data.setdefault('threshold_management', {}).setdefault('baseline', {})
+            baseline.setdefault('heart_rate', {})['min_normal'] = settings['hr_low_threshold']
+            baseline['heart_rate']['max_normal'] = settings['hr_high_threshold']
             
             # System settings - Patient Name (this needs special handling for device-centric)
             # For now, update a temporary patient_name in app_instance.current_data
@@ -895,9 +897,10 @@ class SettingsScreen(Screen):
             # Alert settings
             self.setting_widgets['voice_alerts'].active = config_data.get('audio', {}).get('voice_enabled', True)
             self.setting_widgets['voice_volume'].value = config_data.get('audio', {}).get('volume', 80)
-            # Thresholds are in a nested 'thresholds' key in config
-            self.setting_widgets['hr_low_threshold'].value = config_data.get('thresholds', {}).get('heart_rate', {}).get('min_normal', 60)
-            self.setting_widgets['hr_high_threshold'].value = config_data.get('thresholds', {}).get('heart_rate', {}).get('max_normal', 100)
+            # Thresholds từ threshold_management.baseline (format mới)
+            baseline = config_data.get('threshold_management', {}).get('baseline', {})
+            self.setting_widgets['hr_low_threshold'].value = baseline.get('heart_rate', {}).get('min_normal', 60)
+            self.setting_widgets['hr_high_threshold'].value = baseline.get('heart_rate', {}).get('max_normal', 100)
             
             # System settings
             # Patient name is dynamic and not directly in config for device-centric.

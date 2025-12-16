@@ -2,7 +2,7 @@
 	"servers": {
 		"mysql": {
 			"type": "stdio",
-			"command": "uvx",
+			"command": "/home/pi/Desktop/IoT_health/.venv/bin/uvx",
 			"args": [
 				"mysql_mcp_server==0.2.2",
 				"mysql_mcp_server"

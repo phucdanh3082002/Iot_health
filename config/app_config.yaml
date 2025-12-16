@@ -143,8 +143,49 @@ cloud:
     sync_patients: true  # ✅ NEW: Sync patient info
     
     # Conflict resolution strategy
-    conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual  
+    conflict_strategy: "cloud_wins"  # cloud_wins / local_wins / manual
 
+# ============================================================
+# THRESHOLD MANAGEMENT (AI-Generated Personalized Thresholds)
+# ============================================================
+threshold_management:
+  # Sync patient thresholds from cloud to local database
+  sync_interval_seconds: 60  # Check for new thresholds every 60 seconds (1 minute)
+  
+  # Auto-reload thresholds when changed (recommended)
+  auto_reload: true
+  
+  # Fallback to baseline thresholds if patient has no custom thresholds
+  fallback_to_baseline: true
+  
+  # Baseline thresholds (used as fallback)
+  baseline:
+    heart_rate:
+      min_critical: 40
+      min_normal: 60
+      max_normal: 100
+      max_critical: 120
+    spo2:
+      min_critical: 85
+      min_normal: 95
+      max_normal: 100
+      max_critical: 100
+    systolic_bp:
+      min_critical: 80
+      min_normal: 90
+      max_normal: 120
+      max_critical: 180
+    diastolic_bp:
+      min_critical: 50
+      min_normal: 60
+      max_normal: 80
+      max_critical: 120
+    temperature:
+      min_critical: 35.0
+      min_normal: 36.1
+      max_normal: 37.2
+      max_critical: 39.0
+  
 database:
   backup_enabled: true
   backup_interval: 3600
@@ -217,25 +258,13 @@ sensors:
   hx710b:
     calibration:
       offset_counts: 1303339
-thresholds:
-  blood_pressure:
-    diastolic_critical: 110
-    diastolic_max: 90
-    systolic_critical: 180
-    systolic_max: 140
-  heart_rate:
-    critical_max: 150
-    critical_min: 40
-    max: 100
-    min: 60
-  spo2:
-    critical_min: 90
-    min: 95
-  temperature:
-    critical_max: 39.0
-    critical_min: 35.0
-    max: 37.5
-    min: 36.0
+
+# ============================================================
+# NOTE: Static thresholds section đã REMOVED
+# Thay vào đó sử dụng threshold_management.baseline (line 149)
+# để quản lý tập trung tất cả threshold mặc định
+# ============================================================
+
 bp_advanced:
   control:
     inflate_target_mmhg: 165.0

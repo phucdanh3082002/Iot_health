@@ -1315,48 +1315,53 @@ class HealthMonitorApp(MDApp):
         Returns:
             Dictionary thresholds theo format của get_patient_thresholds()
         """
-        config_thresholds = self.config_data.get('thresholds', {})
+        # Đọc từ threshold_management.baseline (format mới)
+        baseline = self.config_data.get('threshold_management', {}).get('baseline', {})
         
         result = {}
         
         # Heart rate thresholds
-        hr_config = config_thresholds.get('heart_rate', {})
-        if hr_config:
+        if 'heart_rate' in baseline:
+            result['heart_rate'] = baseline['heart_rate']
+        else:
             result['heart_rate'] = {
-                'min_normal': hr_config.get('min', 60),
-                'max_normal': hr_config.get('max', 100),
-                'min_critical': hr_config.get('critical_min', 40),
-                'max_critical': hr_config.get('critical_max', 150)
+                'min_normal': 60,
+                'max_normal': 100,
+                'min_critical': 40,
+                'max_critical': 120
             }
         
         # SpO2 thresholds
-        spo2_config = config_thresholds.get('spo2', {})
-        if spo2_config:
+        if 'spo2' in baseline:
+            result['spo2'] = baseline['spo2']
+        else:
             result['spo2'] = {
-                'min_normal': spo2_config.get('min', 95),
+                'min_normal': 95,
                 'max_normal': 100,
-                'min_critical': spo2_config.get('critical_min', 90),
+                'min_critical': 85,
                 'max_critical': 100
             }
         
         # Temperature thresholds
-        temp_config = config_thresholds.get('temperature', {})
-        if temp_config:
+        if 'temperature' in baseline:
+            result['temperature'] = baseline['temperature']
+        else:
             result['temperature'] = {
-                'min_normal': temp_config.get('min', 36.0),
-                'max_normal': temp_config.get('max', 37.5),
-                'min_critical': temp_config.get('critical_min', 35.0),
-                'max_critical': temp_config.get('critical_max', 39.0)
+                'min_normal': 36.1,
+                'max_normal': 37.2,
+                'min_critical': 35.0,
+                'max_critical': 39.0
             }
         
         # Blood pressure thresholds
-        bp_config = config_thresholds.get('blood_pressure', {})
-        if bp_config:
+        if 'systolic_bp' in baseline:
+            result['systolic_bp'] = baseline['systolic_bp']
+        else:
             result['systolic_bp'] = {
                 'min_normal': 90,
-                'max_normal': bp_config.get('systolic_max', 140),
-                'min_critical': 70,
-                'max_critical': bp_config.get('systolic_critical', 180)
+                'max_normal': 120,
+                'min_critical': 80,
+                'max_critical': 180
             }
             result['diastolic_bp'] = {
                 'min_normal': 60,

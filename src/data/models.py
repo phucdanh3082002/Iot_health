@@ -167,7 +167,18 @@ class Patient(Base):
         name: Patient name
         age: Patient age
         gender: Patient gender (M/F/O)
-        medical_conditions: JSON field for medical conditions
+        height: Height in cm
+        weight: Weight in kg
+        blood_type: Blood type (A+, B+, AB+, O+, A-, B-, AB-, O-)
+        medical_conditions: JSON field for medical conditions (legacy, use chronic_diseases)
+        chronic_diseases: List of chronic diseases with details
+        medications: Current medications
+        allergies: Known allergies
+        family_history: Family medical history
+        smoking_status: Smoking status (never, former, current)
+        alcohol_consumption: Alcohol consumption level
+        exercise_frequency: Exercise frequency
+        risk_factors: Calculated risk factors
         emergency_contact: Emergency contact information
         is_active: Active status
         created_at: Record creation timestamp
@@ -185,9 +196,26 @@ class Patient(Base):
     age = Column(Integer)
     gender = Column(String(1))  # M/F/O
     
+    # Physical attributes
+    height = Column(Float)  # cm
+    weight = Column(Float)  # kg
+    blood_type = Column(String(5), index=True)  # A+, B+, AB+, O+, A-, B-, AB-, O-
+    
     # Medical information
-    medical_conditions = Column(JSON)
-    emergency_contact = Column(JSON)
+    medical_conditions = Column(JSON)  # Legacy, prefer chronic_diseases
+    chronic_diseases = Column(JSON)  # Structured: [{name, diagnosed_date, severity}]
+    medications = Column(JSON)  # [{name, dosage, frequency, start_date}]
+    allergies = Column(JSON)  # [{allergen, severity, reaction}]
+    family_history = Column(JSON)  # [{condition, relation}]
+    emergency_contact = Column(JSON)  # {name, phone, relationship}
+    
+    # Lifestyle factors
+    smoking_status = Column(String(20), index=True)  # never, former, current
+    alcohol_consumption = Column(String(20))  # none, light, moderate, heavy
+    exercise_frequency = Column(String(20))  # none, weekly, daily
+    
+    # Risk assessment
+    risk_factors = Column(JSON)  # [{factor, level}]
     
     # Status & Timestamps
     is_active = Column(Boolean, default=True, index=True)
@@ -321,7 +349,7 @@ class Alert(Base):
 
 class PatientThreshold(Base):
     """
-    Patient-specific threshold model
+    Patient-specific threshold model with AI generation support
     
     Attributes:
         id: Primary key
@@ -329,8 +357,15 @@ class PatientThreshold(Base):
         vital_sign: Vital sign name
         min_normal: Minimum normal value
         max_normal: Maximum normal value
+        min_warning: Minimum warning value (yellow alert)
+        max_warning: Maximum warning value (yellow alert)
         min_critical: Minimum critical value
         max_critical: Maximum critical value
+        generation_method: How threshold was created (manual, rule_based, ai_generated)
+        ai_confidence: AI confidence score (0-1) if AI-generated
+        ai_model: AI model used (gemini-1.5-pro, rule_based, etc.)
+        generation_timestamp: When threshold was generated
+        metadata: Additional metadata (input_factors, justification, etc.)
         is_active: Whether threshold is active
         created_at: Creation timestamp
         updated_at: Update timestamp
@@ -345,9 +380,20 @@ class PatientThreshold(Base):
     min_normal = Column(Float)
     max_normal = Column(Float)
     
+    # Warning range (between normal and critical)
+    min_warning = Column(Float)
+    max_warning = Column(Float)
+    
     # Critical range
     min_critical = Column(Float)
     max_critical = Column(Float)
+    
+    # AI generation metadata
+    generation_method = Column(String(50), default='manual', index=True)  # manual, rule_based, ai_generated
+    ai_confidence = Column(Float, index=True)  # 0-1 confidence score
+    ai_model = Column(String(50))  # gemini-1.5-pro, rule_based, etc.
+    generation_timestamp = Column(DateTime)
+    threshold_metadata = Column('metadata', JSON)  # {input_factors: [...], justification: "..."} - use different name to avoid SQLAlchemy reserved word
     
     # Status & Timestamps
     is_active = Column(Boolean, default=True, index=True)
@@ -419,11 +465,11 @@ class SyncQueue(Base):
     device_id = Column(String(50), ForeignKey('devices.device_id', ondelete='CASCADE', onupdate='CASCADE'), nullable=False, index=True)
     
     # Queue item details
-    table_name = Column(String(50), nullable=False)
+    table_name = Column(String(50), nullable=False, index=True)
     operation = Column(String(20), nullable=False)  # INSERT, UPDATE, DELETE
     record_id = Column(String(100), nullable=False)
     data_snapshot = Column(JSON)
-    priority = Column(Integer, default=5, index=True)
+    priority = Column(Integer, default=5, index=True)  # 1=highest, 10=lowest
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, index=True)

@@ -66,6 +66,7 @@ class AlertSystem:
     - MQTT remote alerts
     - Cooldown để tránh spam
     - Callback system cho UI notifications
+    - Dynamic patient-specific thresholds (AI-generated)
     """
     
     def __init__(self, config: Dict[str, Any], tts_manager=None, mqtt_client=None, database=None):
@@ -89,15 +90,126 @@ class AlertSystem:
         self.active_alerts: Dict[str, Dict[str, Any]] = {}
         self.cooldown_tracker: Dict[str, datetime] = {}
         
+        # Patient-specific thresholds cache (AI-generated)
+        self.patient_thresholds: Dict[str, Dict[str, Dict[str, float]]] = {}
+        self.threshold_reload_time: Dict[str, datetime] = {}
+        
+        # Baseline thresholds (fallback) - đọc từ config
+        self.baseline_thresholds = config.get('threshold_management', {}).get('baseline', {
+            'heart_rate': {'min_critical': 40, 'min_normal': 60, 'max_normal': 100, 'max_critical': 120},
+            'spo2': {'min_critical': 85, 'min_normal': 95, 'max_normal': 100, 'max_critical': 100},
+            'systolic_bp': {'min_critical': 80, 'min_normal': 90, 'max_normal': 120, 'max_critical': 180},
+            'diastolic_bp': {'min_critical': 50, 'min_normal': 60, 'max_normal': 80, 'max_critical': 120},
+            'temperature': {'min_critical': 35.0, 'min_normal': 36.1, 'max_normal': 37.2, 'max_critical': 39.0}
+        })
+        
         # Callbacks
         self.alert_callbacks: List[Callable] = []
         
         # Settings
         self.audio_enabled = config.get('audio_enabled', True)
+        self.auto_reload_thresholds = config.get('threshold_management', {}).get('auto_reload', True)
+        self.fallback_to_baseline = config.get('threshold_management', {}).get('fallback_to_baseline', True)
         self.running = False
         self.monitor_thread: Optional[threading.Thread] = None
         
-        self.logger.info("AlertSystem initialized with TTS support")
+        self.logger.info("AlertSystem initialized with TTS support and dynamic thresholds")
+    
+    # ============================================================
+    # PATIENT THRESHOLD MANAGEMENT (AI-generated)
+    # ============================================================
+    
+    def _load_patient_thresholds(self, patient_id: str) -> Dict[str, Dict[str, float]]:
+        """
+        Load patient-specific thresholds from database
+        
+        Args:
+            patient_id: Patient identifier
+            
+        Returns:
+            Dict of thresholds per vital sign: {
+                'heart_rate': {'min_critical': 40, 'min_normal': 60, ...},
+                ...
+            }
+        """
+        if not self.database:
+            self.logger.warning(f"[THRESHOLD_LOAD] No database available, using baseline thresholds")
+            return self.baseline_thresholds
+        
+        try:
+            with self.database.get_session() as session:
+                from src.data.models import PatientThreshold
+                
+                thresholds_raw = session.query(PatientThreshold).filter_by(
+                    patient_id=patient_id
+                ).all()
+                
+                if not thresholds_raw:
+                    self.logger.info(f"[THRESHOLD_LOAD] No custom thresholds for patient {patient_id}, using baseline")
+                    return self.baseline_thresholds
+                
+                # Build thresholds dictionary
+                patient_thresholds = {}
+                for threshold in thresholds_raw:
+                    patient_thresholds[threshold.vital_sign] = {
+                        'min_critical': threshold.min_critical,
+                        'min_normal': threshold.min_normal,
+                        'min_warning': threshold.min_warning,
+                        'max_warning': threshold.max_warning,
+                        'max_normal': threshold.max_normal,
+                        'max_critical': threshold.max_critical,
+                        'generation_method': threshold.generation_method,
+                        'confidence_score': threshold.confidence_score
+                    }
+                
+                self.logger.info(f"[THRESHOLD_LOAD] Loaded {len(patient_thresholds)} custom thresholds for patient {patient_id}")
+                return patient_thresholds
+        
+        except Exception as e:
+            self.logger.error(f"[THRESHOLD_LOAD] Failed to load thresholds for patient {patient_id}: {e}", exc_info=True)
+            if self.fallback_to_baseline:
+                self.logger.warning(f"[THRESHOLD_LOAD] Falling back to baseline thresholds")
+                return self.baseline_thresholds
+            else:
+                raise
+    
+    def reload_patient_thresholds(self, patient_id: str, force: bool = False):
+        """
+        Reload patient thresholds from database (e.g., after cloud sync)
+        
+        Args:
+            patient_id: Patient identifier
+            force: Force reload even if recently loaded
+        """
+        # Check if recently reloaded (cache for 60 seconds unless forced)
+        last_reload = self.threshold_reload_time.get(patient_id)
+        if not force and last_reload and (datetime.now() - last_reload).total_seconds() < 60:
+            self.logger.debug(f"[THRESHOLD_RELOAD] Skipping reload for patient {patient_id} (recently loaded)")
+            return
+        
+        self.logger.info(f"[THRESHOLD_RELOAD] Reloading thresholds for patient {patient_id}")
+        self.patient_thresholds[patient_id] = self._load_patient_thresholds(patient_id)
+        self.threshold_reload_time[patient_id] = datetime.now()
+    
+    def get_patient_thresholds(self, patient_id: str) -> Dict[str, Dict[str, float]]:
+        """
+        Get patient thresholds (from cache or database)
+        
+        Args:
+            patient_id: Patient identifier
+            
+        Returns:
+            Dict of thresholds per vital sign
+        """
+        # Return cached thresholds if available
+        if patient_id in self.patient_thresholds:
+            return self.patient_thresholds[patient_id]
+        
+        # Load from database
+        self.patient_thresholds[patient_id] = self._load_patient_thresholds(patient_id)
+        self.threshold_reload_time[patient_id] = datetime.now()
+        
+        return self.patient_thresholds[patient_id]
     
     # ============================================================
     # Vital Signs Checking with AUTO TTS
@@ -112,6 +224,9 @@ class AlertSystem:
             vital_data: Dict chứa heart_rate, spo2, systolic_bp, diastolic_bp, temperature
         """
         try:
+            # Load patient-specific thresholds
+            thresholds = self.get_patient_thresholds(patient_id)
+            
             hr = vital_data.get('heart_rate')
             spo2 = vital_data.get('spo2')
             sys_bp = vital_data.get('systolic_bp')
@@ -120,133 +235,154 @@ class AlertSystem:
             
             # Check Heart Rate
             if hr is not None and hr > 0:
-                self._check_heart_rate(patient_id, hr)
+                self._check_heart_rate(patient_id, hr, thresholds.get('heart_rate', self.baseline_thresholds['heart_rate']))
             
             # Check SpO2
             if spo2 is not None and spo2 > 0:
-                self._check_spo2(patient_id, spo2)
+                self._check_spo2(patient_id, spo2, thresholds.get('spo2', self.baseline_thresholds['spo2']))
             
             # Check Blood Pressure
             if sys_bp is not None and dia_bp is not None:
-                self._check_blood_pressure(patient_id, sys_bp, dia_bp)
+                sys_thresholds = thresholds.get('systolic_bp', self.baseline_thresholds['systolic_bp'])
+                dia_thresholds = thresholds.get('diastolic_bp', self.baseline_thresholds['diastolic_bp'])
+                self._check_blood_pressure(patient_id, sys_bp, dia_bp, sys_thresholds, dia_thresholds)
             
             # Check Temperature (if needed)
             if temp is not None:
-                self._check_temperature(patient_id, temp)
+                self._check_temperature(patient_id, temp, thresholds.get('temperature', self.baseline_thresholds['temperature']))
                 
         except Exception as e:
             self.logger.error(f"Error checking vital signs: {e}", exc_info=True)
     
-    def _check_heart_rate(self, patient_id: str, hr: float):
-        """Check HR thresholds với TTS tự động"""
-        # Bradycardia: HR < 50 bpm
-        if hr < 50:
+    def _check_heart_rate(self, patient_id: str, hr: float, thresholds: Dict[str, float]):
+        """Check HR thresholds với TTS tự động (patient-specific)"""
+        min_critical = thresholds.get('min_critical', 40)
+        min_normal = thresholds.get('min_normal', 60)
+        max_normal = thresholds.get('max_normal', 100)
+        max_critical = thresholds.get('max_critical', 120)
+        
+        # Bradycardia: HR < min_normal
+        if hr < min_normal:
+            severity = AlertSeverity.CRITICAL if hr < min_critical else AlertSeverity.HIGH
             if not self._check_cooldown('hr_too_low'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='hr_too_low',
-                    severity=AlertSeverity.HIGH,
-                    message=f"Nhịp tim quá thấp: {hr:.0f} BPM",
+                    severity=severity,
+                    message=f"Nhịp tim quá thấp: {hr:.0f} BPM (ngưỡng: {min_normal})",
                     tts_scenario=ScenarioID.HR_TOO_LOW,
                     tts_params={'bpm': int(hr)},
                     vital_sign='heart_rate',
                     current_value=hr,
-                    threshold_value=50
+                    threshold_value=min_normal
                 )
                 self.cooldown_tracker['hr_too_low'] = datetime.now()
         
-        # Tachycardia: HR > 100 bpm
-        elif hr > 100:
+        # Tachycardia: HR > max_normal
+        elif hr > max_normal:
+            severity = AlertSeverity.CRITICAL if hr > max_critical else AlertSeverity.HIGH
             if not self._check_cooldown('hr_too_high'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='hr_too_high',
-                    severity=AlertSeverity.HIGH,
-                    message=f"Nhịp tim quá cao: {hr:.0f} BPM",
+                    severity=severity,
+                    message=f"Nhịp tim quá cao: {hr:.0f} BPM (ngưỡng: {max_normal})",
                     tts_scenario=ScenarioID.HR_TOO_HIGH,
                     tts_params={'bpm': int(hr)},
                     vital_sign='heart_rate',
                     current_value=hr,
-                    threshold_value=100
+                    threshold_value=max_normal
                 )
                 self.cooldown_tracker['hr_too_high'] = datetime.now()
     
-    def _check_spo2(self, patient_id: str, spo2: float):
-        """Check SpO2 thresholds với TTS tự động"""
-        # Critical hypoxia: SpO2 < 85%
-        if spo2 < 85:
+    def _check_spo2(self, patient_id: str, spo2: float, thresholds: Dict[str, float]):
+        """Check SpO2 thresholds với TTS tự động (patient-specific)"""
+        min_critical = thresholds.get('min_critical', 85)
+        min_normal = thresholds.get('min_normal', 95)
+        
+        # Critical hypoxia: SpO2 < min_critical
+        if spo2 < min_critical:
             if not self._check_cooldown('spo2_critical'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='spo2_critical',
                     severity=AlertSeverity.CRITICAL,
-                    message=f"Oxy máu cực thấp: {spo2:.0f}%",
+                    message=f"Oxy máu cực thấp: {spo2:.0f}% (ngưỡng: {min_critical})",
                     tts_scenario=ScenarioID.SPO2_CRITICAL,
                     tts_params={'spo2': int(spo2)},
                     vital_sign='spo2',
                     current_value=spo2,
-                    threshold_value=85
+                    threshold_value=min_critical
                 )
                 self.cooldown_tracker['spo2_critical'] = datetime.now()
         
-        # Hypoxia: SpO2 < 90%
-        elif spo2 < 90:
+        # Hypoxia: SpO2 < min_normal
+        elif spo2 < min_normal:
             if not self._check_cooldown('spo2_low'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='spo2_low',
                     severity=AlertSeverity.HIGH,
-                    message=f"Oxy máu thấp: {spo2:.0f}%",
+                    message=f"Oxy máu thấp: {spo2:.0f}% (ngưỡng: {min_normal})",
                     tts_scenario=ScenarioID.SPO2_LOW,
                     tts_params={'spo2': int(spo2)},
                     vital_sign='spo2',
                     current_value=spo2,
-                    threshold_value=90
+                    threshold_value=min_normal
                 )
                 self.cooldown_tracker['spo2_low'] = datetime.now()
     
-    def _check_blood_pressure(self, patient_id: str, sys: float, dia: float):
-        """Check BP thresholds với TTS tự động"""
-        # Hypertensive crisis: SYS >= 180 or DIA >= 120
-        if sys >= 180 or dia >= 120:
+    def _check_blood_pressure(self, patient_id: str, sys: float, dia: float, 
+                             sys_thresholds: Dict[str, float], dia_thresholds: Dict[str, float]):
+        """Check BP thresholds với TTS tự động (patient-specific)"""
+        sys_max_critical = sys_thresholds.get('max_critical', 180)
+        sys_max_normal = sys_thresholds.get('max_normal', 120)
+        sys_min_normal = sys_thresholds.get('min_normal', 90)
+        
+        dia_max_critical = dia_thresholds.get('max_critical', 120)
+        dia_max_normal = dia_thresholds.get('max_normal', 80)
+        dia_min_normal = dia_thresholds.get('min_normal', 60)
+        
+        # Hypertensive crisis: SYS >= sys_max_critical or DIA >= dia_max_critical
+        if sys >= sys_max_critical or dia >= dia_max_critical:
             if not self._check_cooldown('bp_crisis'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='bp_hypertensive_crisis',
                     severity=AlertSeverity.CRITICAL,
-                    message=f"Huyết áp nguy hiểm: {sys:.0f}/{dia:.0f} mmHg",
+                    message=f"Huyết áp nguy hiểm: {sys:.0f}/{dia:.0f} mmHg (ngưỡng: {sys_max_critical}/{dia_max_critical})",
                     tts_scenario=ScenarioID.BP_HYPERTENSIVE_CRISIS,
                     tts_params={'sys': int(sys), 'dia': int(dia)},
                     vital_sign='blood_pressure',
                     current_value=sys,
-                    threshold_value=180
+                    threshold_value=sys_max_critical
                 )
                 self.cooldown_tracker['bp_crisis'] = datetime.now()
         
-        # Hypertension Stage 2: SYS >= 140 or DIA >= 90
-        elif sys >= 140 or dia >= 90:
+        # Hypertension: SYS >= sys_max_normal or DIA >= dia_max_normal
+        elif sys >= sys_max_normal or dia >= dia_max_normal:
             if not self._check_cooldown('bp_high'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='bp_hypertension',
                     severity=AlertSeverity.HIGH,
-                    message=f"Huyết áp cao: {sys:.0f}/{dia:.0f} mmHg",
+                    message=f"Huyết áp cao: {sys:.0f}/{dia:.0f} mmHg (ngưỡng: {sys_max_normal}/{dia_max_normal})",
                     tts_scenario=ScenarioID.BP_HYPERTENSION,
                     tts_params={'sys': int(sys), 'dia': int(dia)},
                     vital_sign='blood_pressure',
                     current_value=sys,
-                    threshold_value=140
+                    threshold_value=sys_max_normal
                 )
                 self.cooldown_tracker['bp_high'] = datetime.now()
         
-        # Hypotension: SYS < 90 or DIA < 60
-        elif sys < 90 or dia < 60:
+        # Hypotension: SYS < sys_min_normal or DIA < dia_min_normal
+        elif sys < sys_min_normal or dia < dia_min_normal:
             if not self._check_cooldown('bp_low'):
                 self._trigger_alert_with_tts(
                     patient_id=patient_id,
                     alert_type='bp_hypotension',
                     severity=AlertSeverity.MEDIUM,
-                    message=f"Huyết áp thấp: {sys:.0f}/{dia:.0f} mmHg",
+                    message=f"Huyết áp thấp: {sys:.0f}/{dia:.0f} mmHg (ngưỡng: {sys_min_normal}/{dia_min_normal})",
                     tts_scenario=ScenarioID.BP_HYPOTENSION,
                     tts_params={'sys': int(sys), 'dia': int(dia)},
                     vital_sign='blood_pressure',
@@ -255,11 +391,61 @@ class AlertSystem:
                 )
                 self.cooldown_tracker['bp_low'] = datetime.now()
     
-    def _check_temperature(self, patient_id: str, temp: float):
-        """Check temperature - already handled by temperature screen, skip duplicate TTS"""
-        # Temperature alerts are handled by temperature_screen.py
-        # This is just for logging/MQTT if needed
-        pass
+    def _check_temperature(self, patient_id: str, temp: float, thresholds: Dict[str, float]):
+        """Check temperature thresholds với TTS tự động (patient-specific)"""
+        min_critical = thresholds.get('min_critical', 35.0)
+        min_normal = thresholds.get('min_normal', 36.1)
+        max_normal = thresholds.get('max_normal', 37.2)
+        max_critical = thresholds.get('max_critical', 39.0)
+        
+        # Hypothermia: temp < min_critical
+        if temp < min_critical:
+            if not self._check_cooldown('temp_too_low'):
+                self._trigger_alert_with_tts(
+                    patient_id=patient_id,
+                    alert_type='temp_hypothermia',
+                    severity=AlertSeverity.CRITICAL,
+                    message=f"Thân nhiệt quá thấp: {temp:.1f}°C (ngưỡng: {min_critical})",
+                    tts_scenario=ScenarioID.TEMP_LOW,
+                    tts_params={'temp': temp},
+                    vital_sign='temperature',
+                    current_value=temp,
+                    threshold_value=min_critical
+                )
+                self.cooldown_tracker['temp_too_low'] = datetime.now()
+        
+        # Low temp: temp < min_normal
+        elif temp < min_normal:
+            if not self._check_cooldown('temp_low'):
+                self._trigger_alert_with_tts(
+                    patient_id=patient_id,
+                    alert_type='temp_low',
+                    severity=AlertSeverity.MEDIUM,
+                    message=f"Thân nhiệt thấp: {temp:.1f}°C (ngưỡng: {min_normal})",
+                    tts_scenario=ScenarioID.TEMP_LOW,
+                    tts_params={'temp': temp},
+                    vital_sign='temperature',
+                    current_value=temp,
+                    threshold_value=min_normal
+                )
+                self.cooldown_tracker['temp_low'] = datetime.now()
+        
+        # Fever: temp > max_normal
+        elif temp > max_normal:
+            severity = AlertSeverity.CRITICAL if temp > max_critical else AlertSeverity.HIGH
+            if not self._check_cooldown('temp_high'):
+                self._trigger_alert_with_tts(
+                    patient_id=patient_id,
+                    alert_type='temp_fever',
+                    severity=severity,
+                    message=f"Sốt cao: {temp:.1f}°C (ngưỡng: {max_normal})",
+                    tts_scenario=ScenarioID.TEMP_HIGH,
+                    tts_params={'temp': temp},
+                    vital_sign='temperature',
+                    current_value=temp,
+                    threshold_value=max_normal
+                )
+                self.cooldown_tracker['temp_high'] = datetime.now()
     
     def _trigger_alert_with_tts(
         self,

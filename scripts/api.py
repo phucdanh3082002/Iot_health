@@ -1,17 +1,27 @@
 #!/usr/bin/env python3
 """
-Flask API Implementation cho IoT Health Monitor (v2.0.0)
-Triển khai trên AWS EC2 với endpoint /api/pair-device theo specification
-Compatible with Database Schema v2.0.0
+Flask API Implementation cho IoT Health Monitor (v2.1.0)
+Triển khai trên AWS EC2 với AI Threshold Generation support
+Compatible with Database Schema v2.1.0
 """
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import mysql.connector
 import os
+import sys
 from datetime import datetime, timedelta
 import json
 import secrets
+import logging
+
+# Add scripts directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from ai_threshold_generator import ThresholdGenerator
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for web dashboard and Android app
@@ -25,6 +35,17 @@ DB_CONFIG = {
     'port': 3306,
     'charset': 'utf8mb4'
 }
+
+# Initialize AI Threshold Generator
+try:
+    threshold_generator = ThresholdGenerator(
+        db_config=DB_CONFIG,
+        gemini_api_key=os.getenv('GOOGLE_GEMINI_API_KEY')
+    )
+    logger.info("✅ ThresholdGenerator initialized")
+except Exception as e:
+    logger.warning(f"⚠️ ThresholdGenerator initialization failed: {e}")
+    threshold_generator = None
 
 def get_db_connection():
     """Get database connection"""
@@ -295,8 +316,8 @@ def get_user_devices(user_id):
 @app.route('/api/patients', methods=['POST'])
 def create_patient():
     """
-    Tạo patient mới (không cần device ngay)
-    Cho phép user tạo thông tin bệnh nhân trước, gán device sau
+    Tạo patient mới với đầy đủ medical information
+    Hỗ trợ AI threshold generation
     Owner và Caregiver đều có quyền tạo
     """
     try:
@@ -308,13 +329,36 @@ def create_patient():
                 'message': 'No JSON data provided'
             }), 400
 
+        # Required fields
         user_id = data.get('user_id')
         name = data.get('name')
+        
+        # Basic info
         age = data.get('age')
         gender = data.get('gender')
-        medical_conditions = data.get('medical_conditions')  # Array hoặc JSON
-        emergency_contact = data.get('emergency_contact')    # JSON object
-        patient_id = data.get('patient_id')  # Optional, auto-generate nếu không có
+        height = data.get('height')
+        weight = data.get('weight')
+        blood_type = data.get('blood_type')
+        
+        # Medical history (new fields)
+        medical_conditions = data.get('medical_conditions')  # Legacy field
+        chronic_diseases = data.get('chronic_diseases')
+        medications = data.get('medications')
+        allergies = data.get('allergies')
+        family_history = data.get('family_history')
+        
+        # Lifestyle factors
+        smoking_status = data.get('smoking_status')
+        alcohol_consumption = data.get('alcohol_consumption')
+        exercise_frequency = data.get('exercise_frequency')
+        
+        # Contact info
+        emergency_contact = data.get('emergency_contact')
+        
+        # Optional
+        patient_id = data.get('patient_id')
+        generate_ai_thresholds = data.get('generate_ai_thresholds', False)  # Auto-generate AI thresholds
+        threshold_method = data.get('threshold_method', 'hybrid')  # rule_based, ai_generated, hybrid
 
         if not all([user_id, name]):
             return jsonify({
@@ -331,34 +375,100 @@ def create_patient():
             patient_id = f"patient_{hashlib.md5((user_id + name + str(datetime.utcnow())).encode()).hexdigest()[:12]}"
 
         # Convert JSON fields to string
-        medical_conditions_json = json.dumps(medical_conditions) if medical_conditions else None
-        emergency_contact_json = json.dumps(emergency_contact) if emergency_contact else None
+        medical_conditions_json = json.dumps(medical_conditions, ensure_ascii=False) if medical_conditions else None
+        chronic_diseases_json = json.dumps(chronic_diseases, ensure_ascii=False) if chronic_diseases else None
+        medications_json = json.dumps(medications, ensure_ascii=False) if medications else None
+        allergies_json = json.dumps(allergies, ensure_ascii=False) if allergies else None
+        family_history_json = json.dumps(family_history, ensure_ascii=False) if family_history else None
+        emergency_contact_json = json.dumps(emergency_contact, ensure_ascii=False) if emergency_contact else None
 
         # Create new patient (device_id = NULL ban đầu)
         cursor.execute("""
-            INSERT INTO patients (patient_id, device_id, name, age, gender, medical_conditions, emergency_contact, is_active, created_at)
-            VALUES (%s, NULL, %s, %s, %s, %s, %s, 1, NOW())
-        """, (patient_id, name, age, gender, medical_conditions_json, emergency_contact_json))
+            INSERT INTO patients (
+                patient_id, device_id, name, age, gender,
+                height, weight, blood_type,
+                medical_conditions, chronic_diseases, medications,
+                allergies, family_history,
+                smoking_status, alcohol_consumption, exercise_frequency,
+                emergency_contact, is_active, created_at
+            )
+            VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, NOW())
+        """, (
+            patient_id, name, age, gender,
+            height, weight, blood_type,
+            medical_conditions_json, chronic_diseases_json, medications_json,
+            allergies_json, family_history_json,
+            smoking_status, alcohol_consumption, exercise_frequency,
+            emergency_contact_json
+        ))
 
-        # Tạo default thresholds cho patient mới
-        default_thresholds = [
-            (patient_id, 'heart_rate', 60, 100, 40, 120),
-            (patient_id, 'spo2', 95, 100, 90, 100),
-            (patient_id, 'temperature', 36.1, 37.2, 35.0, 39.0),
-            (patient_id, 'systolic_bp', 90, 120, 70, 180),
-            (patient_id, 'diastolic_bp', 60, 80, 40, 110)
-        ]
+        # Generate thresholds
+        if generate_ai_thresholds and threshold_generator:
+            # Use AI to generate personalized thresholds
+            logger.info(f"🤖 Generating AI thresholds for new patient {patient_id}")
+            
+            patient_data = {
+                'age': age, 'gender': gender, 'height': height, 'weight': weight,
+                'blood_type': blood_type, 'chronic_diseases': chronic_diseases or [],
+                'medications': medications or [], 'allergies': allergies or [],
+                'family_history': family_history or [],
+                'smoking_status': smoking_status,
+                'alcohol_consumption': alcohol_consumption,
+                'exercise_frequency': exercise_frequency
+            }
+            
+            result = threshold_generator.generate_thresholds(patient_data, method=threshold_method)
+            metadata_json = json.dumps(result['metadata'], ensure_ascii=False)
+            
+            for vital_sign, thresholds in result['thresholds'].items():
+                cursor.execute("""
+                    INSERT INTO patient_thresholds (
+                        patient_id, vital_sign,
+                        min_normal, max_normal, min_warning, max_warning,
+                        min_critical, max_critical,
+                        generation_method, ai_confidence, ai_model,
+                        generation_timestamp, metadata, is_active
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, 1)
+                """, (
+                    patient_id, vital_sign,
+                    thresholds['min_normal'], thresholds['max_normal'],
+                    thresholds.get('min_warning'), thresholds.get('max_warning'),
+                    thresholds['min_critical'], thresholds['max_critical'],
+                    result['metadata']['generation_method'],
+                    result['metadata']['ai_confidence'],
+                    result['metadata']['ai_model'],
+                    metadata_json
+                ))
+        else:
+            # Use default manual thresholds
+            default_thresholds = [
+                (patient_id, 'heart_rate', 60, 100, 55, 110, 40, 120, 'manual'),
+                (patient_id, 'spo2', 95, 100, 92, 100, 85, 100, 'manual'),
+                (patient_id, 'temperature', 36.1, 37.2, 35.5, 37.8, 35.0, 40.0, 'manual'),
+                (patient_id, 'systolic_bp', 90, 120, 85, 135, 70, 180, 'manual'),
+                (patient_id, 'diastolic_bp', 60, 80, 55, 90, 40, 110, 'manual')
+            ]
 
-        cursor.executemany("""
-            INSERT INTO patient_thresholds (patient_id, vital_sign, min_normal, max_normal, min_critical, max_critical)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, default_thresholds)
+            cursor.executemany("""
+                INSERT INTO patient_thresholds (
+                    patient_id, vital_sign,
+                    min_normal, max_normal, min_warning, max_warning,
+                    min_critical, max_critical, generation_method
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, default_thresholds)
 
         conn.commit()
 
-        # Get created patient info
+        # Get created patient info with all new fields
         cursor.execute("""
-            SELECT patient_id, device_id, name, age, gender, medical_conditions, emergency_contact, is_active
+            SELECT patient_id, device_id, name, age, gender,
+                   height, weight, blood_type,
+                   medical_conditions, chronic_diseases, medications,
+                   allergies, family_history,
+                   smoking_status, alcohol_consumption, exercise_frequency,
+                   emergency_contact, is_active
             FROM patients
             WHERE patient_id = %s
         """, (patient_id,))
@@ -368,20 +478,57 @@ def create_patient():
         cursor.close()
         conn.close()
 
+        # Parse JSON fields for response
+        response_data = {
+            'patient_id': patient['patient_id'],
+            'device_id': patient['device_id'],
+            'name': patient['name'],
+            'age': patient['age'],
+            'gender': patient['gender'],
+            'height': patient['height'],
+            'weight': patient['weight'],
+            'blood_type': patient['blood_type'],
+            'is_active': bool(patient['is_active'])
+        }
+        
+        # Parse JSON fields
+        for field in ['medical_conditions', 'chronic_diseases', 'medications', 
+                      'allergies', 'family_history', 'emergency_contact']:
+            if patient.get(field):
+                try:
+                    response_data[field] = json.loads(patient[field]) if isinstance(patient[field], str) else patient[field]
+                except:
+                    response_data[field] = patient[field]
+            else:
+                response_data[field] = None
+        
+        # Add lifestyle fields
+        response_data['smoking_status'] = patient['smoking_status']
+        response_data['alcohol_consumption'] = patient['alcohol_consumption']
+        response_data['exercise_frequency'] = patient['exercise_frequency']
+
         return jsonify({
             'status': 'success',
             'message': 'Patient created successfully',
-            'data': {
-                'patient_id': patient['patient_id'],
-                'device_id': patient['device_id'],
-                'name': patient['name'],
-                'age': patient['age'],
-                'gender': patient['gender'],
-                'medical_conditions': json.loads(patient['medical_conditions']) if patient['medical_conditions'] else None,
-                'emergency_contact': json.loads(patient['emergency_contact']) if patient['emergency_contact'] else None,
-                'is_active': bool(patient['is_active'])
-            }
+            'data': response_data
         })
+
+    except mysql.connector.IntegrityError as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Patient ID already exists or constraint violation: {str(e)}'
+        }), 409
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        logger.error(f"❌ Error creating patient: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
 
     except mysql.connector.IntegrityError as e:
         return jsonify({
@@ -1942,6 +2089,171 @@ def get_vitals_statistics():
             'message': f'Database error: {str(e)}'
         }), 500
     except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
+@app.route('/api/ai/generate-thresholds', methods=['POST'])
+def generate_ai_thresholds():
+    """
+    Generate personalized thresholds using AI
+    
+    Request body:
+    {
+        "patient_id": "patient_001",
+        "method": "hybrid"  // "rule_based", "ai_generated", or "hybrid"
+    }
+    
+    Response:
+    {
+        "status": "success",
+        "data": {
+            "patient_id": "patient_001",
+            "thresholds": {
+                "heart_rate": {"min_normal": 60, "max_normal": 100, ...},
+                "spo2": {...},
+                ...
+            },
+            "metadata": {
+                "generation_method": "hybrid",
+                "ai_model": "rule_based + gemini-1.5-pro",
+                "ai_confidence": 0.95,
+                "generation_timestamp": "2025-12-15T18:30:00",
+                "applied_rules": [...],
+                "input_factors": {...}
+            }
+        }
+    }
+    """
+    try:
+        if not threshold_generator:
+            return jsonify({
+                'status': 'error',
+                'message': 'Threshold generator not available'
+            }), 503
+        
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                'status': 'error',
+                'message': 'No JSON data provided'
+            }), 400
+        
+        patient_id = data.get('patient_id')
+        method = data.get('method', 'hybrid')  # Default to hybrid
+        
+        if not patient_id:
+            return jsonify({
+                'status': 'error',
+                'message': 'Missing required field: patient_id'
+            }), 400
+        
+        # Validate method
+        if method not in ['rule_based', 'ai_generated', 'hybrid']:
+            return jsonify({
+                'status': 'error',
+                'message': f'Invalid method: {method}. Use rule_based, ai_generated, or hybrid'
+            }), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get patient data
+        cursor.execute("""
+            SELECT patient_id, name, age, gender, height, weight, blood_type,
+                   medical_conditions, chronic_diseases, medications, allergies,
+                   family_history, smoking_status, alcohol_consumption,
+                   exercise_frequency, risk_factors
+            FROM patients
+            WHERE patient_id = %s AND is_active = 1
+        """, (patient_id,))
+        
+        patient = cursor.fetchone()
+        
+        if not patient:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'status': 'error',
+                'message': f'Patient not found: {patient_id}'
+            }), 404
+        
+        # Parse JSON fields
+        for field in ['chronic_diseases', 'medications', 'allergies', 'family_history', 'risk_factors']:
+            if patient.get(field):
+                try:
+                    patient[field] = json.loads(patient[field]) if isinstance(patient[field], str) else patient[field]
+                except:
+                    patient[field] = []
+        
+        # Generate thresholds
+        logger.info(f"🔧 Generating thresholds for {patient_id} using {method}")
+        result = threshold_generator.generate_thresholds(patient, method=method)
+        
+        # Save thresholds to database
+        metadata_json = json.dumps(result['metadata'], ensure_ascii=False)
+        
+        for vital_sign, thresholds in result['thresholds'].items():
+            cursor.execute("""
+                INSERT INTO patient_thresholds (
+                    patient_id, vital_sign,
+                    min_normal, max_normal,
+                    min_warning, max_warning,
+                    min_critical, max_critical,
+                    generation_method, ai_confidence, ai_model,
+                    generation_timestamp, metadata, is_active
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), %s, 1)
+                ON DUPLICATE KEY UPDATE
+                    min_normal = VALUES(min_normal),
+                    max_normal = VALUES(max_normal),
+                    min_warning = VALUES(min_warning),
+                    max_warning = VALUES(max_warning),
+                    min_critical = VALUES(min_critical),
+                    max_critical = VALUES(max_critical),
+                    generation_method = VALUES(generation_method),
+                    ai_confidence = VALUES(ai_confidence),
+                    ai_model = VALUES(ai_model),
+                    generation_timestamp = NOW(),
+                    metadata = VALUES(metadata),
+                    updated_at = NOW()
+            """, (
+                patient_id, vital_sign,
+                thresholds['min_normal'], thresholds['max_normal'],
+                thresholds.get('min_warning'), thresholds.get('max_warning'),
+                thresholds['min_critical'], thresholds['max_critical'],
+                result['metadata']['generation_method'],
+                result['metadata']['ai_confidence'],
+                result['metadata']['ai_model'],
+                metadata_json
+            ))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        logger.info(f"✅ Thresholds saved for {patient_id}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Thresholds generated successfully',
+            'data': {
+                'patient_id': patient_id,
+                'thresholds': result['thresholds'],
+                'metadata': result['metadata']
+            }
+        })
+    
+    except mysql.connector.Error as e:
+        logger.error(f"❌ Database error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        logger.error(f"❌ Server error: {e}")
         return jsonify({
             'status': 'error',
             'message': f'Server error: {str(e)}'
