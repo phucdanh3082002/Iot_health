@@ -1365,9 +1365,9 @@ class HealthMonitorApp(MDApp):
             }
             result['diastolic_bp'] = {
                 'min_normal': 60,
-                'max_normal': bp_config.get('diastolic_max', 90),
+                'max_normal': 90,
                 'min_critical': 40,
-                'max_critical': bp_config.get('diastolic_critical', 110)
+                'max_critical': 110
             }
         
         return result

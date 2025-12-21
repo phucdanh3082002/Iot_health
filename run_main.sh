@@ -16,7 +16,7 @@ if [ -f ".env" ]; then
 else
     echo "⚠️  Warning: .env file not found"
 fi
-
+    
 # Set environment variables (export nếu chưa có trong ~/.bashrc)
 export DISPLAY=:0
 

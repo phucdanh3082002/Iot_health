@@ -129,7 +129,7 @@ cloud:
   
   sync:
     mode: "auto"  # auto / manual / scheduled
-    interval_seconds: 60  # Sync every 5 minutes (auto mode)
+    interval_seconds: 60  # Sync every 1 minute (auto mode)
     batch_size: 100  # Records per batch
     retry_attempts: 3
     retry_delay_seconds: 60

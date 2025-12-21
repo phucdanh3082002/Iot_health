@@ -600,81 +600,6 @@ Pi → MQTT Broker → Android MqttManager
 
 ---
 
-## 🌐 **WEB DASHBOARD - MQTT IMPLEMENTATION**
-
-### **Tech Stack**
-```
-Frontend: React/Vue.js + TypeScript
-MQTT Client: MQTT.js (WebSocket)
-Chart: Chart.js / D3.js
-State Management: Redux/Zustand
-UI Framework: Material-UI / Ant Design
-```
-
-### **Key Components**
-
-#### **1. MqttClient.ts**
-```typescript
-class MqttClient {
-    private client: mqtt.MqttClient | null = null;
-    
-    // EventEmitter for real-time updates
-    public vitalsEmitter = new EventEmitter();
-    public alertsEmitter = new EventEmitter();
-    
-    connect(broker: string, port: number): Promise<void>
-    subscribeToAllDevices(): void
-    subscribeToDevice(deviceId: string): void
-    publishCommand(patientId: string, command: string): void
-    disconnect(): void
-}
-```
-
-#### **2. Real-time Dashboard**
-```tsx
-const Dashboard: React.FC = () => {
-    const [devices, setDevices] = useState<Device[]>([]);
-    const [vitals, setVitals] = useState<Map<string, Vitals>>(new Map());
-    
-    useEffect(() => {
-        mqttClient.vitalsEmitter.on('data', (data) => {
-            setVitals(prev => prev.set(data.device_id, data));
-        });
-        
-        return () => mqttClient.vitalsEmitter.removeAllListeners();
-    }, []);
-    
-    return (
-        <Grid container spacing={2}>
-            {devices.map(device => (
-                <DeviceCard 
-                    key={device.id} 
-                    device={device}
-                    vitals={vitals.get(device.id)}
-                />
-            ))}
-        </Grid>
-    );
-};
-```
-
-#### **3. Live Chart Update**
-```typescript
-useEffect(() => {
-    const updateChart = (data: VitalsPayload) => {
-        setChartData(prev => ({
-            labels: [...prev.labels, new Date(data.timestamp * 1000)],
-            datasets: [{
-                data: [...prev.datasets[0].data, data.measurements.heart_rate.value]
-            }]
-        }));
-    };
-    
-    mqttClient.vitalsEmitter.on('data', updateChart);
-    return () => mqttClient.vitalsEmitter.off('data', updateChart);
-}, []);
-```
-
 #### **4. Critical Features**
 - ✅ **Multi-device view**: Grid layout hiển thị nhiều Pi
 - ✅ **Admin controls**: Remote start/stop measurements
@@ -748,6 +673,9 @@ REACT_APP_MQTT_PORT=8884
 REACT_APP_MQTT_USERNAME=web_dashboard
 REACT_APP_MQTT_PASSWORD=<your_hivemq_password>
 ```
+
+#server Instance Details (AWS EC2)
+Public ip = 47.130.193.237
 
 ---
 
