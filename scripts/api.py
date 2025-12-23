@@ -16,7 +16,7 @@ import secrets
 import logging
 
 # Add scripts directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
 from ai_threshold_generator import ThresholdGenerator
 
 # Configure logging
@@ -121,7 +121,7 @@ def pair_device():
                 'status': 'error',
                 'message': 'Invalid pairing code or device not active'
             }), 400
-        
+
         # Check pairing code expiry (10 minutes from creation)
         if device_result.get('pairing_qr_data'):
             try:
@@ -179,7 +179,7 @@ def pair_device():
                 nickname = VALUES(nickname),
                 last_accessed = NOW()
         """, (user_id, device_id, nickname))
-        
+
         # 5. Update device paired status and clear pairing code
         cursor.execute("""
             UPDATE devices
@@ -219,7 +219,7 @@ def pair_device():
         # 7. Build response - patient_info = null nếu chưa có
         patient_info = None
         commands_topic = None
-        
+
         if device_result.get('patient_id'):
             patient_info = {
                 'patient_id': device_result['patient_id'],
@@ -228,7 +228,7 @@ def pair_device():
                 'gender': device_result['gender']
             }
             commands_topic = f'iot_health/patient/{device_result["patient_id"]}/commands'
-        
+
         response_data = {
             'device_info': {
                 'device_id': device_result['device_id'],
@@ -332,29 +332,29 @@ def create_patient():
         # Required fields
         user_id = data.get('user_id')
         name = data.get('name')
-        
+
         # Basic info
         age = data.get('age')
         gender = data.get('gender')
         height = data.get('height')
         weight = data.get('weight')
         blood_type = data.get('blood_type')
-        
+
         # Medical history (new fields)
         medical_conditions = data.get('medical_conditions')  # Legacy field
         chronic_diseases = data.get('chronic_diseases')
         medications = data.get('medications')
         allergies = data.get('allergies')
         family_history = data.get('family_history')
-        
+
         # Lifestyle factors
         smoking_status = data.get('smoking_status')
         alcohol_consumption = data.get('alcohol_consumption')
         exercise_frequency = data.get('exercise_frequency')
-        
+
         # Contact info
         emergency_contact = data.get('emergency_contact')
-        
+
         # Optional
         patient_id = data.get('patient_id')
         generate_ai_thresholds = data.get('generate_ai_thresholds', False)  # Auto-generate AI thresholds
@@ -406,7 +406,7 @@ def create_patient():
         if generate_ai_thresholds and threshold_generator:
             # Use AI to generate personalized thresholds
             logger.info(f"🤖 Generating AI thresholds for new patient {patient_id}")
-            
+
             patient_data = {
                 'age': age, 'gender': gender, 'height': height, 'weight': weight,
                 'blood_type': blood_type, 'chronic_diseases': chronic_diseases or [],
@@ -416,10 +416,10 @@ def create_patient():
                 'alcohol_consumption': alcohol_consumption,
                 'exercise_frequency': exercise_frequency
             }
-            
+
             result = threshold_generator.generate_thresholds(patient_data, method=threshold_method)
             metadata_json = json.dumps(result['metadata'], ensure_ascii=False)
-            
+
             for vital_sign, thresholds in result['thresholds'].items():
                 cursor.execute("""
                     INSERT INTO patient_thresholds (
@@ -490,9 +490,9 @@ def create_patient():
             'blood_type': patient['blood_type'],
             'is_active': bool(patient['is_active'])
         }
-        
+
         # Parse JSON fields
-        for field in ['medical_conditions', 'chronic_diseases', 'medications', 
+        for field in ['medical_conditions', 'chronic_diseases', 'medications',
                       'allergies', 'family_history', 'emergency_contact']:
             if patient.get(field):
                 try:
@@ -501,7 +501,7 @@ def create_patient():
                     response_data[field] = patient[field]
             else:
                 response_data[field] = None
-        
+
         # Add lifestyle fields
         response_data['smoking_status'] = patient['smoking_status']
         response_data['alcohol_consumption'] = patient['alcohol_consumption']
@@ -565,8 +565,13 @@ def update_patient(patient_id):
         name = data.get('name')
         age = data.get('age')
         gender = data.get('gender')
+        phone = data.get('phone')
+        email = data.get('email')
+        address = data.get('address')
+        emergency_contact = data.get('emergencyContact')  # Android uses camelCase
+        medical_history = data.get('medicalHistory')  # Android uses camelCase
         medical_conditions = data.get('medical_conditions')
-        emergency_contact = data.get('emergency_contact')
+        
 
         if not user_id:
             return jsonify({
@@ -956,6 +961,115 @@ def delete_patient(patient_id):
             'message': f'Server error: {str(e)}'
         }), 500
 
+@app.route('/api/patients/<patient_id>/ai-thresholds', methods=['GET'])
+def get_patient_ai_thresholds(patient_id):
+    """
+    Get AI-generated thresholds for a specific patient
+    Returns personalized thresholds from patient_thresholds table
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # First verify patient exists
+        cursor.execute("SELECT patient_id, name FROM patients WHERE patient_id = %s", (patient_id,))
+        patient = cursor.fetchone()
+
+        if not patient:
+            cursor.close()
+            conn.close()
+            return jsonify({
+                'status': 'error',
+                'message': 'Patient not found'
+            }), 404
+
+        # Query patient_thresholds table for AI-generated thresholds
+        cursor.execute("""
+            SELECT
+                vital_sign,
+                min_normal,
+                max_normal,
+                min_warning,
+                max_warning,
+                min_critical,
+                max_critical,
+                generation_method,
+                ai_confidence,
+                ai_model,
+                generation_timestamp,
+                metadata
+            FROM patient_thresholds
+            WHERE patient_id = %s AND is_active = 1
+            ORDER BY generation_timestamp DESC
+        """, (patient_id,))
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            return jsonify({
+                'status': 'error',
+                'message': 'No AI thresholds found for this patient'
+            }), 404
+
+        # Transform data into expected format for Android app
+        thresholds = {}
+        metadata = None
+
+        for row in rows:
+            vital_sign = row['vital_sign']
+            thresholds[vital_sign] = {
+                'minNormal': float(row['min_normal']) if row['min_normal'] else 0.0,
+                'maxNormal': float(row['max_normal']) if row['max_normal'] else 0.0,
+                'minWarning': float(row['min_warning']) if row['min_warning'] else 0.0,
+                'maxWarning': float(row['max_warning']) if row['max_warning'] else 0.0,
+                'minCritical': float(row['min_critical']) if row['min_critical'] else 0.0,
+                'maxCritical': float(row['max_critical']) if row['max_critical'] else 0.0
+            }
+
+            # Use metadata from first row (all thresholds share same generation metadata)
+            if metadata is None:
+                metadata = {
+                    'generationMethod': row['generation_method'] if row['generation_method'] else 'baseline',
+                    'aiModel': row['ai_model'] if row['ai_model'] else 'baseline',
+                    'aiConfidence': float(row['ai_confidence']) if row['ai_confidence'] else 0.0,
+                    'generationTimestamp': str(row['generation_timestamp']) if row['generation_timestamp'] else '',
+                    'appliedRules': [],
+                    'inputFactors': {}
+                }
+
+                # Parse metadata JSON if available
+                if row['metadata']:
+                    try:
+                        meta_json = json.loads(row['metadata'])
+                        if 'applied_rules' in meta_json:
+                            metadata['appliedRules'] = meta_json['applied_rules']
+                        if 'input_factors' in meta_json:
+                            metadata['inputFactors'] = meta_json['input_factors']
+                    except Exception as e:
+                        print(f"Warning: Could not parse metadata JSON: {e}")
+
+        return jsonify({
+            'status': 'success',
+            'data': {
+                'patientId': patient_id,
+                'thresholds': thresholds,
+                'metadata': metadata
+            }
+        }), 200
+
+    except mysql.connector.Error as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Database error: {str(e)}'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Server error: {str(e)}'
+        }), 500
+
 @app.route('/api/generate-pairing-code', methods=['POST'])
 def generate_pairing_code():
     """
@@ -963,28 +1077,28 @@ def generate_pairing_code():
     """
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
             }), 400
-        
+
         device_id = data.get('device_id')
-        
+
         if not device_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required field: device_id'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Verify device exists
         cursor.execute("SELECT * FROM devices WHERE device_id = %s", (device_id,))
         device = cursor.fetchone()
-        
+
         if not device:
             cursor.close()
             conn.close()
@@ -992,10 +1106,10 @@ def generate_pairing_code():
                 'status': 'error',
                 'message': 'Device not found'
             }), 404
-        
+
         # Generate 8-character pairing code
         pairing_code = secrets.token_hex(4).upper()
-        
+
         # Create QR data with expiry (10 minutes)
         qr_data = {
             'device_id': device_id,
@@ -1003,7 +1117,7 @@ def generate_pairing_code():
             'timestamp': datetime.utcnow().isoformat(),
             'expires_at': (datetime.utcnow() + timedelta(minutes=10)).isoformat()
         }
-        
+
         # Update device with new pairing code
         cursor.execute("""
             UPDATE devices
@@ -1011,11 +1125,11 @@ def generate_pairing_code():
                 pairing_qr_data = %s
             WHERE device_id = %s
         """, (pairing_code, json.dumps(qr_data), device_id))
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Pairing code generated successfully',
@@ -1025,7 +1139,7 @@ def generate_pairing_code():
                 'expires_in_minutes': 10
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1045,33 +1159,33 @@ def update_device_nickname(device_id):
     """
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
             }), 400
-        
+
         user_id = data.get('user_id')
         nickname = data.get('nickname')
-        
+
         if not all([user_id, nickname]):
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required fields: user_id, nickname'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Verify user owns this device
         cursor.execute("""
             SELECT * FROM device_ownership
             WHERE device_id = %s AND user_id = %s
         """, (device_id, user_id))
-        
+
         ownership = cursor.fetchone()
-        
+
         if not ownership:
             cursor.close()
             conn.close()
@@ -1079,7 +1193,7 @@ def update_device_nickname(device_id):
                 'status': 'error',
                 'message': 'User does not own this device'
             }), 403
-        
+
         # Update nickname
         cursor.execute("""
             UPDATE device_ownership
@@ -1087,11 +1201,11 @@ def update_device_nickname(device_id):
                 last_accessed = NOW()
             WHERE device_id = %s AND user_id = %s
         """, (nickname, device_id, user_id))
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Device nickname updated successfully',
@@ -1100,7 +1214,7 @@ def update_device_nickname(device_id):
                 'nickname': nickname
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1120,9 +1234,9 @@ def get_device_status(device_id):
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         cursor.execute("""
-            SELECT 
+            SELECT
                 d.device_id,
                 d.device_name,
                 d.is_active,
@@ -1136,9 +1250,9 @@ def get_device_status(device_id):
             WHERE d.device_id = %s
             GROUP BY d.device_id
         """, (device_id,))
-        
+
         device = cursor.fetchone()
-        
+
         if not device:
             cursor.close()
             conn.close()
@@ -1146,13 +1260,13 @@ def get_device_status(device_id):
                 'status': 'error',
                 'message': 'Device not found'
             }), 404
-        
+
         # Determine online status (offline if no heartbeat in 5 minutes)
         is_online = device['seconds_offline'] < 300 if device['last_seen'] else False
-        
+
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'data': {
@@ -1166,7 +1280,7 @@ def get_device_status(device_id):
                 'avg_data_quality': float(device['avg_quality_24h']) if device['avg_quality_24h'] else None
             }
         })
-        
+
     except Exception as e:
         return jsonify({
             'status': 'error',
@@ -1178,7 +1292,7 @@ def get_health_records():
     """
     Get health records (vitals history) với filter và pagination
     DEVICE-CENTRIC APPROACH: Query theo device_id (primary), patient_id optional
-    
+
     Query params:
     - user_id: User ID (required for authorization)
     - device_id: Filter by device (optional but recommended)
@@ -1189,7 +1303,7 @@ def get_health_records():
     - page: Page number (default: 1)
     - limit: Records per page (default: 50, max: 500)
     - sort_order: asc or desc (default: desc)
-    
+
     Returns:
     - Paginated list of health records với metadata
     - Records có thể có patient_id = NULL nếu device chưa assign patient
@@ -1205,32 +1319,32 @@ def get_health_records():
         page = int(request.args.get('page', 1))
         limit = min(int(request.args.get('limit', 50)), 500)  # Max 500 records
         sort_order = request.args.get('sort_order', 'desc').upper()
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameter: user_id'
             }), 400
-        
+
         if sort_order not in ['ASC', 'DESC']:
             sort_order = 'DESC'
-        
+
         # Set default date range (7 days)
         if not start_date:
             start_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
         if not end_date:
             end_date = datetime.utcnow().isoformat()
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Verify user has access to requested device/patient
         if device_id:
             cursor.execute("""
                 SELECT device_id FROM device_ownership
                 WHERE device_id = %s AND user_id = %s
             """, (device_id, user_id))
-            
+
             if not cursor.fetchone():
                 cursor.close()
                 conn.close()
@@ -1238,10 +1352,10 @@ def get_health_records():
                     'status': 'error',
                     'message': 'User does not have access to this device'
                 }), 403
-        
+
         # Build dynamic query
         query = """
-            SELECT 
+            SELECT
                 hr.id,
                 hr.device_id,
                 hr.patient_id,
@@ -1264,18 +1378,18 @@ def get_health_records():
             LEFT JOIN patients p ON hr.patient_id = p.patient_id
             WHERE hr.timestamp BETWEEN %s AND %s
         """
-        
+
         params = [user_id, start_date, end_date]
-        
+
         # Add filters
         if device_id:
             query += " AND hr.device_id = %s"
             params.append(device_id)
-        
+
         if patient_id:
             query += " AND hr.patient_id = %s"
             params.append(patient_id)
-        
+
         # Filter by vital sign (có giá trị khác NULL)
         if vital_sign:
             vital_map = {
@@ -1286,24 +1400,24 @@ def get_health_records():
             }
             if vital_sign in vital_map:
                 query += f" AND {vital_map[vital_sign]}"
-        
+
         # Count total records
         count_query = f"SELECT COUNT(*) as total FROM ({query}) as subquery"
         cursor.execute(count_query, params)
         total_records = cursor.fetchone()['total']
-        
+
         # Add pagination
         offset = (page - 1) * limit
         query += f" ORDER BY hr.timestamp {sort_order} LIMIT %s OFFSET %s"
         params.extend([limit, offset])
-        
+
         # Execute query
         cursor.execute(query, params)
         records = cursor.fetchall()
-        
+
         cursor.close()
         conn.close()
-        
+
         # Format response
         result = []
         for record in records:
@@ -1327,9 +1441,9 @@ def get_health_records():
                 'measurement_context': record['measurement_context'],
                 'sensor_data': json.loads(record['sensor_data']) if record['sensor_data'] else None
             })
-        
+
         total_pages = (total_records + limit - 1) // limit
-        
+
         return jsonify({
             'status': 'success',
             'data': result,
@@ -1350,7 +1464,7 @@ def get_health_records():
                 'sort_order': sort_order
             }
         })
-        
+
     except ValueError as e:
         return jsonify({
             'status': 'error',
@@ -1371,25 +1485,25 @@ def get_health_records():
 def get_health_record_detail(record_id):
     """
     Get chi tiết single health record với full sensor data
-    
+
     Query params:
     - user_id: User ID (required for authorization)
     """
     try:
         user_id = request.args.get('user_id')
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameter: user_id'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Get record với authorization check
         cursor.execute("""
-            SELECT 
+            SELECT
                 hr.*,
                 d.device_name,
                 do.nickname as device_nickname,
@@ -1402,9 +1516,9 @@ def get_health_record_detail(record_id):
             LEFT JOIN patients p ON hr.patient_id = p.patient_id
             WHERE hr.id = %s
         """, (user_id, record_id))
-        
+
         record = cursor.fetchone()
-        
+
         if not record:
             cursor.close()
             conn.close()
@@ -1412,10 +1526,10 @@ def get_health_record_detail(record_id):
                 'status': 'error',
                 'message': 'Record not found or access denied'
             }), 404
-        
+
         cursor.close()
         conn.close()
-        
+
         # Format response
         return jsonify({
             'status': 'success',
@@ -1444,7 +1558,7 @@ def get_health_record_detail(record_id):
                 'sync_status': record['sync_status']
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1461,7 +1575,7 @@ def get_alerts():
     """
     Get alerts history với filter và pagination
     DEVICE-CENTRIC APPROACH: Query theo device_id (primary), patient_id optional
-    
+
     Query params:
     - user_id: User ID (required for authorization)
     - device_id: Filter by device (optional but recommended)
@@ -1474,7 +1588,7 @@ def get_alerts():
     - page: Page number (default: 1)
     - limit: Records per page (default: 50, max: 200)
     - sort_order: asc or desc (default: desc)
-    
+
     Returns:
     - Paginated list of alerts với metadata
     - Alerts có thể có patient_id = NULL nếu device chưa assign patient
@@ -1492,28 +1606,28 @@ def get_alerts():
         page = int(request.args.get('page', 1))
         limit = min(int(request.args.get('limit', 50)), 200)  # Max 200 records
         sort_order = request.args.get('sort_order', 'desc').upper()
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameter: user_id'
             }), 400
-        
+
         if sort_order not in ['ASC', 'DESC']:
             sort_order = 'DESC'
-        
+
         # Set default date range (30 days)
         if not start_date:
             start_date = (datetime.utcnow() - timedelta(days=30)).isoformat()
         if not end_date:
             end_date = datetime.utcnow().isoformat()
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Build dynamic query
         query = """
-            SELECT 
+            SELECT
                 a.id,
                 a.device_id,
                 a.patient_id,
@@ -1537,48 +1651,48 @@ def get_alerts():
             LEFT JOIN patients p ON a.patient_id = p.patient_id
             WHERE a.timestamp BETWEEN %s AND %s
         """
-        
+
         params = [user_id, start_date, end_date]
-        
+
         # Add filters
         if device_id:
             query += " AND a.device_id = %s"
             params.append(device_id)
-        
+
         if patient_id:
             query += " AND a.patient_id = %s"
             params.append(patient_id)
-        
+
         if severity:
             query += " AND a.severity = %s"
             params.append(severity)
-        
+
         if alert_type:
             query += " AND a.alert_type = %s"
             params.append(alert_type)
-        
+
         if acknowledged is not None:
             ack_value = acknowledged.lower() in ['true', '1', 'yes']
             query += " AND a.acknowledged = %s"
             params.append(ack_value)
-        
+
         # Count total records
         count_query = f"SELECT COUNT(*) as total FROM ({query}) as subquery"
         cursor.execute(count_query, params)
         total_records = cursor.fetchone()['total']
-        
+
         # Add pagination
         offset = (page - 1) * limit
         query += f" ORDER BY a.timestamp {sort_order} LIMIT %s OFFSET %s"
         params.extend([limit, offset])
-        
+
         # Execute query
         cursor.execute(query, params)
         alerts = cursor.fetchall()
-        
+
         cursor.close()
         conn.close()
-        
+
         # Format response
         result = []
         for alert in alerts:
@@ -1595,7 +1709,7 @@ def get_alerts():
             else:
                 # Generic summary from message
                 summary = alert['message'][:50] + "..." if len(alert['message']) > 50 else alert['message']
-            
+
             result.append({
                 'id': alert['id'],
                 'device_id': alert['device_id'],
@@ -1616,9 +1730,9 @@ def get_alerts():
                 'notification_sent': bool(alert['notification_sent']),
                 'notification_method': alert['notification_method']
             })
-        
+
         total_pages = (total_records + limit - 1) // limit
-        
+
         return jsonify({
             'status': 'success',
             'data': result,
@@ -1641,7 +1755,7 @@ def get_alerts():
                 'sort_order': sort_order
             }
         })
-        
+
     except ValueError as e:
         return jsonify({
             'status': 'error',
@@ -1662,30 +1776,30 @@ def get_alerts():
 def acknowledge_alert(alert_id):
     """
     Mark alert as acknowledged
-    
+
     Body params:
     - user_id: User ID (required for authorization)
     """
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
             }), 400
-        
+
         user_id = data.get('user_id')
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required field: user_id'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Verify user has access to this alert
         cursor.execute("""
             SELECT a.id, a.device_id
@@ -1693,9 +1807,9 @@ def acknowledge_alert(alert_id):
             JOIN device_ownership do ON a.device_id = do.device_id AND do.user_id = %s
             WHERE a.id = %s
         """, (user_id, alert_id))
-        
+
         alert = cursor.fetchone()
-        
+
         if not alert:
             cursor.close()
             conn.close()
@@ -1703,18 +1817,18 @@ def acknowledge_alert(alert_id):
                 'status': 'error',
                 'message': 'Alert not found or access denied'
             }), 404
-        
+
         # Update alert
         cursor.execute("""
             UPDATE alerts
             SET acknowledged = 1
             WHERE id = %s
         """, (alert_id,))
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Alert acknowledged successfully',
@@ -1723,7 +1837,7 @@ def acknowledge_alert(alert_id):
                 'acknowledged': True
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1739,41 +1853,41 @@ def acknowledge_alert(alert_id):
 def resolve_alert(alert_id):
     """
     Mark alert as resolved
-    
+
     Body params:
     - user_id: User ID (required for authorization)
     """
     try:
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
             }), 400
-        
+
         user_id = data.get('user_id')
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required field: user_id'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Verify user has access to this alert (owner or caregiver)
         cursor.execute("""
             SELECT a.id, a.device_id
             FROM alerts a
-            JOIN device_ownership do ON a.device_id = do.device_id 
+            JOIN device_ownership do ON a.device_id = do.device_id
             WHERE a.id = %s AND do.user_id = %s
             AND do.role IN ('owner', 'caregiver')
         """, (alert_id, user_id))
-        
+
         alert = cursor.fetchone()
-        
+
         if not alert:
             cursor.close()
             conn.close()
@@ -1781,7 +1895,7 @@ def resolve_alert(alert_id):
                 'status': 'error',
                 'message': 'Alert not found or access denied'
             }), 404
-        
+
         # Update alert
         cursor.execute("""
             UPDATE alerts
@@ -1789,11 +1903,11 @@ def resolve_alert(alert_id):
                 acknowledged = 1
             WHERE id = %s
         """, (alert_id,))
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Alert resolved successfully',
@@ -1803,7 +1917,7 @@ def resolve_alert(alert_id):
                 'acknowledged': True
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1819,13 +1933,13 @@ def resolve_alert(alert_id):
 def get_alerts_statistics():
     """
     Get alerts statistics cho dashboard mobile app
-    
+
     Query params:
     - user_id: User ID (required)
     - device_id: Device ID (optional)
     - patient_id: Patient ID (optional)
     - days: Number of days to look back (default: 7)
-    
+
     Returns:
     - Alert counts by severity, status
     - Recent alerts summary
@@ -1835,72 +1949,72 @@ def get_alerts_statistics():
         device_id = request.args.get('device_id')
         patient_id = request.args.get('patient_id')
         days = int(request.args.get('days', 7))
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameter: user_id'
             }), 400
-        
+
         start_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
         end_date = datetime.utcnow().isoformat()
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Build base query
         base_query = """
             FROM alerts a
             JOIN device_ownership do ON a.device_id = do.device_id AND do.user_id = %s
             WHERE a.timestamp BETWEEN %s AND %s
         """
-        
+
         params = [user_id, start_date, end_date]
-        
+
         if device_id:
             base_query += " AND a.device_id = %s"
             params.append(device_id)
-        
+
         if patient_id:
             base_query += " AND a.patient_id = %s"
             params.append(patient_id)
-        
+
         # Get severity counts
         severity_query = f"""
-            SELECT 
+            SELECT
                 a.severity,
                 COUNT(*) as count
             {base_query}
             GROUP BY a.severity
         """
-        
+
         cursor.execute(severity_query, params)
         severity_stats = cursor.fetchall()
-        
+
         # Get status counts
         status_query = f"""
-            SELECT 
-                CASE 
+            SELECT
+                CASE
                     WHEN a.resolved = 1 THEN 'resolved'
                     WHEN a.acknowledged = 1 THEN 'acknowledged'
                     ELSE 'active'
                 END as status,
                 COUNT(*) as count
             {base_query}
-            GROUP BY 
-                CASE 
+            GROUP BY
+                CASE
                     WHEN a.resolved = 1 THEN 'resolved'
                     WHEN a.acknowledged = 1 THEN 'acknowledged'
                     ELSE 'active'
                 END
         """
-        
+
         cursor.execute(status_query, params)
         status_stats = cursor.fetchall()
-        
+
         # Get recent alerts (last 10)
         recent_query = f"""
-            SELECT 
+            SELECT
                 a.id,
                 a.alert_type,
                 a.severity,
@@ -1912,23 +2026,23 @@ def get_alerts_statistics():
             ORDER BY a.timestamp DESC
             LIMIT 10
         """
-        
+
         cursor.execute(recent_query, params)
         recent_alerts = cursor.fetchall()
-        
+
         cursor.close()
         conn.close()
-        
+
         # Format severity stats
         severity_dict = {'low': 0, 'medium': 0, 'high': 0, 'critical': 0}
         for stat in severity_stats:
             severity_dict[stat['severity']] = stat['count']
-        
+
         # Format status stats
         status_dict = {'active': 0, 'acknowledged': 0, 'resolved': 0}
         for stat in status_stats:
             status_dict[stat['status']] = stat['count']
-        
+
         # Format recent alerts
         recent_list = []
         for alert in recent_alerts:
@@ -1941,7 +2055,7 @@ def get_alerts_statistics():
                 'device_name': alert['device_name'],
                 'device_nickname': alert['device_nickname']
             })
-        
+
         return jsonify({
             'status': 'success',
             'data': {
@@ -1956,7 +2070,7 @@ def get_alerts_statistics():
                 'recent_alerts': recent_list
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -1972,14 +2086,14 @@ def get_alerts_statistics():
 def get_vitals_statistics():
     """
     Get vitals statistics (min, max, avg) cho time range
-    
+
     Query params:
     - user_id: User ID (required)
     - device_id: Device ID (optional)
     - patient_id: Patient ID (optional)
     - start_date: ISO format (default: 7 days ago)
     - end_date: ISO format (default: now)
-    
+
     Returns:
     - Statistics for each vital sign
     """
@@ -1989,25 +2103,25 @@ def get_vitals_statistics():
         patient_id = request.args.get('patient_id')
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
-        
+
         if not user_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required parameter: user_id'
             }), 400
-        
+
         # Set default date range (7 days)
         if not start_date:
             start_date = (datetime.utcnow() - timedelta(days=7)).isoformat()
         if not end_date:
             end_date = datetime.utcnow().isoformat()
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Build query
         query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_records,
                 AVG(heart_rate) as avg_heart_rate,
                 MIN(heart_rate) as min_heart_rate,
@@ -2028,23 +2142,23 @@ def get_vitals_statistics():
             JOIN device_ownership do ON hr.device_id = do.device_id AND do.user_id = %s
             WHERE hr.timestamp BETWEEN %s AND %s
         """
-        
+
         params = [user_id, start_date, end_date]
-        
+
         if device_id:
             query += " AND hr.device_id = %s"
             params.append(device_id)
-        
+
         if patient_id:
             query += " AND hr.patient_id = %s"
             params.append(patient_id)
-        
+
         cursor.execute(query, params)
         stats = cursor.fetchone()
-        
+
         cursor.close()
         conn.close()
-        
+
         return jsonify({
             'status': 'success',
             'data': {
@@ -2082,7 +2196,7 @@ def get_vitals_statistics():
                 }
             }
         })
-        
+
     except mysql.connector.Error as e:
         return jsonify({
             'status': 'error',
@@ -2098,13 +2212,13 @@ def get_vitals_statistics():
 def generate_ai_thresholds():
     """
     Generate personalized thresholds using AI
-    
+
     Request body:
     {
         "patient_id": "patient_001",
         "method": "hybrid"  // "rule_based", "ai_generated", or "hybrid"
     }
-    
+
     Response:
     {
         "status": "success",
@@ -2132,34 +2246,34 @@ def generate_ai_thresholds():
                 'status': 'error',
                 'message': 'Threshold generator not available'
             }), 503
-        
+
         data = request.get_json()
-        
+
         if not data:
             return jsonify({
                 'status': 'error',
                 'message': 'No JSON data provided'
             }), 400
-        
+
         patient_id = data.get('patient_id')
         method = data.get('method', 'hybrid')  # Default to hybrid
-        
+
         if not patient_id:
             return jsonify({
                 'status': 'error',
                 'message': 'Missing required field: patient_id'
             }), 400
-        
+
         # Validate method
         if method not in ['rule_based', 'ai_generated', 'hybrid']:
             return jsonify({
                 'status': 'error',
                 'message': f'Invalid method: {method}. Use rule_based, ai_generated, or hybrid'
             }), 400
-        
+
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        
+
         # Get patient data
         cursor.execute("""
             SELECT patient_id, name, age, gender, height, weight, blood_type,
@@ -2169,9 +2283,9 @@ def generate_ai_thresholds():
             FROM patients
             WHERE patient_id = %s AND is_active = 1
         """, (patient_id,))
-        
+
         patient = cursor.fetchone()
-        
+
         if not patient:
             cursor.close()
             conn.close()
@@ -2179,7 +2293,7 @@ def generate_ai_thresholds():
                 'status': 'error',
                 'message': f'Patient not found: {patient_id}'
             }), 404
-        
+
         # Parse JSON fields
         for field in ['chronic_diseases', 'medications', 'allergies', 'family_history', 'risk_factors']:
             if patient.get(field):
@@ -2187,14 +2301,14 @@ def generate_ai_thresholds():
                     patient[field] = json.loads(patient[field]) if isinstance(patient[field], str) else patient[field]
                 except:
                     patient[field] = []
-        
+
         # Generate thresholds
         logger.info(f"🔧 Generating thresholds for {patient_id} using {method}")
         result = threshold_generator.generate_thresholds(patient, method=method)
-        
+
         # Save thresholds to database
         metadata_json = json.dumps(result['metadata'], ensure_ascii=False)
-        
+
         for vital_sign, thresholds in result['thresholds'].items():
             cursor.execute("""
                 INSERT INTO patient_thresholds (
@@ -2229,13 +2343,13 @@ def generate_ai_thresholds():
                 result['metadata']['ai_model'],
                 metadata_json
             ))
-        
+
         conn.commit()
         cursor.close()
         conn.close()
-        
+
         logger.info(f"✅ Thresholds saved for {patient_id}")
-        
+
         return jsonify({
             'status': 'success',
             'message': 'Thresholds generated successfully',
@@ -2245,7 +2359,7 @@ def generate_ai_thresholds():
                 'metadata': result['metadata']
             }
         })
-    
+
     except mysql.connector.Error as e:
         logger.error(f"❌ Database error: {e}")
         return jsonify({

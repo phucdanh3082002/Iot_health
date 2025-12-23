@@ -4,8 +4,7 @@
 			"type": "stdio",
 			"command": "/home/pi/Desktop/IoT_health/.venv/bin/uvx",
 			"args": [
-				"mysql_mcp_server==0.2.2",
-				"mysql_mcp_server"
+				"mysql_mcp_server==0.2.2"
 			],
 			"env": {
 				"MYSQL_HOST": "database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com",

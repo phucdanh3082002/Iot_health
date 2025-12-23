@@ -11,6 +11,7 @@ ai:
     window_size: 24
 app:
   debug: true
+  emergency_button_gpio: 25
   log_level: INFO
   name: IoT Health Monitor
   version: 1.0.0
@@ -214,7 +215,7 @@ sensors:
     deflate_rate_mmhg_s: 3.0
     max_pressure_mmhg: 200
     pump_gpio: 26
-    valve_gpio: 16
+    valve_gpio: 20
     hx710b:
       enabled: true
       gpio_dout: 6
@@ -260,8 +261,7 @@ sensors:
       offset_counts: 1303339
 
 # ============================================================
-# NOTE: Static thresholds section đã REMOVED
-# Thay vào đó sử dụng threshold_management.baseline (line 149)
+# NOTE: Static thresholds section 
 # để quản lý tập trung tất cả threshold mặc định
 # ============================================================
 

@@ -15,7 +15,7 @@ except ImportError:
     SMBus = None
 
 
-class MLX90614Sensor(BaseSensor):
+class MLX90614Sensor(BaseSensor):   
     """
     Driver cho MLX90614 infrared temperature sensor (GY-906)
     
@@ -35,7 +35,7 @@ class MLX90614Sensor(BaseSensor):
     def __init__(self, config: Dict[str, Any]):
         """
         Initialize MLX90614 temperature sensor
-        
+
         Args:
             config: Configuration dictionary for MLX90614 sensor
         """

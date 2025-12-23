@@ -88,8 +88,8 @@ class ThresholdGenerator:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=self.gemini_api_key)
-                self.gemini_client = genai.GenerativeModel('gemini-1.5-pro')
-                logger.info("✅ Google Gemini API initialized")
+                self.gemini_client = genai.GenerativeModel('gemini-2.0-flash')
+                logger.info("✅ Google Gemini API initialized (gemini-2.0-flash)")
             except ImportError:
                 logger.warning("⚠️ google-generativeai package not installed, using rule-based only")
             except Exception as e:
@@ -160,7 +160,7 @@ class ThresholdGenerator:
                 ORDER BY priority ASC
             """)
             
-            rules = cursor.fetchall()
+            rules = cursor.fetchall() or []
             applied_rules = []
             
             # Apply rules based on patient conditions
@@ -188,7 +188,10 @@ class ThresholdGenerator:
                         logger.info(f"  ✓ Applied rule for {vital_sign}: {rule['justification']}")
             
             # Calculate confidence score based on rules applied
-            confidence = min(0.7 + (len(applied_rules) * 0.05), 0.95)
+            try:
+                confidence = min(0.7 + (len(applied_rules) * 0.05), 0.95)
+            except (TypeError, AttributeError):
+                confidence = 0.7
             
             result = {
                 'thresholds': thresholds,
@@ -271,7 +274,7 @@ class ThresholdGenerator:
                 'thresholds': refined_thresholds,
                 'metadata': {
                     'generation_method': 'hybrid',
-                    'ai_model': 'rule_based + gemini-1.5-pro',
+                    'ai_model': 'rule_based + gemini-2.0-flash',
                     'ai_confidence': 0.95,
                     'generation_timestamp': datetime.utcnow().isoformat(),
                     'applied_rules': rule_thresholds['metadata'].get('applied_rules', []),
@@ -311,7 +314,14 @@ class ThresholdGenerator:
             if 'chronic_diseases' in conditions:
                 patient_diseases = patient_data.get('chronic_diseases', [])
                 if isinstance(patient_diseases, str):
-                    patient_diseases = json.loads(patient_diseases)
+                    try:
+                        patient_diseases = json.loads(patient_diseases)
+                    except (json.JSONDecodeError, TypeError):
+                        patient_diseases = []
+                
+                # Handle None case
+                if patient_diseases is None:
+                    patient_diseases = []
                 
                 # Extract disease names
                 disease_names = []
@@ -323,8 +333,8 @@ class ThresholdGenerator:
                             disease_names.append(str(disease))
                 
                 # Check if any required disease matches
-                required_diseases = conditions['chronic_diseases']
-                if not any(req in disease_names for req in required_diseases):
+                required_diseases = conditions.get('chronic_diseases', [])
+                if required_diseases and not any(req in disease_names for req in required_diseases):
                     return False
             
             # Check lifestyle factors
@@ -470,12 +480,15 @@ Respond in JSON format with suggested adjustments (use 0 if no change needed):
     
     def _extract_input_factors(self, patient_data: Dict[str, Any]) -> Dict[str, Any]:
         """Extract key factors used for threshold generation"""
+        chronic_diseases = patient_data.get('chronic_diseases') or []
+        medications = patient_data.get('medications') or []
+        
         return {
             'age': patient_data.get('age'),
             'gender': patient_data.get('gender'),
             'bmi': self._calculate_bmi(patient_data),
-            'chronic_disease_count': len(patient_data.get('chronic_diseases', [])),
-            'medication_count': len(patient_data.get('medications', [])),
+            'chronic_disease_count': len(chronic_diseases) if isinstance(chronic_diseases, list) else 0,
+            'medication_count': len(medications) if isinstance(medications, list) else 0,
             'smoking_status': patient_data.get('smoking_status'),
             'exercise_frequency': patient_data.get('exercise_frequency')
         }

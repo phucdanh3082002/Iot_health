@@ -107,8 +107,8 @@ class HealthMonitorApp(MDApp):
         Setup GPIO interrupt for physical emergency button
         
         Hardware:
-        - GPIO 25 (BCM) - Input with pull-up resistor
-        - Button connects GPIO 25 to GND when pressed
+        - BCM GPIO pin from config (app.emergency_button_gpio)
+        - Button connects GPIO pin to GND when pressed
         - Debounce: 300ms
         """
         if not GPIO_AVAILABLE:
@@ -119,7 +119,7 @@ class HealthMonitorApp(MDApp):
             # Set GPIO mode
             GPIO.setmode(GPIO.BCM)
             
-            # Setup GPIO 25 as input with pull-up
+            # Setup GPIO input with pull-up
             GPIO.setup(self.EMERGENCY_BUTTON_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             
             # Add interrupt on falling edge (button press = LOW)
@@ -142,7 +142,7 @@ class HealthMonitorApp(MDApp):
         GPIO interrupt callback - physical emergency button pressed
         
         Args:
-            channel: GPIO channel number (should be 25)
+            channel: GPIO channel number (configured in app.emergency_button_gpio)
         """
         self.logger.critical(f"🚨 PHYSICAL EMERGENCY BUTTON PRESSED (GPIO {channel})")
         
@@ -183,7 +183,7 @@ class HealthMonitorApp(MDApp):
                     'patient_id': self.patient_id,
                     'alert_type': 'emergency_button_physical',
                     'severity': 'critical',
-                    'message': 'Physical emergency button pressed (GPIO 25)',
+                    'message': f'Physical emergency button pressed (GPIO {self.EMERGENCY_BUTTON_GPIO})',
                     'vital_sign': None,
                     'current_value': None,
                     'threshold_value': None,
@@ -295,7 +295,14 @@ class HealthMonitorApp(MDApp):
         
         # GPIO Emergency Button (Physical)
         self.gpio_emergency_enabled = False
-        self.EMERGENCY_BUTTON_GPIO = 25  # GPIO 25
+        gpio_cfg = self.config_data.get('app', {}).get('emergency_button_gpio', 25)
+        try:
+            self.EMERGENCY_BUTTON_GPIO = int(gpio_cfg)
+        except (TypeError, ValueError):
+            self.logger.warning(
+                "Invalid app.emergency_button_gpio=%r, defaulting to 25", gpio_cfg
+            )
+            self.EMERGENCY_BUTTON_GPIO = 25
         self._setup_gpio_emergency_button()
 
         # Pre-register callbacks for sensors
