@@ -263,11 +263,13 @@ sensors:
     i2c_address: 90
     i2c_bus: 1
     max_error_count: 5
-    sample_rate: 0.5
+    sample_rate: 2.0  # Increased from 0.5 to 2 Hz for better sampling
     sensor_type: MLX90614
-    smooth_factor: 0.1
-    temperature_offset: 0.0
+    smooth_factor: 0.2  # Increased from 0.1 for better noise filtering
+    temperature_offset: 2.5  # Typical forehead offset (will calibrate later)
     use_object_temp: true
+    # Note: Forehead temperature is typically 1.5-3°C lower than core body temp
+    # Common offset range: +2.0 to +3.0°C (adjust after proper calibration)
   hx710b:
     calibration:
       offset_counts: 1303339

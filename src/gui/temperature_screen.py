@@ -81,10 +81,11 @@ class TemperatureScreen(Screen):
         # ============================================================
         # MEASUREMENT PARAMETERS - Theo chuẩn y tế (FDA/ISO 80601-2-56)
         # ============================================================
-        # Thời gian đo tối ưu cho MLX90614: 2-3 giây sau khi ổn định
-        # Tổng thời gian: chờ phát hiện (không giới hạn) + đo ổn định (3s)
-        self.measurement_duration = 3.0  # Thời gian đo SAU KHI phát hiện cơ thể
-        self.sample_interval = 0.15  # 150ms (~6-7 samples/second)
+        # Thời gian đo tối ưu cho MLX90614: 5 giây sau khi ổn định
+        # Datasheet: Thermal time constant ~10s, settling time 20-30s
+        # Tổng thời gian: chờ phát hiện (không giới hạn) + đo ổn định (5s)
+        self.measurement_duration = 5.0  # Thời gian đo SAU KHI phát hiện cơ thể (tăng từ 3s)
+        self.sample_interval = 0.5  # 500ms = 2 samples/second (match sensor sample_rate)
         
         # Ngưỡng nhiệt độ cơ thể hợp lệ (32-42°C)
         # < 32°C: Nhiệt độ môi trường/không tiếp xúc
