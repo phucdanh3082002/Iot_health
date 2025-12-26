@@ -159,7 +159,7 @@ class AlertSystem:
                         'max_normal': threshold.max_normal,
                         'max_critical': threshold.max_critical,
                         'generation_method': threshold.generation_method,
-                        'confidence_score': threshold.confidence_score
+                        'ai_confidence': threshold.ai_confidence  # Fixed: was confidence_score
                     }
                 
                 self.logger.info(f"[THRESHOLD_LOAD] Loaded {len(patient_thresholds)} custom thresholds for patient {patient_id}")

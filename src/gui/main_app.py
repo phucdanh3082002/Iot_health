@@ -104,12 +104,19 @@ class HealthMonitorApp(MDApp):
     
     def _setup_gpio_emergency_button(self):
         """
-        Setup GPIO interrupt for physical emergency button
+        Setup GPIO interrupt for physical emergency button (Active-Low)
         
         Hardware:
         - BCM GPIO pin from config (app.emergency_button_gpio)
-        - Button connects GPIO pin to GND when pressed
+        - Button type: Active-Low (Normally Open to GND)
+        - Nhả (RELEASED): GPIO = HIGH (1) - internal pull-up keeps it HIGH
+        - Nhấn (PRESSED):  GPIO = LOW  (0) - button connects GPIO to GND
         - Debounce: 300ms
+        
+        Configuration:
+        - GPIO.PUD_UP: Enable internal pull-up resistor (kéo GPIO HIGH)
+        - GPIO.FALLING: Detect falling edge (HIGH → LOW) = button press
+        - Fallback: Polling mode if edge detection fails
         """
         if not GPIO_AVAILABLE:
             self.logger.info("⚠️ GPIO not available - physical emergency button disabled")
@@ -119,23 +126,95 @@ class HealthMonitorApp(MDApp):
             # Set GPIO mode
             GPIO.setmode(GPIO.BCM)
             
-            # Setup GPIO input with pull-up
+            # Setup GPIO input with internal pull-up
+            # This makes GPIO = HIGH when button is released
             GPIO.setup(self.EMERGENCY_BUTTON_GPIO, GPIO.IN, pull_up_down=GPIO.PUD_UP)
             
-            # Add interrupt on falling edge (button press = LOW)
-            GPIO.add_event_detect(
-                self.EMERGENCY_BUTTON_GPIO,
-                GPIO.FALLING,
-                callback=self._on_physical_emergency_pressed,
-                bouncetime=300  # 300ms debounce
-            )
-            
-            self.gpio_emergency_enabled = True
-            self.logger.info(f"✅ GPIO emergency button setup on GPIO {self.EMERGENCY_BUTTON_GPIO}")
+            # Try edge detection first (preferred method)
+            try:
+                # Add interrupt on falling edge (button press = GPIO goes LOW)
+                GPIO.add_event_detect(
+                    self.EMERGENCY_BUTTON_GPIO,
+                    GPIO.FALLING,  # Trigger on HIGH → LOW transition (button press)
+                    callback=self._on_physical_emergency_pressed,
+                    bouncetime=300  # 300ms debounce (prevent multiple triggers from noise)
+                )
+                
+                self.gpio_emergency_enabled = True
+                self.gpio_polling_mode = False
+                self.logger.info(f"✅ GPIO emergency button setup on GPIO {self.EMERGENCY_BUTTON_GPIO} (edge detection)")
+                
+            except RuntimeError as e:
+                # Edge detection failed - fallback to polling mode
+                if "Failed to add edge detection" in str(e) or "Conflicting edge detection" in str(e):
+                    self.logger.warning(f"Edge detection failed: {e}")
+                    self.logger.info("🔄 Falling back to polling mode...")
+                    
+                    # Start polling thread
+                    self.gpio_emergency_enabled = True
+                    self.gpio_polling_mode = True
+                    self.gpio_last_state = GPIO.input(self.EMERGENCY_BUTTON_GPIO)
+                    self.gpio_polling_active = True
+                    
+                    # Schedule polling check every 100ms
+                    Clock.schedule_interval(self._poll_gpio_button, 0.1)
+                    
+                    self.logger.info(f"✅ GPIO emergency button setup on GPIO {self.EMERGENCY_BUTTON_GPIO} (polling mode)")
+                else:
+                    raise
             
         except Exception as e:
             self.logger.error(f"Failed to setup GPIO emergency button: {e}")
             self.gpio_emergency_enabled = False
+            self.gpio_polling_mode = False
+    
+    def _poll_gpio_button(self, dt):
+        """
+        Poll GPIO button state (fallback when edge detection fails)
+        
+        Args:
+            dt: Delta time from Clock.schedule_interval
+        
+        Returns:
+            True to keep polling, False to stop (only on critical error)
+        """
+        # Skip polling if temporarily disabled (during debounce)
+        # but DON'T stop the polling loop
+        if not self.gpio_polling_active:
+            return True  # Keep polling loop alive, just skip this iteration
+        
+        try:
+            current_state = GPIO.input(self.EMERGENCY_BUTTON_GPIO)
+            
+            # Detect falling edge (button press: HIGH → LOW)
+            if self.gpio_last_state == 1 and current_state == 0:
+                self.logger.critical(f"🚨 PHYSICAL EMERGENCY BUTTON PRESSED (GPIO {self.EMERGENCY_BUTTON_GPIO}) [polling]")
+                
+                # Trigger emergency handler on main thread
+                Clock.schedule_once(lambda dt: self._trigger_emergency_from_gpio(), 0)
+                
+                # Temporarily disable polling to prevent multiple triggers
+                # This simulates hardware debounce
+                self.gpio_polling_active = False
+                Clock.schedule_once(self._reset_gpio_polling, 0.3)  # 300ms debounce
+            
+            # Always update last state (even when polling is disabled)
+            self.gpio_last_state = current_state
+            
+        except Exception as e:
+            self.logger.error(f"Error polling GPIO: {e}")
+            return False  # Only stop polling on critical error
+        
+        return True  # Keep polling loop running
+    
+    def _reset_gpio_polling(self, dt):
+        """Re-enable polling after debounce period.
+        
+        Args:
+            dt: Delta time from Clock.schedule_once (required by Kivy)
+        """
+        self.gpio_polling_active = True
+        self.gpio_last_state = GPIO.input(self.EMERGENCY_BUTTON_GPIO)
     
     def _on_physical_emergency_pressed(self, channel):
         """
@@ -200,6 +279,11 @@ class HealthMonitorApp(MDApp):
         """
         if self.gpio_emergency_enabled and GPIO_AVAILABLE:
             try:
+                # Stop polling if active
+                if self.gpio_polling_mode:
+                    self.gpio_polling_active = False
+                    self.logger.info("🛑 GPIO polling stopped")
+                
                 GPIO.cleanup(self.EMERGENCY_BUTTON_GPIO)
                 self.logger.info(f"✅ GPIO {self.EMERGENCY_BUTTON_GPIO} cleaned up")
             except Exception as e:
@@ -295,6 +379,9 @@ class HealthMonitorApp(MDApp):
         
         # GPIO Emergency Button (Physical)
         self.gpio_emergency_enabled = False
+        self.gpio_polling_mode = False  # True if using polling instead of edge detection
+        self.gpio_polling_active = False  # Polling state (paused during debounce)
+        self.gpio_last_state = 1  # Track last GPIO state for polling
         gpio_cfg = self.config_data.get('app', {}).get('emergency_button_gpio', 25)
         try:
             self.EMERGENCY_BUTTON_GPIO = int(gpio_cfg)

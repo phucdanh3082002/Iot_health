@@ -443,8 +443,12 @@ class DashboardScreen(Screen):
         # Log emergency event to database
         try:
             import time
+            from datetime import datetime
+            
             emergency_data = {
-                'timestamp': time.time(),
+                'timestamp': datetime.fromtimestamp(time.time()),  # Convert to datetime for SQLite
+                'device_id': getattr(self.app_instance, 'device_id', 'unknown'),
+                'patient_id': getattr(self.app_instance, 'patient_id', None),
                 'alert_type': 'emergency_button',
                 'severity': 'critical',
                 'message': 'Emergency button pressed from dashboard',
@@ -452,7 +456,9 @@ class DashboardScreen(Screen):
                 'current_value': None,
                 'threshold_value': None,
             }
-            self.app_instance.save_alert_to_database(emergency_data)
+            # Use database.save_alert() method
+            if hasattr(self.app_instance, 'database'):
+                self.app_instance.database.save_alert(emergency_data)
         except Exception as e:
             self.logger.error(f"Failed to log emergency to database: {e}")
 

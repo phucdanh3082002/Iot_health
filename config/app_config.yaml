@@ -11,7 +11,19 @@ ai:
     window_size: 24
 app:
   debug: true
-  emergency_button_gpio: 25
+  # ============================================================
+  # Emergency Button Configuration (Active-Low)
+  # ============================================================
+  # Hardware: Button connects GPIO pin to GND when pressed
+  # - Nhả (RELEASED): GPIO = HIGH (1) - pulled up by internal pull-up
+  # - Nhấn (PRESSED):  GPIO = LOW  (0) - connected to GND
+  # 
+  # GPIO Setup in main_app.py:
+  # - GPIO.PUD_UP: Enable internal pull-up (kéo HIGH)
+  # - GPIO.FALLING: Detect on falling edge (HIGH → LOW transition)
+  # - bouncetime: 300ms debounce (anti-chatter)
+  # ============================================================
+  emergency_button_gpio: 23  # BCM GPIO 23 (Pin 16 on Raspberry Pi)
   log_level: INFO
   name: IoT Health Monitor
   version: 1.0.0

@@ -10,14 +10,8 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 - **UI**: Kivy/KivyMD (Pi) + Android App + Web Dashboard
 - **TTS**: PiperTTS
 - **OS**: Raspberry Pi OS Bookworm 64-bit
-- **Communication**: **MQTT (primary)** for real-time + REST API (historical data)
+- **Communication**: **MQTT (primary)** for real-time + **REST API** (historical data)
 
----
-
-Recent changes:
-- Device-centric patient resolution: `patient_id` is no longer hardcoded. Devices publish using `device_id`; the cloud resolves `patient_id` via the devices/patients mapping and the local record may store `patient_id=NULL` until resolved by cloud sync.
-- Cloud sync improvement: `sync_incremental()` now retries pending alerts and health records before delta-sync, preventing stuck pending items.
-- Config guidance: Do not hardcode `patient_id` in `app_config.yaml`. Use environment variables for credentials; rely on cloud mapping for patient assignment.
 
 ## 📡 **MQTT COMMUNICATION ARCHITECTURE** (✅ CHỐT)
 
@@ -488,18 +482,10 @@ cloud:
 * Nghe TTS rõ khi bơm chạy (nguồn sạch, không clip).
 ---
 
-## ✨ Definition of Done
-
-* Không sinh file rác; repo sạch.
-* UI mượt (ví dụ: không lag >100ms trong đo BP; phản hồi touch <50ms); driver HX710B bền; an toàn đo (limit/timeout/xả khẩn).
-* MQTT/REST/SQLite đúng schema hiện có; log đầy đủ cho debug (mức INFO/ERROR với timestamp, context); không lộ secrets.
-* Tuân thủ BaseSensor pattern và callback architecture.
-* Tích hợp với existing testing framework.
-
 ## 📅 Review định kỳ
 Cập nhật file README.md khi dự án thay đổi (e.g., thêm sensor mới, thay đổi phần cứng, hoặc yêu cầu mới từ user)
 
----
+--
 
 ## 📱 **ANDROID APP - MQTT IMPLEMENTATION**
 
@@ -620,7 +606,6 @@ const mqttOptions = {
 };
 ```
 
----
 
 ## 🔐 **SECURITY BEST PRACTICES**
 

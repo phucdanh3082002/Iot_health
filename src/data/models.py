@@ -393,6 +393,7 @@ class PatientThreshold(Base):
     ai_confidence = Column(Float, index=True)  # 0-1 confidence score
     ai_model = Column(String(50))  # gemini-1.5-pro, rule_based, etc.
     generation_timestamp = Column(DateTime)
+    applied_rules = Column(JSON)  # Rules applied during generation (JSON array)
     threshold_metadata = Column('metadata', JSON)  # {input_factors: [...], justification: "..."} - use different name to avoid SQLAlchemy reserved word
     
     # Status & Timestamps

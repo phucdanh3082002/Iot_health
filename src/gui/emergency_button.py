@@ -240,20 +240,35 @@ class EmergencyButton(FloatLayout):
                 return
             
             import time
-            from src.data.database import get_device_id
+            from src.communication.mqtt_payloads import AlertPayload
             
-            # Build emergency alert payload
-            alert_payload = {
-                "timestamp": time.time(),
-                "device_id": get_device_id(),
-                "patient_id": getattr(self.app_instance, 'patient_id', None),
-                "alert_type": "emergency_button",
-                "severity": "critical",
-                "message": "Emergency button pressed - immediate assistance required",
-                "vital_sign": None,
-                "current_value": None,
-                "threshold_value": None,
-            }
+            # Build emergency alert payload using AlertPayload dataclass
+            alert_payload = AlertPayload(
+                timestamp=time.time(),
+                device_id=getattr(self.app_instance, 'device_id', 'unknown'),
+                patient_id=getattr(self.app_instance, 'patient_id', None),
+                alert_type="emergency_button",
+                severity="critical",
+                priority=1,  # Highest priority
+                current_measurement={
+                    "source": "emergency_button",
+                    "trigger": "manual"
+                },
+                thresholds={},
+                trend={},
+                actions={
+                    "notification_sent": True,
+                    "alert_type": "emergency"
+                },
+                recommendations=[
+                    "Contact emergency services immediately",
+                    "Check patient status",
+                    "Notify family members"
+                ],
+                metadata={
+                    "message": "Emergency button pressed - immediate assistance required"
+                }
+            )
             
             # Publish emergency alert (QoS 2 - exactly once)
             mqtt_client.publish_alert(alert_payload)
