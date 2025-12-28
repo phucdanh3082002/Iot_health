@@ -87,15 +87,20 @@ class TemperatureScreen(Screen):
         self.measurement_duration = 5.0  # Thời gian đo SAU KHI phát hiện cơ thể (tăng từ 3s)
         self.sample_interval = 0.5  # 500ms = 2 samples/second (match sensor sample_rate)
         
-        # Ngưỡng nhiệt độ cơ thể hợp lệ (32-42°C)
-        # < 32°C: Nhiệt độ môi trường/không tiếp xúc
+        # Ngưỡng nhiệt độ cơ thể hợp lệ (35-42°C)
+        # < 35°C: Nhiệt độ môi trường/sensor chưa warm up
         # > 42°C: Không hợp lý cho người sống
-        self.body_temp_min = 32.0  # °C - Ngưỡng dưới để phát hiện cơ thể
+        # Note: Với offset +2.5°C, raw temp phải > 32.5°C → displayed > 35°C
+        self.body_temp_min = 36.0  # °C - Ngưỡng dưới để phát hiện cơ thể (tăng từ 32°C)
         self.body_temp_max = 42.0  # °C - Ngưỡng trên hợp lệ
         
-        # Outlier rejection: cho phép dao động ±1.5°C trong quá trình đo
-        # (Nhiệt độ có thể dao động do góc đo, khoảng cách)
-        self.max_temp_deviation = 1.5  # °C
+        # Warm-up period: Đợi sensor ổn định sau khi phát hiện cơ thể
+        # MLX90614 thermal time constant τ ≈ 10s, cần ~5s để settling 63%
+        self.warmup_delay = 2.0  # giây - Đợi sau khi detect trước khi thu samples
+        
+        # Outlier rejection: cho phép dao động ±2.5°C trong quá trình đo
+        # Tăng từ 1.5°C để cho phép sensor settling từ cold start
+        self.max_temp_deviation = 2.5  # °C
         
         self.samples = []
 
@@ -486,7 +491,7 @@ class TemperatureScreen(Screen):
             self.logger.info(f"Saved temperature measurement: {self.current_temp}°C")
             
             # TTS: Announce measurement complete
-            self._speak_scenario(ScenarioID.MEASUREMENT_COMPLETE)
+            self._speak_temp_scenario(ScenarioID.MEASUREMENT_COMPLETE)
             
             # Reset for next measurement
             self._style_save_button(enabled=False)
@@ -670,9 +675,9 @@ class TemperatureScreen(Screen):
                     # Phát hiện nhiệt độ cơ thể!
                     self.body_detected_ts = now
                     self.samples.clear()  # Reset samples
-                    self.temp_state_label.text = "Đang đo..."
-                    self.temp_state_label.text_color = COLOR_HEALTHY
-                    self.logger.info(f"Body temperature detected: {object_temp:.2f}°C - starting measurement")
+                    self.temp_state_label.text = "Đang ổn định cảm biến..."
+                    self.temp_state_label.text_color = COLOR_CAUTION
+                    self.logger.info(f"[Body temperature detected] {object_temp:.2f}°C - starting measurement")
                 else:
                     # Chưa phát hiện - hiển thị hướng dẫn
                     if object_temp is not None:
@@ -685,13 +690,32 @@ class TemperatureScreen(Screen):
                     return True  # Tiếp tục chờ
 
             # ============================================================
-            # PHASE 2: Thu thập samples
+            # PHASE 2: Warm-up period + Thu thập samples
             # ============================================================
             elapsed = max(0.0, now - self.body_detected_ts)
-            progress_ratio = min(elapsed / self.measurement_duration, 1.0)
+            
+            # Sub-phase 2A: Warm-up delay (cho phép sensor ổn định)
+            if elapsed < self.warmup_delay:
+                warmup_remaining = self.warmup_delay - elapsed
+                self.status_label.text = f"Đang ổn định... {warmup_remaining:.1f}s"
+                self.progress_bar.value = 0
+                # Hiển thị giá trị hiện tại (màu cam = đang warm up)
+                if object_temp is not None:
+                    self.temp_value_label.text = f"{object_temp:.1f} °C"
+                    self.temp_value_label.text_color = COLOR_CAUTION
+                return True  # Tiếp tục warm-up
+            
+            # Sub-phase 2B: Thu thập samples (sau warm-up)
+            measurement_elapsed = elapsed - self.warmup_delay
+            progress_ratio = min(measurement_elapsed / self.measurement_duration, 1.0)
             self.progress_bar.value = progress_ratio * 100
-            remaining = max(0.0, self.measurement_duration - elapsed)
+            remaining = max(0.0, self.measurement_duration - measurement_elapsed)
             self.status_label.text = f"Giữ yên... {remaining:.1f}s"
+            
+            # Update UI state khi bắt đầu thu samples
+            if len(self.samples) == 0:
+                self.temp_state_label.text = "Đang đo..."
+                self.temp_state_label.text_color = COLOR_HEALTHY
 
             # Validate và collect samples
             if self._is_body_temperature(object_temp):
@@ -720,9 +744,9 @@ class TemperatureScreen(Screen):
                 self.logger.warning(f"Lost body contact: {object_temp}°C")
 
             # ============================================================
-            # Finalise sau khi đủ thời gian
+            # Finalise sau khi đủ thời gian (measurement_duration KHÔNG bao gồm warmup)
             # ============================================================
-            if elapsed >= self.measurement_duration:
+            if measurement_elapsed >= self.measurement_duration:
                 average_temp, average_ambient = self._compute_average()
 
                 if average_temp is None:
