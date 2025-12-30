@@ -403,6 +403,7 @@ def create_patient():
         ))
 
         # Generate thresholds
+        ai_result = None  # Initialize variable to avoid reference error
         if generate_ai_thresholds and threshold_generator:
             # Use AI to generate personalized thresholds
             logger.info(f"🤖 Generating AI thresholds for new patient {patient_id}")
@@ -417,10 +418,10 @@ def create_patient():
                 'exercise_frequency': exercise_frequency
             }
 
-            result = threshold_generator.generate_thresholds(patient_data, method=threshold_method)
-            metadata_json = json.dumps(result['metadata'], ensure_ascii=False)
+            ai_result = threshold_generator.generate_thresholds(patient_data)
+            metadata_json = json.dumps(ai_result['metadata'], ensure_ascii=False)
 
-            for vital_sign, thresholds in result['thresholds'].items():
+            for vital_sign, thresholds in ai_result['thresholds'].items():
                 cursor.execute("""
                     INSERT INTO patient_thresholds (
                         patient_id, vital_sign,
@@ -435,9 +436,9 @@ def create_patient():
                     thresholds['min_normal'], thresholds['max_normal'],
                     thresholds.get('min_warning'), thresholds.get('max_warning'),
                     thresholds['min_critical'], thresholds['max_critical'],
-                    result['metadata']['generation_method'],
-                    result['metadata']['ai_confidence'],
-                    result['metadata']['ai_model'],
+                    ai_result['metadata']['generation_method'],
+                    ai_result['metadata']['ai_confidence'],
+                    ai_result['metadata']['ai_model'],
                     metadata_json
                 ))
         else:
@@ -507,6 +508,22 @@ def create_patient():
         response_data['alcohol_consumption'] = patient['alcohol_consumption']
         response_data['exercise_frequency'] = patient['exercise_frequency']
 
+        # Add threshold generation info for Android app
+        if generate_ai_thresholds:
+            # Count how many thresholds were generated
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM patient_thresholds WHERE patient_id = %s", (patient_id,))
+            thresholds_count = cursor.fetchone()[0]
+            cursor.close()
+
+            response_data['thresholds_generated'] = thresholds_count
+            response_data['generation_method'] = threshold_method
+            response_data['confidence_score'] = ai_result.get('metadata', {}).get('ai_confidence', 0.0) if ai_result else 0.0
+        else:
+            response_data['thresholds_generated'] = 5  # Default thresholds count
+            response_data['generation_method'] = 'manual'
+            response_data['confidence_score'] = None
+
         return jsonify({
             'status': 'success',
             'message': 'Patient created successfully',
@@ -571,7 +588,7 @@ def update_patient(patient_id):
         emergency_contact = data.get('emergencyContact')  # Android uses camelCase
         medical_history = data.get('medicalHistory')  # Android uses camelCase
         medical_conditions = data.get('medical_conditions')
-        
+
 
         if not user_id:
             return jsonify({
@@ -598,6 +615,7 @@ def update_patient(patient_id):
             }), 404
 
         # Verify user có quyền (owner hoặc caregiver)
+        # If patient has device_id, check ownership. If not, allow update (patient not yet linked)
         if patient['device_id']:
             cursor.execute("""
                 SELECT role FROM device_ownership
@@ -614,6 +632,10 @@ def update_patient(patient_id):
                     'status': 'error',
                     'message': 'User does not have permission to update this patient'
                 }), 403
+        else:
+            # Patient not linked to device yet - allow update for any user
+            # (In production, you should check if user_id matches patient creator)
+            pass
 
         # Update patient info
         update_fields = []
@@ -919,6 +941,7 @@ def delete_patient(patient_id):
             }), 404
 
         # Verify user có quyền (owner hoặc caregiver)
+        # If patient has device_id, check ownership. If not, allow delete (patient not yet linked)
         if patient['device_id']:
             cursor.execute("""
                 SELECT role FROM device_ownership
@@ -935,6 +958,10 @@ def delete_patient(patient_id):
                     'status': 'error',
                     'message': 'User does not have permission to delete this patient'
                 }), 403
+        else:
+            # Patient not linked to device yet - allow delete for any user
+            # (In production, you should check if user_id matches patient creator)
+            pass
 
         # Delete patient (CASCADE sẽ xóa health_records, alerts, thresholds)
         cursor.execute("""
@@ -1019,13 +1046,31 @@ def get_patient_ai_thresholds(patient_id):
 
         for row in rows:
             vital_sign = row['vital_sign']
+
+            # Debug: Log raw values from database
+            logger.info(f"Processing threshold: {vital_sign}")
+            logger.info(f"  Raw min_normal: {row['min_normal']} (type: {type(row['min_normal'])})")
+            logger.info(f"  Raw max_normal: {row['max_normal']} (type: {type(row['max_normal'])})")
+
+            # Ensure proper conversion from Decimal to float
+            # Use 0.0 only if value is actually None/NULL
+            min_normal_val = float(row['min_normal']) if row['min_normal'] is not None else 0.0
+            max_normal_val = float(row['max_normal']) if row['max_normal'] is not None else 0.0
+            min_warning_val = float(row['min_warning']) if row['min_warning'] is not None else 0.0
+            max_warning_val = float(row['max_warning']) if row['max_warning'] is not None else 0.0
+            min_critical_val = float(row['min_critical']) if row['min_critical'] is not None else 0.0
+            max_critical_val = float(row['max_critical']) if row['max_critical'] is not None else 0.0
+
+            logger.info(f"  Converted min_normal: {min_normal_val}")
+            logger.info(f"  Converted max_normal: {max_normal_val}")
+
             thresholds[vital_sign] = {
-                'minNormal': float(row['min_normal']) if row['min_normal'] else 0.0,
-                'maxNormal': float(row['max_normal']) if row['max_normal'] else 0.0,
-                'minWarning': float(row['min_warning']) if row['min_warning'] else 0.0,
-                'maxWarning': float(row['max_warning']) if row['max_warning'] else 0.0,
-                'minCritical': float(row['min_critical']) if row['min_critical'] else 0.0,
-                'maxCritical': float(row['max_critical']) if row['max_critical'] else 0.0
+                'minNormal': min_normal_val,
+                'maxNormal': max_normal_val,
+                'minWarning': min_warning_val,
+                'maxWarning': max_warning_val,
+                'minCritical': min_critical_val,
+                'maxCritical': max_critical_val
             }
 
             # Use metadata from first row (all thresholds share same generation metadata)
@@ -1053,7 +1098,7 @@ def get_patient_ai_thresholds(patient_id):
         return jsonify({
             'status': 'success',
             'data': {
-                'patientId': patient_id,
+                'patient_id': patient_id,  # Use snake_case to match Android @SerializedName
                 'thresholds': thresholds,
                 'metadata': metadata
             }
@@ -1616,11 +1661,15 @@ def get_alerts():
         if sort_order not in ['ASC', 'DESC']:
             sort_order = 'DESC'
 
-        # Set default date range (30 days)
+        # Set default date range (30 days) using UTC+7 Vietnam timezone
+        from datetime import timezone, timedelta as td
+        vietnam_tz = timezone(td(hours=7))
+        now_vietnam = datetime.now(vietnam_tz)
+
         if not start_date:
-            start_date = (datetime.utcnow() - timedelta(days=30)).isoformat()
+            start_date = (now_vietnam - timedelta(days=30)).isoformat()
         if not end_date:
-            end_date = datetime.utcnow().isoformat()
+            end_date = now_vietnam.isoformat()
 
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -1956,8 +2005,12 @@ def get_alerts_statistics():
                 'message': 'Missing required parameter: user_id'
             }), 400
 
-        start_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
-        end_date = datetime.utcnow().isoformat()
+        # Use UTC+7 Vietnam timezone
+        from datetime import timezone, timedelta as td
+        vietnam_tz = timezone(td(hours=7))
+        now_vietnam = datetime.now(vietnam_tz)
+        start_date = (now_vietnam - timedelta(days=days)).isoformat()
+        end_date = now_vietnam.isoformat()
 
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -2303,8 +2356,8 @@ def generate_ai_thresholds():
                     patient[field] = []
 
         # Generate thresholds
-        logger.info(f"🔧 Generating thresholds for {patient_id} using {method}")
-        result = threshold_generator.generate_thresholds(patient, method=method)
+        logger.info(f"🔧 Generating thresholds for {patient_id} using hybrid method")
+        result = threshold_generator.generate_thresholds(patient)
 
         # Save thresholds to database
         metadata_json = json.dumps(result['metadata'], ensure_ascii=False)

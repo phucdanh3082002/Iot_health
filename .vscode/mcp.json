@@ -13,6 +13,12 @@
 				"MYSQL_PASSWORD": "Danhsidoi123",
 				"MYSQL_DATABASE": "iot_health_cloud"
 			}
+		},
+		"context7": {
+			"type": "stdio",
+			"command": "npx",
+			"args": ["-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-94060463-943a-4fbd-bdb4-d73c2f9eb093"]
 		}
-	}
+	},
+	"inputs": []
 }

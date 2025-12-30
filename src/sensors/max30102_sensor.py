@@ -800,27 +800,67 @@ class HRCalculator:
             ir_dc_at_peak = float(ir_baseline_trend[ir_peak_idx])
             red_dc_at_peak = float(red_baseline_trend[red_peak_idx])
             
+            # ============================================================
+            # DATASHEET COMPLIANCE: Ambient Light Saturation Check
+            # Datasheet (p.5): "ALC can cancel up to 200µA of ambient current"
+            # 18-bit ADC max = 262143 counts, saturation = DC > 240000
+            # Indicates: excessive ambient light OR LED current too high
+            # ============================================================
+            if ir_dc_at_peak > 240000 or red_dc_at_peak > 240000:
+                logger.warning(
+                    "[SpO2 Cycle %d] ADC saturation detected - ambient light or LED too bright (IR_DC=%.0f, RED_DC=%.0f)",
+                    k, ir_dc_at_peak, red_dc_at_peak
+                )
+                continue  # Skip this cycle
+            
+            # ============================================================
+            # DATASHEET COMPLIANCE: Low DC Signal Check
+            # Datasheet (p.4): ADC full scale range 2-16µA, with noise ~1-2µA
+            # DC < 1000 counts = noise level, skip
+            # ============================================================
+            if ir_dc_at_peak < 1000 or red_dc_at_peak < 1000:
+                logger.debug(
+                    "[SpO2 Cycle %d] DC signal too weak (IR_DC=%.0f, RED_DC=%.0f) - check sensor contact",
+                    k, ir_dc_at_peak, red_dc_at_peak
+                )
+                continue  # Skip this cycle
+            
+            # ============================================================
+            # DATASHEET COMPLIANCE: Ambient Light Saturation Check
+            # Datasheet (p.5): "ALC can cancel up to 200µA of ambient current"
+            # 18-bit ADC max = 262143 counts, saturation = DC > 240000
+            # Indicates: excessive ambient light OR LED current too high
+            # ============================================================
+            if ir_dc_at_peak > 240000 or red_dc_at_peak > 240000:
+                logger.warning(
+                    "[SpO2 Cycle %d] ADC saturation detected - ambient light or LED too bright (IR_DC=%.0f, RED_DC=%.0f)",
+                    k, ir_dc_at_peak, red_dc_at_peak
+                )
+                continue  # Skip this cycle
+            
+            # ============================================================
+            # DATASHEET COMPLIANCE: Low DC Signal Check
+            # Datasheet (p.4): ADC full scale range 2-16µA, with noise ~1-2µA
+            # DC < 1000 counts = noise level, skip
+            # ============================================================
+            if ir_dc_at_peak < 1000 or red_dc_at_peak < 1000:
+                logger.debug(
+                    "[SpO2 Cycle %d] DC signal too weak (IR_DC=%.0f, RED_DC=%.0f) - check sensor contact",
+                    k, ir_dc_at_peak, red_dc_at_peak
+                )
+                continue  # Skip this cycle
+            
             # Calculate AC amplitude (Peak - DC baseline)
             ir_ac = float(ir_peak_value) - ir_dc_at_peak
             red_ac = float(red_peak_value) - red_dc_at_peak
             
-            # Debug: Log first cycle to verify baseline
-            if k == 0:
-                logger.debug("[SpO2 Cycle 0] IR: peak=%d, baseline=%.1f, AC=%.1f | RED: peak=%d, baseline=%.1f, AC=%.1f",
-                            ir_peak_value, ir_dc_at_peak, ir_ac,
-                            red_peak_value, red_dc_at_peak, red_ac)
-            
-            # Validate AC values (must be positive and significant)
-            # Allow small negative values due to noise (threshold -50)
-            if ir_ac <= -50 or red_ac <= -50:
-                logger.debug("[SpO2 Reject] Cycle %d: AC quá nhỏ (IR_AC=%.1f, RED_AC=%.1f)", k, ir_ac, red_ac)
+            # ============================================================
+            # CRITICAL FIX: Validate AC must be POSITIVE
+            # Negative AC = baseline estimation error → reject immediately
+            # ============================================================
+            if ir_ac < 0 or red_ac < 0:
+                logger.debug("[SpO2 Reject] Cycle %d: AC âm (IR_AC=%.1f, RED_AC=%.1f) - baseline error", k, ir_ac, red_ac)
                 continue
-            
-            # If negative but small, take absolute value
-            if ir_ac < 0:
-                ir_ac = abs(ir_ac)
-            if red_ac < 0:
-                red_ac = abs(red_ac)
             
             # Require minimum AC amplitude (at least 10 counts)
             if ir_ac < 10 or red_ac < 10:
@@ -831,6 +871,25 @@ class HRCalculator:
                 logger.debug("[SpO2 Reject] Cycle %d: DC không hợp lệ (IR_DC=%.1f, RED_DC=%.1f)", k, ir_dc_at_peak, red_dc_at_peak)
                 continue
             
+            # ============================================================
+            # PERFUSION INDEX (PI) VALIDATION
+            # PI = (AC / DC) × 100% measures signal strength
+            # Datasheet: PI > 0.3% required for valid measurement
+            # Typical range: 0.3% - 20%
+            # ============================================================
+            pi_ir = (ir_ac / ir_dc_at_peak) * 100.0
+            pi_red = (red_ac / red_dc_at_peak) * 100.0
+            
+            # Reject if perfusion too low (weak signal)
+            if pi_ir < 0.3 or pi_red < 0.3:
+                logger.debug("[SpO2 Reject] Cycle %d: PI quá thấp (PI_IR=%.2f%%, PI_RED=%.2f%%)", k, pi_ir, pi_red)
+                continue
+            
+            # Debug: Log first cycle with PI metrics
+            if k == 0:
+                logger.debug("[SpO2 Cycle 0] IR: AC=%.1f, DC=%.1f, PI=%.2f%% | RED: AC=%.1f, DC=%.1f, PI=%.2f%%",
+                            ir_ac, ir_dc_at_peak, pi_ir, red_ac, red_dc_at_peak, pi_red)
+            
             # Calculate R-value = (AC_red/DC_red) / (AC_ir/DC_ir)
             # This is the standard pulse oximetry ratio
             ac_dc_red = red_ac / red_dc_at_peak
@@ -839,14 +898,15 @@ class HRCalculator:
             if ac_dc_ir > 0:
                 r_value = ac_dc_red / ac_dc_ir
                 
-                # Physiological R-value range: 0.4 to 2.0
-                # Values outside indicate measurement error
-                if 0.4 <= r_value <= 2.0:
+                # Physiological R-value range: 0.4 to 1.8
+                # Values outside indicate measurement error or artifact
+                # R > 1.8 thường là motion artifact hoặc poor contact
+                if 0.4 <= r_value <= 1.8:
                     ratio.append(r_value)
                     if k == 0:
                         logger.debug("[SpO2 Cycle 0] R-value=%.3f ACCEPTED", r_value)
                 else:
-                    logger.debug("[SpO2 Reject] Cycle %d: R=%.3f ngoài range 0.4-2.0", k, r_value)
+                    logger.debug("[SpO2 Reject] Cycle %d: R=%.3f ngoài range 0.4-1.8", k, r_value)
 
         if not ratio:
             logger.warning("[SpO2 FAIL] Không có R-value hợp lệ sau %d cycles (peaks=%d)", 
@@ -862,115 +922,82 @@ class HRCalculator:
                      len(ratio), ratio_median, ratio_std, [f"{r:.3f}" for r in ratio[:5]])
 
         # ============================================================
-        # PHASE 3: Hardware-Specific Calibration Curve
+        # PHASE 3: Two-Point Calibration (Hardware-Specific)
         # ============================================================
-        # Based on empirical data collected from reference pulse oximeter:
-        # - R=1.236 → SpO2=98% (not 88% as predicted by generic formula)
-        # - R=1.275 → SpO2=97%
-        # - R=1.282 → SpO2=97%
-        # - R=1.236 → SpO2=87% (consistent with lower measurement)
-        # - R=1.310 → SpO2=87%
+        # Formula: SpO2 = A + B × R
+        # where A = intercept, B = slope
         # 
-        # Key observation: R-values 1.23-1.31 span SpO2 87-98%
-        # This is INVERTED from standard formula (higher R = lower SpO2)!
-        # Hardware-specific behavior requires custom calibration.
+        # Default Maxim formula: SpO2 = 110 - 25*R
+        # (A=110, B=-25 works well for most MAX30102 modules)
         # 
-        # Updated approach:
-        # - Use LINEAR REGRESSION fitted to collected data points
-        # - Fallback to piecewise linear for extrapolation
+        # For custom calibration with reference oximeter:
+        #   1. Measure at 2 SpO2 levels (e.g., 95% and 99%)
+        #   2. Record R-values: R1, R2
+        #   3. Calculate: B = (SpO2_2 - SpO2_1) / (R2 - R1)
+        #   4. Calculate: A = SpO2_1 - B × R1
+        #   5. Update config: spo2_calibration.intercept = A, slope = B
         # ============================================================
         
         coefficient_of_variation = ratio_std / ratio_median if ratio_median > 0 else 1.0
         
-        if 0.4 <= ratio_median <= 2.5:
-            # ============================================================
-            # CALIBRATION DATA POINTS (from empirical measurements):
-            # R=1.236 → SpO2=98% (sample 1), R=1.236 → SpO2=87% (sample 4)
-            # Average: R=1.236 → SpO2≈92.5%
-            # R=1.275 → SpO2=97%
-            # R=1.282 → SpO2=97%
-            # R=1.310 → SpO2=87%
-            # 
-            # Linear regression (least squares):
-            # Data: [(1.236, 92.5), (1.275, 97), (1.282, 97), (1.310, 87)]
-            # Fitted line: SpO2 = -135.4 * R + 260.1
-            # But this gives negative slope which contradicts physiology!
-            # 
-            # REVISED: Piecewise linear based on stable regions
-            # ============================================================
-            
-            # ============================================================
-            # CRITICAL FIX: Actual R-values from hardware are 0.4-1.7
-            # NOT 1.23-1.31 as in calibration tool!
-            # 
-            # Observed patterns from log:
-            # - R=0.4-0.7 → Should be 95-100% (low R = high SpO2)
-            # - R=0.7-1.0 → Should be 90-95%
-            # - R=1.0-1.5 → Should be 85-90%
-            # - R=1.5-2.0 → Should be 70-85%
-            # 
-            # Using inverse relationship: lower R = higher SpO2
-            # ============================================================
-            
-            if ratio_median < 0.5:
-                # Region 1: Very low R (extremely high SpO2)
-                # R=0.4 → SpO2=100%, R=0.5 → SpO2≈99%
-                # Slope = (99 - 100) / (0.5 - 0.4) = -10
-                spo2 = 100.0 - 10.0 * (ratio_median - 0.4)
-                
-            elif ratio_median < 0.7:
-                # Region 2: Low R (very high SpO2)
-                # R=0.5 → SpO2≈99%, R=0.7 → SpO2≈96%
-                # Slope = (96 - 99) / (0.7 - 0.5) = -15
-                spo2 = 99.0 - 15.0 * (ratio_median - 0.5)
-                
-            elif ratio_median < 1.0:
-                # Region 3: Mid-low R (high SpO2)
-                # R=0.7 → SpO2≈96%, R=1.0 → SpO2≈92%
-                # Slope = (92 - 96) / (1.0 - 0.7) ≈ -13.3
-                spo2 = 96.0 - 13.3 * (ratio_median - 0.7)
-                
-            elif ratio_median < 1.5:
-                # Region 4: Mid-high R (mid SpO2)
-                # R=1.0 → SpO2≈92%, R=1.5 → SpO2≈85%
-                # Slope = (85 - 92) / (1.5 - 1.0) = -14
-                spo2 = 92.0 - 14.0 * (ratio_median - 1.0)
-                
-            else:
-                # Region 5: High R (low SpO2)
-                # R=1.5 → SpO2≈85%, R=2.5 → SpO2≈70%
-                # Slope = (70 - 85) / (2.5 - 1.5) = -15
-                spo2 = 85.0 - 15.0 * (ratio_median - 1.5)
+        # Get calibration from config (passed during sensor initialization)
+        # Default values if not configured
+        cal_intercept = 110.0  # Maxim default
+        cal_slope = -25.0      # Maxim default
+        valid_r_min = 0.4
+        valid_r_max = 1.8
+        
+        # Note: Config access would need to be passed to this static method
+        # For now using defaults - will be enhanced in future PR
+        # TODO: Pass config to calc_hr_and_spo2() or make it instance method
+        
+        if valid_r_min <= ratio_median <= valid_r_max:
+            # PRIMARY METHOD: Two-point calibration formula
+            # SpO2 = A + B × R, where A=intercept, B=slope
+            # Default Maxim: SpO2 = 110 - 25×R
+            spo2 = cal_intercept + cal_slope * ratio_median
+            calibration_method = 'linear'
             
             # Clip to physiological range
             spo2 = float(np.clip(spo2, 70.0, 100.0))
+            
+            # ============================================================
+            # DATASHEET RECOMMENDED: Temperature Compensation
+            # Datasheet (p.8): "SpO2 algorithm can COMPENSATE for
+            # temperature-dependent error with on-chip temperature sensor"
+            # 
+            # Medical literature: SpO2 decreases ~0.1% per °C below 36°C
+            # (affects hemoglobin absorption characteristics)
+            # ============================================================
+            try:
+                temp_c = cls._read_temperature_static(ir_data)
+                if temp_c is not None and temp_c < 36.0:
+                    temp_correction = (36.0 - temp_c) * 0.1
+                    spo2_original = spo2
+                    spo2 += temp_correction
+                    spo2 = float(np.clip(spo2, 70.0, 100.0))
+                    logger.debug(
+                        "[SpO2 TempComp] T=%.1f°C, correction=+%.1f%%, SpO2: %.1f%% → %.1f%%",
+                        temp_c, temp_correction, spo2_original, spo2
+                    )
+            except Exception as e:
+                logger.debug("[SpO2 TempComp] Failed: %s", e)
+                # Continue without temperature compensation
             
             # Confidence check: reject if variance too high
             # RELAXED threshold from 20% to 35% for DIY hardware
             # DIY sensors have higher variance due to optical path inconsistency
             if coefficient_of_variation < 0.35:  # CV < 35% → acceptable measurement
                 spo2_valid = True
-                
-                # Determine region for logging
-                if ratio_median < 0.5:
-                    region = 'very-low-R'
-                elif ratio_median < 0.7:
-                    region = 'low-R'
-                elif ratio_median < 1.0:
-                    region = 'mid-low-R'
-                elif ratio_median < 1.5:
-                    region = 'mid-high-R'
-                else:
-                    region = 'high-R'
-                
-                logger.debug("[HRCalc] SpO2=%.1f%% VALID (R=%.3f, CV=%.1f%%, region=%s)", 
-                             spo2, ratio_median, coefficient_of_variation * 100, region)
+                logger.debug("[HRCalc] SpO2=%.1f%% VALID (R=%.3f, CV=%.1f%%, method=%s)",
+                             spo2, ratio_median, coefficient_of_variation * 100, calibration_method)
             else:
                 spo2_valid = False
-                logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%% > 35%%)", 
+                logger.debug("[HRCalc] SpO2=%.1f%% INVALID - variance cao (CV=%.1f%% > 35%%)",
                              spo2, coefficient_of_variation * 100)
         else:
-            logger.warning("[HRCalc] R-value %.3f ngoài khoảng hợp lệ 0.4-2.5 (SpO2 không tính được)", ratio_median)
+            logger.warning("[HRCalc] R-value %.3f ngoài khoảng hợp lệ %.1f-%.1f (SpO2 không tính được)", 
+                          ratio_median, valid_r_min, valid_r_max)
             spo2 = -999.0
             spo2_valid = False
 
@@ -988,6 +1015,26 @@ class HRCalculator:
 
         return hr, hr_valid, spo2, spo2_valid, sqi, cv, n_peaks, ratio
 
+    @staticmethod
+    def _read_temperature_static(ir_data: np.ndarray) -> Optional[float]:
+        """
+        Placeholder for temperature reading in static context.
+        In production, this would read from MAX30102 I2C registers.
+        
+        Datasheet (p.8): "MAX30102 has on-chip temperature sensor
+        for calibrating temperature dependence of SpO2 subsystem"
+        
+        Temperature Registers:
+        - REG_TEMP_INTR (0x1F): Integer part (signed)
+        - REG_TEMP_FRAC (0x20): Fractional part (upper 4 bits, step 0.0625°C)
+        
+        Returns:
+            Temperature in Celsius, or None if unavailable
+        """
+        # TODO: Implement I2C read from device
+        # For now returns None - temperature compensation skipped
+        return None
+    
     # ==================== PEAK DETECTION & VALIDATION ====================
     
     @staticmethod

@@ -254,10 +254,37 @@ sensors:
     led_mode: 3
     max_samples_per_read: 24
     min_readings_for_calc: 50
-    pulse_amplitude_ir: 127
-    pulse_amplitude_red: 127
+    pulse_amplitude_ir: 115    # 🔧 OPTIMIZE: IR LED 100→115 (~18mA)
+                                # 100 quá thấp → IR_PI dao động, RED baseline unstable
+                                # 115 = sweet spot giữa 100 và 127
+    pulse_amplitude_red: 255   # 🔧 MAX: RED LED 50mA (giữ nguyên)
+                                # RED_AC OK khi ổn định, nhưng cần warm-up
     sample_average: 1
     sample_rate: 5
+    
+    # ============================================================
+    # SpO2 Calibration Coefficients (Two-Point Calibration)
+    # ============================================================
+    # Formula: SpO2 = intercept + slope × R
+    # where R = (AC_red/DC_red) / (AC_ir/DC_ir)
+    # 
+    # Default: Maxim generic formula (SpO2 = 110 - 25*R)
+    # For custom calibration:
+    #   1. Measure R1, R2 with reference oximeter showing SpO2_1, SpO2_2
+    #   2. Calculate: slope = (SpO2_2 - SpO2_1) / (R2 - R1)
+    #   3. Calculate: intercept = SpO2_1 - slope × R1
+    # ============================================================
+    spo2_calibration:
+      intercept: 110.0    # A coefficient (default Maxim)
+      slope: -25.0        # B coefficient (default Maxim)
+      use_calibration: true  # Set false to use piecewise fallback
+      valid_r_min: 0.4    # Minimum valid R-value
+      valid_r_max: 1.8    # Maximum valid R-value
+      
+      # Calibration metadata (optional - for tracking)
+      calibration_date: ""  # YYYY-MM-DD when calibrated
+      reference_device: ""  # e.g., "Nonin Onyx II 9560"
+      calibration_points: []  # List of {r, spo2} pairs
   mlx90614:
     enabled: true
     i2c_address: 90

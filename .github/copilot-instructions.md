@@ -58,8 +58,17 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
   - `src/utils/export_tts_assets.py`
 - **Device-centric**:
   - `docs/DEVICE_CENTRIC_APPROACH.md`
-
+- **Database cloud structure**:
+  - `docs/scripts/Database_mysql.sql`
+- **Server Instance**:
+  IP: 47.130.193.237
+  key : /home/pi/Desktop/IoT_health/key-server/iot-health-api-key.pem
 ## MQTT Communication (không đổi nếu chưa được yêu cầu)
+
+Broker: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud (HiveMQ Cloud Singapore)
+Port: 8883 (TLS required) / 8884 (WebSocket for web dashboard)
+Protocol: MQTT v3.1.1
+
 - Broker: HiveMQ Cloud, TLS bắt buộc (port 8883)
 - QoS: Vitals=1, Alerts=2, Status=0, Commands=2
 - Topic template:
@@ -88,8 +97,26 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 ### Security
 - Không commit secrets
 - Dùng config/env cho credentials
-
+## App android
+Repo android: https://github.com/danhsidoi1234/Iot_app
 ### Communication
 - Trả lời bằng tiếng Việt (được dùng thuật ngữ kỹ thuật tiếng Anh)
 - Nếu yêu cầu chưa rõ, phải hỏi lại
-*** End Patch
+
+## 💬 Workflow khi nhận yêu cầu
+
+1. **Đọc yêu cầu kỹ**: Hiểu đầy đủ trước khi code
+2. **Hỏi lại nếu không rõ**: "Bạn muốn thay đổi X hay Y?"
+3. **Kiểm tra file hiện có**: Đọc code liên quan trước
+4. **Đề xuất giải pháp**: Giải thích approach trước khi implement
+5. **Code theo quy tắc**: OOP, comments, organization
+6. **Test suggestion**: "Hãy test bằng cách..."
+7. **Không tạo docs**: Trừ khi được yêu cầu
+---
+## ✨ Definition of Done
+
+* Không sinh file rác; repo sạch.
+* UI mượt (ví dụ: không lag >100ms trong đo BP; phản hồi touch <50ms); driver HX710B bền; an toàn đo (limit/timeout/xả khẩn).
+* MQTT/REST/SQLite đúng schema hiện có; log đầy đủ cho debug (mức INFO/ERROR với timestamp, context); không lộ secrets.
+* Tuân thủ BaseSensor pattern và callback architecture.
+* Tích hợp với existing testing framework.

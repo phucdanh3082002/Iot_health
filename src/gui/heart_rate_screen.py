@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 
 import logging
 import time
+import numpy as np
 
 from kivy.animation import Animation
 from kivy.clock import Clock
@@ -336,12 +337,9 @@ class HeartRateMeasurementController:
         self.finger_lost_ts: Optional[float] = None
         self.last_snapshot: Dict[str, Any] = {}
         
-        # Best results tracking - lưu kết quả tốt nhất trong phiên đo
-        self.best_hr: float = 0.0
+        # Best results tracking - flag để biết có valid results trong history
         self.best_hr_valid: bool = False
-        self.best_spo2: float = 0.0
         self.best_spo2_valid: bool = False
-        self.best_quality: float = 0.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -398,12 +396,9 @@ class HeartRateMeasurementController:
         self.deadline = 0.0
         self.finger_lost_ts = None
         self.last_snapshot = {}
-        # Reset best results
-        self.best_hr = 0.0
+        # Reset best results flags
         self.best_hr_valid = False
-        self.best_spo2 = 0.0
         self.best_spo2_valid = False
-        self.best_quality = 0.0
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -473,24 +468,16 @@ class HeartRateMeasurementController:
         
         # ============================================================
         # TRACK BEST RESULTS - Lưu kết quả tốt nhất trong phiên đo
-        # Lý do: Đôi khi poll cuối cùng có noise, ta cần giữ best result
+        # STRATEGY: Dùng MEDIAN của history thay vì first valid value
+        # để tránh bias từ noise đầu phiên đo
         # ============================================================
         if hr_valid and heart_rate > 0:
-            # Ưu tiên HR với quality cao hơn, hoặc HR mới nếu quality tương đương
-            if not self.best_hr_valid or signal_quality_index >= self.best_quality:
-                self.best_hr = heart_rate
-                self.best_hr_valid = True
-                self.best_quality = max(self.best_quality, signal_quality_index)
+            # Always track valid HR to update best at finalization
+            self.best_hr_valid = True
         
         if spo2_valid and spo2 > 0:
-            # Ưu tiên SpO2 trong range sinh lý (90-100%) với quality cao
-            if not self.best_spo2_valid:
-                self.best_spo2 = spo2
-                self.best_spo2_valid = True
-            elif 90 <= spo2 <= 100 and (self.best_spo2 < 90 or signal_quality_index >= self.best_quality):
-                # Prefer healthy SpO2 values khi có quality tốt hơn
-                self.best_spo2 = spo2
-                self.best_quality = max(self.best_quality, signal_quality_index)
+            # Always track valid SpO2 to update best at finalization
+            self.best_spo2_valid = True
 
         # ============================================================
         # STATE: WAITING - Chờ ngón tay (KHÔNG ĐẾM NGƯỢC)
@@ -627,24 +614,47 @@ class HeartRateMeasurementController:
         snapshot_hr = float(snapshot.get("heart_rate", 0.0) or 0.0)
         snapshot_spo2 = float(snapshot.get("spo2", 0.0) or 0.0)
         
-        # Ưu tiên best results nếu có, fallback về snapshot
-        if self.best_hr_valid and self.best_hr > 0:
-            heart_rate = self.best_hr
+        # ============================================================
+        # IMPROVED: Dùng MEDIAN của history thay vì first valid value
+        # Lý do: Median robust hơn với noise và outliers
+        # History nằm ở SENSOR, không phải controller
+        # ============================================================
+        sensor = self._get_sensor()
+        
+        if self.best_hr_valid and sensor and hasattr(sensor, 'hr_history') and len(sensor.hr_history) > 0:
+            # Dùng median history của sensor (đã được filter)
+            heart_rate = float(np.median(list(sensor.hr_history)))
             hr_valid = True
-            self.logger.info("[Finalize] Dùng best HR=%.1f (snapshot HR=%.1f valid=%s)", 
-                            self.best_hr, snapshot_hr, snapshot_hr_valid)
+            self.logger.info("[Finalize] Dùng HR median=%.1f từ %d samples (snapshot=%.1f)", 
+                            heart_rate, len(sensor.hr_history), snapshot_hr)
         else:
             heart_rate = snapshot_hr if snapshot_hr_valid and snapshot_hr > 0 else 0.0
             hr_valid = snapshot_hr_valid and snapshot_hr > 0
+            if not self.best_hr_valid:
+                self.logger.warning("[Finalize] Không có HR valid trong phiên đo")
         
-        if self.best_spo2_valid and self.best_spo2 > 0:
-            spo2 = self.best_spo2
+        if self.best_spo2_valid and sensor and hasattr(sensor, 'spo2_history') and len(sensor.spo2_history) > 0:
+            # Dùng median history của sensor (đã được filter)
+            # CRITICAL FIX: Lọc ra SpO2 > 90% (healthy range) nếu có
+            spo2_values = list(sensor.spo2_history)
+            healthy_spo2 = [s for s in spo2_values if 90 <= s <= 100]
+            
+            if healthy_spo2:
+                # Ưu tiên median từ healthy range
+                spo2 = float(np.median(healthy_spo2))
+                self.logger.info("[Finalize] Dùng SpO2 healthy median=%.1f từ %d/%d samples (snapshot=%.1f)", 
+                                spo2, len(healthy_spo2), len(spo2_values), snapshot_spo2)
+            else:
+                # Fallback: dùng median toàn bộ
+                spo2 = float(np.median(spo2_values))
+                self.logger.info("[Finalize] Dùng SpO2 median=%.1f từ %d samples (snapshot=%.1f)", 
+                                spo2, len(spo2_values), snapshot_spo2)
             spo2_valid = True
-            self.logger.info("[Finalize] Dùng best SpO2=%.1f (snapshot SpO2=%.1f valid=%s)", 
-                            self.best_spo2, snapshot_spo2, snapshot_spo2_valid)
         else:
             spo2 = snapshot_spo2 if snapshot_spo2_valid and snapshot_spo2 > 0 else 0.0
             spo2_valid = snapshot_spo2_valid and snapshot_spo2 > 0
+            if not self.best_spo2_valid:
+                self.logger.warning("[Finalize] Không có SpO2 valid trong phiên đo")
         
         quality = float(snapshot.get("signal_quality_ir", 0.0) or 0.0)
         status = self._extract_status(snapshot)
