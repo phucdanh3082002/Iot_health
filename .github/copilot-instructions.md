@@ -63,6 +63,21 @@ Hệ thống IoT giám sát sức khỏe trên Raspberry Pi:
 - **Server Instance**:
   IP: 47.130.193.237
   key : /home/pi/Desktop/IoT_health/key-server/iot-health-api-key.pem
+  user: ubuntu
+## Cấu trúc thư AWS server:
+/var/www/iot-health-api
+├── __pycache__
+├── app.py
+├── app.py.backup
+├── app.py.backup_20251118_081349
+├── app.py.backup_20251215_182517
+├── app.py.backup_before_import_fix
+├── app.py.save
+├── gunicorn_config.py
+├── requirements.txt
+├── scripts
+         ├ai_threshold_generator.py
+└── venv
 ## MQTT Communication (không đổi nếu chưa được yêu cầu)
 
 Broker: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud (HiveMQ Cloud Singapore)
@@ -98,7 +113,7 @@ Protocol: MQTT v3.1.1
 - Không commit secrets
 - Dùng config/env cho credentials
 ## App android
-Repo android: https://github.com/danhsidoi1234/Iot_app
+Repo android: 
 ### Communication
 - Trả lời bằng tiếng Việt (được dùng thuật ngữ kỹ thuật tiếng Anh)
 - Nếu yêu cầu chưa rõ, phải hỏi lại

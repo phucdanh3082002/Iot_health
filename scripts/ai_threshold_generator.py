@@ -323,22 +323,6 @@ class ThresholdGenerator:
         """
         Check if a rule's conditions match patient data
         """
-        # Vietnamese to English disease name mapping (for rule matching)
-        DISEASE_TRANSLATION_MAP = {
-            'tăng huyết áp': 'hypertension',
-            'tiểu đường': 'diabetes',
-            'bệnh tim': 'heart disease',
-            'tim mạch': 'cardiovascular disease',
-            'bệnh phổi': 'lung disease',
-            'hen suyễn': 'asthma',
-            'copd': 'copd',
-            'suy thận': 'chronic kidney disease',
-            'bệnh thận': 'kidney disease',
-            'crohns': 'crohns disease',
-            'viêm ruột': 'inflammatory bowel disease',
-            'huyết áp cao': 'hypertension',
-        }
-        
         try:
             conditions = json.loads(conditions_json) if isinstance(conditions_json, str) else conditions_json
 
@@ -368,30 +352,22 @@ class ThresholdGenerator:
                 if patient_diseases is None:
                     patient_diseases = []
 
-                # Extract disease names (normalize to lowercase and translate to English if needed)
+                # Extract disease names (normalize to lowercase)
                 disease_names = []
                 if isinstance(patient_diseases, list):
                     for disease in patient_diseases:
                         if isinstance(disease, dict):
                             disease_name = disease.get('name', '').strip().lower()
                             if disease_name:
-                                # Translate Vietnamese to English if needed
-                                disease_name = DISEASE_TRANSLATION_MAP.get(disease_name, disease_name)
                                 disease_names.append(disease_name)
                         elif disease:  # Non-empty string
-                            disease_name = str(disease).strip().lower()
-                            # Translate Vietnamese to English if needed
-                            disease_name = DISEASE_TRANSLATION_MAP.get(disease_name, disease_name)
-                            disease_names.append(disease_name)
+                            disease_names.append(str(disease).strip().lower())
 
-                # Check if ALL required diseases match (rule requires complete match)
-                # For example: Rule needs "Diabetes + Hypertension" = patient must have BOTH
+                # Check if any required disease matches (case-insensitive, exact match)
                 required_diseases = conditions.get('chronic_diseases', [])
                 required_diseases_lower = [req.strip().lower() for req in required_diseases]
-                if required_diseases:
-                    # Ensure patient has ALL required diseases
-                    if not all(req in disease_names for req in required_diseases_lower):
-                        return False  # Patient missing at least one required disease
+                if required_diseases and not any(req in disease_names for req in required_diseases_lower):
+                    return False
 
             # Check medications (CRITICAL: rules requiring specific drugs must validate presence)
             if 'medications' in conditions:
@@ -421,15 +397,6 @@ class ThresholdGenerator:
                 required_meds_lower = [req.strip().lower() for req in required_meds]
                 if required_meds and not any(req in med_names for req in required_meds_lower):
                     return False  # Rule requires medication but patient doesn't have it
-
-            # Check BMI range
-            if 'bmi_range' in conditions:
-                bmi = self._calculate_bmi(patient_data)
-                if bmi is None:
-                    return False  # Rule requires BMI but patient data doesn't have height/weight
-                min_bmi, max_bmi = conditions['bmi_range']
-                if not (min_bmi <= bmi <= max_bmi):
-                    return False
 
             # Check lifestyle factors
             if 'smoking_status' in conditions:

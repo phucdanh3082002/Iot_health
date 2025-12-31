@@ -47,6 +47,477 @@ except Exception as e:
     logger.warning(f"⚠️ ThresholdGenerator initialization failed: {e}")
     threshold_generator = None
 
+# ==================== Medical Data Translation Mappings ====================
+# English to Vietnamese translation for medical data
+MEDICAL_DATA_TRANSLATIONS = {
+    # Chronic Diseases
+    'chronic_diseases': {
+        'Hypertension': 'Tăng huyết áp',
+        'Diabetes': 'Tiểu đường',
+        'COPD': 'Bệnh phổi tắc nghẽn mạn tính (COPD)',
+        'Asthma': 'Hen suyễn',
+        'Heart Failure': 'Suy tim',
+        'Atrial Fibrillation': 'Rung nhĩ',
+        'Chronic Kidney Disease': 'Bệnh thận mãn tính',
+        'Coronary Artery Disease': 'Bệnh động mạch vành',
+        'Obesity': 'Béo phì',
+        'Hyperthyroidism': 'Cường giáp',
+        'Hypothyroidism': 'Suy giáp',
+        'Anemia': 'Thiếu máu',
+        'Pneumonia': 'Viêm phổi',
+        'ARDS': 'Hội chứng suy hô hấp cấp tính',
+        'Sepsis': 'Nhiễm trùng huyết',
+        'Stroke': 'Đột quỵ',
+        'Cancer': 'Ung thư',
+        'Liver Disease': 'Bệnh gan',
+        'Arthritis': 'Viêm khớp',
+        'Osteoporosis': 'Loãng xương',
+
+        # Additional Cardiovascular Diseases
+        'Congestive Heart Failure': 'Suy tim sung huyết',
+        'CHF': 'Suy tim sung huyết (CHF)',
+        'HF': 'Suy tim',
+        'Heart Disease': 'Bệnh tim',
+        'CAD': 'Bệnh động mạch vành (CAD)',
+        'Cyanotic Heart Disease': 'Bệnh tim tím',
+        'Congenital Heart Disease': 'Bệnh tim bẩm sinh',
+        'CHD': 'Bệnh tim bẩm sinh (CHD)',
+        'Marfan Syndrome': 'Hội chứng Marfan',
+        'Long QT Syndrome': 'Hội chứng QT dài',
+        'LQTS': 'Hội chứng QT dài (LQTS)',
+        'Eisenmenger Syndrome': 'Hội chứng Eisenmenger',
+
+        # Respiratory Diseases
+        'COPD Severe': 'COPD nặng',
+        'Severe COPD': 'COPD giai đoạn nặng',
+        'COPD GOLD 3-4': 'COPD giai đoạn 3-4',
+        'Emphysema': 'Khí phế thũng',
+        'Severe Asthma': 'Hen suyễn nặng',
+        'Asthma Severe': 'Hen suyễn nặng',
+        'Interstitial Lung Disease': 'Bệnh phổi kẽ',
+        'ILD': 'Bệnh phổi kẽ (ILD)',
+        'Pulmonary Fibrosis': 'Xơ phổi',
+        'Pulmonary Hypertension': 'Tăng áp phổi',
+        'PAH': 'Tăng áp phổi (PAH)',
+        'Sleep Apnea': 'Ngưng thở khi ngủ',
+        'OSA': 'Ngưng thở khi ngủ tắc nghẽn (OSA)',
+        'Obstructive Sleep Apnea': 'Ngưng thở khi ngủ tắc nghẽn',
+        'Tuberculosis': 'Lao phổi',
+        'TB': 'Lao',
+
+        # Kidney & Liver Diseases
+        'CKD': 'Bệnh thận mãn tính (CKD)',
+        'Chronic Kidney Disease': 'Bệnh thận mãn tính',
+        'Renal Disease': 'Bệnh thận',
+        'Cirrhosis': 'Xơ gan',
+        'Liver Cirrhosis': 'Xơ gan',
+        'Hepatitis B': 'Viêm gan B',
+        'Hepatitis C': 'Viêm gan C',
+        'HBV': 'Viêm gan B (HBV)',
+        'HCV': 'Viêm gan C (HCV)',
+
+        # Neurological Diseases
+        'Parkinson Disease': 'Bệnh Parkinson',
+        'Parkinson': 'Bệnh Parkinson',
+        'Dementia': 'Sa sút trí tuệ',
+        'Alzheimer': 'Bệnh Alzheimer',
+
+        # Endocrine & Metabolic
+        'Type 1 Diabetes': 'Tiểu đường type 1',
+        'Type 2 Diabetes': 'Tiểu đường type 2',
+        'T1DM': 'Tiểu đường type 1',
+        'Graves Disease': 'Bệnh Graves (cường giáp)',
+        'Basedow': 'Bệnh Basedow (cường giáp)',
+        'Thyroid Disease': 'Bệnh tuyến giáp',
+        'Gout': 'Bệnh gút',
+
+        # Blood Disorders
+        'Sickle Cell Disease': 'Bệnh hồng cầu hình liềm',
+        'Sickle Cell Anemia': 'Thiếu máu hồng cầu hình liềm',
+        'Thalassemia': 'Thiếu máu Địa Trung Hải',
+        'Thalassemia Major': 'Thiếu máu Địa Trung Hải nặng',
+        'Thalassemia Minor': 'Thiếu máu Địa Trung Hải nhẹ',
+        'G6PD Deficiency': 'Thiếu men G6PD',
+
+        # Infectious Diseases
+        'HIV': 'HIV',
+        'AIDS': 'AIDS',
+        'HIV/AIDS': 'HIV/AIDS',
+        'Dengue': 'Sốt xuất huyết',
+        'Dengue Fever': 'Sốt xuất huyết dengue',
+        'Malaria': 'Sốt rét',
+
+        # Rheumatic & Musculoskeletal
+        'Rheumatoid Arthritis': 'Viêm khớp dạng thấp',
+        'RA': 'Viêm khớp dạng thấp (RA)',
+        'Osteoarthritis': 'Thoái hóa khớp',
+
+        # Immunological
+        'Immune Disorder': 'Rối loạn miễn dịch',
+        'Immunosuppressed': 'Suy giảm miễn dịch',
+        'Chemotherapy': 'Đang hóa trị (suy giảm miễn dịch)',
+        'Transplant': 'Sau ghép tạng',
+
+        # Geriatric Syndromes
+        'Frailty': 'Suy nhược',
+        'Frail Elderly': 'Người cao tuổi suy nhược',
+
+        # Other
+        'High Blood Pressure': 'Huyết áp cao'
+    },
+
+    # Medications
+    'medications': {
+        # Beta-blockers
+        'Beta Blocker': 'Thuốc chẹn beta',
+        'Beta-blocker': 'Thuốc chẹn beta',
+        'Metoprolol': 'Metoprolol (thuốc chẹn beta)',
+        'Atenolol': 'Atenolol (thuốc chẹn beta)',
+        'Carvedilol': 'Carvedilol (thuốc chẹn beta)',
+        'Bisoprolol': 'Bisoprolol (thuốc chẹn beta)',
+        'Propranolol': 'Propranolol (thuốc chẹn beta)',
+
+        # ACE Inhibitors
+        'ACE Inhibitor': 'Thuốc ức chế ACE',
+        'Lisinopril': 'Lisinopril (thuốc ức chế ACE)',
+        'Enalapril': 'Enalapril (thuốc ức chế ACE)',
+        'Ramipril': 'Ramipril (thuốc ức chế ACE)',
+        'Perindopril': 'Perindopril (thuốc ức chế ACE)',
+        'Captopril': 'Captopril (thuốc ức chế ACE)',
+
+        # ARBs
+        'ARB': 'Thuốc chẹn thụ thể angiotensin (ARB)',
+        'Losartan': 'Losartan (thuốc chẹn thụ thể angiotensin)',
+        'Valsartan': 'Valsartan (thuốc chẹn thụ thể angiotensin)',
+        'Telmisartan': 'Telmisartan (thuốc chẹn thụ thể angiotensin)',
+        'Irbesartan': 'Irbesartan (thuốc chẹn thụ thể angiotensin)',
+        'Candesartan': 'Candesartan (thuốc chẹn thụ thể angiotensin)',
+
+        # Calcium Channel Blockers
+        'Calcium Channel Blocker': 'Thuốc chẹn kênh canxi',
+        'CCB': 'Thuốc chẹn kênh canxi (CCB)',
+        'Amlodipine': 'Amlodipine (thuốc chẹn kênh canxi)',
+        'Diltiazem': 'Diltiazem (thuốc chẹn kênh canxi)',
+        'Verapamil': 'Verapamil (thuốc chẹn kênh canxi)',
+        'Nifedipine': 'Nifedipine (thuốc chẹn kênh canxi)',
+
+        # Diuretics
+        'Diuretic': 'Thuốc lợi tiểu',
+        'Furosemide': 'Furosemide (thuốc lợi tiểu)',
+        'Hydrochlorothiazide': 'Hydrochlorothiazide (thuốc lợi tiểu)',
+        'Spironolactone': 'Spironolactone (thuốc lợi tiểu)',
+        'Indapamide': 'Indapamide (thuốc lợi tiểu)',
+
+        # Alpha Blockers
+        'Alpha Blocker': 'Thuốc chẹn alpha',
+        'Prazosin': 'Prazosin (thuốc chẹn alpha)',
+        'Doxazosin': 'Doxazosin (thuốc chẹn alpha)',
+        'Terazosin': 'Terazosin (thuốc chẹn alpha)',
+
+        # Other Antihypertensives
+        'Clonidine': 'Clonidine (thuốc hạ huyết áp)',
+        'Catapres': 'Catapres (clonidine)',
+
+        # Diabetes Medications
+        'Metformin': 'Metformin (thuốc tiểu đường)',
+        'Insulin': 'Insulin (thuốc tiểu đường)',
+        'Glipizide': 'Glipizide (thuốc tiểu đường)',
+        'Glyburide': 'Glyburide (thuốc tiểu đường)',
+
+        # Anticoagulants & Antiplatelets
+        'Warfarin': 'Warfarin (thuốc chống đông máu)',
+        'Aspirin': 'Aspirin (thuốc chống đông máu)',
+        'Clopidogrel': 'Clopidogrel (thuốc chống đông máu)',
+        'Rivaroxaban': 'Rivaroxaban (thuốc chống đông máu mới)',
+        'Apixaban': 'Apixaban (thuốc chống đông máu mới)',
+        'Dabigatran': 'Dabigatran (thuốc chống đông máu mới)',
+
+        # Cardiac Medications
+        'Digoxin': 'Digoxin (thuốc cường tim)',
+        'Digitalis': 'Digitalis (thuốc cường tim)',
+
+        # Antiarrhythmics
+        'Amiodarone': 'Amiodarone (thuốc chống loạn nhịp)',
+        'Flecainide': 'Flecainide (thuốc chống loạn nhịp)',
+        'Sotalol': 'Sotalol (thuốc chống loạn nhịp)',
+
+        # Nitrates
+        'Nitrate': 'Thuốc nitrat',
+        'Nitroglycerin': 'Nitroglycerin (thuốc giãn mạch vành)',
+        'Isosorbide': 'Isosorbide (thuốc nitrat)',
+
+        # Respiratory Medications
+        'Bronchodilator': 'Thuốc giãn phế quản',
+        'Albuterol': 'Albuterol (thuốc giãn phế quản)',
+        'Salbutamol': 'Salbutamol (thuốc giãn phế quản)',
+        'Theophylline': 'Theophylline (thuốc giãn phế quản)',
+        'Salmeterol': 'Salmeterol (thuốc giãn phế quản dài hạn)',
+        'Formoterol': 'Formoterol (thuốc giãn phế quản dài hạn)',
+        'LABA': 'Thuốc giãn phế quản dài hạn (LABA)',
+        'Terbutaline': 'Terbutaline (thuốc giãn phế quản)',
+        'Ventolin': 'Ventolin (salbutamol)',
+        'Budesonide': 'Budesonide (corticosteroid dạng hít)',
+        'Fluticasone': 'Fluticasone (corticosteroid dạng hít)',
+        'Inhaled Corticosteroid': 'Corticosteroid dạng hít',
+
+        # Corticosteroids (Systemic)
+        'Corticosteroid': 'Corticosteroid',
+        'Steroid': 'Steroid',
+        'Prednisone': 'Prednisone (corticosteroid)',
+        'Prednisolone': 'Prednisolone (corticosteroid)',
+        'Dexamethasone': 'Dexamethasone (corticosteroid)',
+        'Methylprednisolone': 'Methylprednisolone (corticosteroid)',
+        'Hydrocortisone': 'Hydrocortisone (corticosteroid)',
+
+        # Statins (Cholesterol)
+        'Statin': 'Thuốc hạ cholesterol (statin)',
+        'Atorvastatin': 'Atorvastatin (thuốc hạ cholesterol)',
+        'Simvastatin': 'Simvastatin (thuốc hạ cholesterol)',
+        'Rosuvastatin': 'Rosuvastatin (thuốc hạ cholesterol)',
+
+        # NSAIDs
+        'NSAID': 'Thuốc chống viêm không steroid (NSAID)',
+        'Ibuprofen': 'Ibuprofen (thuốc giảm đau, kháng viêm)',
+        'Naproxen': 'Naproxen (thuốc giảm đau, kháng viêm)',
+        'Diclofenac': 'Diclofenac (thuốc kháng viêm)',
+        'Celecoxib': 'Celecoxib (thuốc kháng viêm)',
+
+        # Analgesics
+        'Acetaminophen': 'Acetaminophen (thuốc giảm đau)',
+        'Paracetamol': 'Paracetamol (thuốc giảm đau)',
+
+        # Opioids
+        'Opioid': 'Thuốc giảm đau gây nghiện (opioid)',
+        'Morphine': 'Morphine (thuốc giảm đau mạnh)',
+        'Codeine': 'Codeine (thuốc giảm đau)',
+        'Tramadol': 'Tramadol (thuốc giảm đau)',
+        'Fentanyl': 'Fentanyl (thuốc giảm đau mạnh)',
+
+        # Thyroid Medications
+        'Levothyroxine': 'Levothyroxine (thuốc giáp)',
+        'Thyroxine': 'Thyroxine (thuốc giáp)',
+        'T4': 'T4 (levothyroxine)',
+        'Methimazole': 'Methimazole (thuốc giáp)',
+
+        # Parkinson's Medications
+        'Levodopa': 'Levodopa (thuốc Parkinson)',
+        'Carbidopa': 'Carbidopa (thuốc Parkinson)',
+        'Sinemet': 'Sinemet (levodopa + carbidopa)',
+        'Madopar': 'Madopar (levodopa)',
+
+        # Antidepressants
+        'SSRI': 'Thuốc chống trầm cảm SSRI',
+        'Fluoxetine': 'Fluoxetine (thuốc chống trầm cảm)',
+        'Sertraline': 'Sertraline (thuốc chống trầm cảm)',
+        'Escitalopram': 'Escitalopram (thuốc chống trầm cảm)',
+        'Paroxetine': 'Paroxetine (thuốc chống trầm cảm)',
+        'Citalopram': 'Citalopram (thuốc chống trầm cảm)',
+
+        'TCA': 'Thuốc chống trầm cảm 3 vòng (TCA)',
+        'Amitriptyline': 'Amitriptyline (thuốc chống trầm cảm)',
+        'Nortriptyline': 'Nortriptyline (thuốc chống trầm cảm)',
+        'Imipramine': 'Imipramine (thuốc chống trầm cảm)',
+
+        # Antipsychotics
+        'Antipsychotic': 'Thuốc chống loạn thần',
+        'Haloperidol': 'Haloperidol (thuốc chống loạn thần)',
+        'Risperidone': 'Risperidone (thuốc chống loạn thần)',
+        'Olanzapine': 'Olanzapine (thuốc chống loạn thần)',
+        'Quetiapine': 'Quetiapine (thuốc chống loạn thần)',
+        'Aripiprazole': 'Aripiprazole (thuốc chống loạn thần)',
+
+        # Anxiolytics & Sedatives
+        'Benzodiazepine': 'Benzodiazepine (thuốc an thần)',
+        'Diazepam': 'Diazepam (thuốc an thần)',
+        'Lorazepam': 'Lorazepam (thuốc an thần)',
+        'Alprazolam': 'Alprazolam (thuốc an thần)',
+        'Clonazepam': 'Clonazepam (thuốc an thần)',
+
+        # Antihistamines
+        'Antihistamine': 'Thuốc kháng histamine',
+        'Diphenhydramine': 'Diphenhydramine (thuốc dị ứng)',
+        'Chlorpheniramine': 'Chlorpheniramine (thuốc dị ứng)',
+        'Cetirizine': 'Cetirizine (thuốc dị ứng)',
+        'Loratadine': 'Loratadine (thuốc dị ứng)',
+        'Fexofenadine': 'Fexofenadine (thuốc dị ứng)',
+
+        # Decongestants
+        'Decongestant': 'Thuốc thông mũi',
+        'Pseudoephedrine': 'Pseudoephedrine (thuốc thông mũi)',
+        'Phenylephrine': 'Phenylephrine (thuốc thông mũi)',
+
+        # Proton Pump Inhibitors
+        'PPI': 'Thuốc ức chế bơm proton (PPI)',
+        'Omeprazole': 'Omeprazole (thuốc giảm acid dạ dày)',
+
+        # Emergency Medications
+        'Epinephrine': 'Epinephrine (adrenaline)',
+        'Adrenaline': 'Adrenaline',
+        'EpiPen': 'EpiPen (bút tiêm adrenaline)'
+    },
+
+    # Allergies
+    'allergies': {
+        # Severe Allergic Reactions
+        'Anaphylaxis History': 'Tiền sử phản vệ',
+        'Severe Allergy': 'Dị ứng nặng',
+        'Severe Food Allergy': 'Dị ứng thực phẩm nặng',
+        'EpiPen User': 'Người dùng EpiPen',
+
+        # Drug Allergies
+        'Drug Allergy': 'Dị ứng thuốc',
+        'Penicillin': 'Penicillin',
+        'Penicillin Allergy': 'Dị ứng penicillin',
+        'Antibiotic Allergy': 'Dị ứng kháng sinh',
+        'Beta-lactam Allergy': 'Dị ứng beta-lactam',
+        'Sulfa Drugs': 'Thuốc Sulfa',
+        'Sulfa Allergy': 'Dị ứng thuốc Sulfa',
+        'Aspirin': 'Aspirin',
+        'Aspirin Allergy': 'Dị ứng aspirin',
+        'NSAIDs': 'Thuốc chống viêm không steroid (NSAIDs)',
+        'NSAID Allergy': 'Dị ứng NSAID',
+        'Ibuprofen Allergy': 'Dị ứng ibuprofen',
+        'Codeine': 'Codeine',
+        'Morphine': 'Morphine',
+        'Contrast Allergy': 'Dị ứng thuốc cản quang',
+        'Iodine': 'Iốt',
+        'Iodine Allergy': 'Dị ứng iốt',
+        'Radiographic Contrast Allergy': 'Dị ứng thuốc cản quang X-quang',
+        'Latex': 'Cao su (Latex)',
+        'Latex Allergy': 'Dị ứng cao su',
+        'Rubber Allergy': 'Dị ứng cao su',
+
+        # Food Allergies - Nuts
+        'Peanuts': 'Đậu phộng',
+        'Peanut Allergy': 'Dị ứng đậu phộng',
+        'Tree Nuts': 'Các loại hạt',
+        'Tree Nut Allergy': 'Dị ứng các loại hạt',
+        'Cashew Allergy': 'Dị ứng hạt điều',
+        'Almond Allergy': 'Dị ứng hạt hạnh nhân',
+        'Walnut Allergy': 'Dị ứng hạt óc chó',
+
+        # Food Allergies - Seafood
+        'Shellfish': 'Hải sản có vỏ (tôm, cua)',
+        'Shellfish Allergy': 'Dị ứng hải sản có vỏ',
+        'Shrimp Allergy': 'Dị ứng tôm',
+        'Crab Allergy': 'Dị ứng cua',
+        'Clam Allergy': 'Dị ứng nghêu',
+        'Squid Allergy': 'Dị ứng mực',
+        'Seafood Allergy': 'Dị ứng hải sản',
+        'Fish': 'Cá',
+        'Fish Allergy': 'Dị ứng cá',
+
+        # Food Allergies - Common
+        'Eggs': 'Trứng',
+        'Egg Allergy': 'Dị ứng trứng',
+        'Chicken Egg Allergy': 'Dị ứng trứng gà',
+        'Milk': 'Sữa',
+        'Milk Allergy': 'Dị ứng sữa',
+        'Dairy Allergy': 'Dị ứng sản phẩm từ sữa',
+        'Cow Milk Protein Allergy': 'Dị ứng protein sữa bò',
+        'Soy': 'Đậu nành',
+        'Soy Allergy': 'Dị ứng đậu nành',
+        'Wheat': 'Lúa mì',
+        'Wheat Allergy': 'Dị ứng lúa mì',
+        'Gluten Allergy': 'Dị ứng gluten',
+        'Food Allergy': 'Dị ứng thực phẩm',
+
+        # Environmental Allergies
+        'Pollen': 'Phấn hoa',
+        'Dust Mites': 'Bụi',
+        'Dust Allergy': 'Dị ứng bụi',
+        'Mold': 'Nấm mốc',
+        'Pet Dander': 'Lông thú cưng',
+
+        # Insect Venom
+        'Insect Stings': 'Nọc ong/côn trùng',
+        'Insect Venom Allergy': 'Dị ứng nọc côn trùng',
+        'Bee Venom Allergy': 'Dị ứng nọc ong',
+        'Wasp Allergy': 'Dị ứng ong bắp cày',
+        'Fire Ant Allergy': 'Dị ứng kiến lửa'
+    },
+
+    # Family History
+    'family_history': {
+        # Cardiovascular
+        'Heart Disease': 'Bệnh tim mạch',
+        'Coronary Artery Disease': 'Bệnh động mạch vành',
+        'Heart Attack': 'Nhồi máu cơ tim',
+        'Myocardial Infarction': 'Nhồi máu cơ tim',
+        'Stroke': 'Đột quỵ',
+        'Hypertension': 'Tăng huyết áp',
+        'High Blood Pressure': 'Huyết áp cao',
+        'Heart Failure': 'Suy tim',
+        'Atrial Fibrillation': 'Rung nhĩ',
+
+        # Metabolic & Endocrine
+        'Diabetes': 'Tiểu đường',
+        'Type 1 Diabetes': 'Tiểu đường type 1',
+        'Type 2 Diabetes': 'Tiểu đường type 2',
+        'Obesity': 'Béo phì',
+        'Thyroid Disease': 'Bệnh tuyến giáp',
+        'Hyperthyroidism': 'Cường giáp',
+        'Hypothyroidism': 'Suy giáp',
+
+        # Cancer
+        'Cancer': 'Ung thư',
+        'Breast Cancer': 'Ung thư vú',
+        'Lung Cancer': 'Ung thư phổi',
+        'Colon Cancer': 'Ung thư đại tràng',
+        'Colorectal Cancer': 'Ung thư đại trực tràng',
+        'Prostate Cancer': 'Ung thư tuyến tiền liệt',
+        'Stomach Cancer': 'Ung thư dạ dày',
+        'Liver Cancer': 'Ung thư gan',
+        'Ovarian Cancer': 'Ung thư buồng trứng',
+
+        # Kidney & Liver
+        'Kidney Disease': 'Bệnh thận',
+        'Chronic Kidney Disease': 'Bệnh thận mãn tính',
+        'Kidney Failure': 'Suy thận',
+        'Liver Disease': 'Bệnh gan',
+        'Cirrhosis': 'Xơ gan',
+
+        # Respiratory
+        'Asthma': 'Hen suyễn',
+        'COPD': 'Bệnh phổi tắc nghẽn mạn tính',
+        'Lung Disease': 'Bệnh phổi',
+        'Tuberculosis': 'Lao phổi',
+
+        # Neurological & Mental Health
+        'Alzheimer': 'Bệnh Alzheimer',
+        'Dementia': 'Sa sút trí tuệ',
+        'Parkinson Disease': 'Bệnh Parkinson',
+        'Epilepsy': 'Động kinh',
+        'Seizure Disorder': 'Rối loạn co giật',
+        'Mental Illness': 'Bệnh tâm thần',
+        'Depression': 'Trầm cảm',
+        'Anxiety': 'Lo âu',
+        'Bipolar Disorder': 'Rối loạn lưỡng cực',
+        'Schizophrenia': 'Tâm thần phân liệt',
+
+        # Blood Disorders
+        'Anemia': 'Thiếu máu',
+        'Sickle Cell Disease': 'Bệnh hồng cầu hình liềm',
+        'Thalassemia': 'Thiếu máu Địa Trung Hải',
+        'Hemophilia': 'Bệnh máu khó đông',
+        'Blood Clotting Disorder': 'Rối loạn đông máu',
+
+        # Autoimmune & Rheumatic
+        'Rheumatoid Arthritis': 'Viêm khớp dạng thấp',
+        'Lupus': 'Bệnh lupus ban đỏ',
+        'Multiple Sclerosis': 'Xơ cứng rải rác',
+        'Osteoporosis': 'Loãng xương',
+        'Arthritis': 'Viêm khớp',
+        'Gout': 'Bệnh gút',
+
+        # Other
+        'Alcoholism': 'Nghiện rượu',
+        'Drug Addiction': 'Nghiện ma túy',
+        'Sudden Death': 'Tử vong đột ngột',
+        'Sudden Cardiac Death': 'Tử vong đột ngột do tim'
+    }
+}
+
 def get_db_connection():
     """Get database connection"""
     return mysql.connector.connect(**DB_CONFIG)
@@ -2425,6 +2896,247 @@ def generate_ai_thresholds():
             'status': 'error',
             'message': f'Server error: {str(e)}'
         }), 500
+
+
+# ==================== Medical Data Selection Endpoints ====================
+
+@app.route('/api/medical-data/chronic-diseases', methods=['GET'])
+def get_chronic_diseases():
+    """
+    Get list of chronic diseases from threshold_generation_rules
+    Returns both English (for backend) and Vietnamese (for UI display)
+
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                "nameEn": "COPD",
+                "nameVi": "Bệnh phổi tắc nghẽn mạn tính (COPD)",
+                "category": "chronic_diseases"
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Query unique chronic diseases from threshold_generation_rules
+        cursor.execute("""
+            SELECT DISTINCT conditions
+            FROM threshold_generation_rules
+            WHERE is_active = TRUE
+            AND JSON_CONTAINS_PATH(conditions, 'one', '$.chronic_diseases')
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Extract unique diseases
+        diseases_set = set()
+        for row in rows:
+            try:
+                conditions = json.loads(row['conditions']) if isinstance(row['conditions'], str) else row['conditions']
+                if 'chronic_diseases' in conditions:
+                    diseases_list = conditions['chronic_diseases']
+                    if isinstance(diseases_list, list):
+                        for disease in diseases_list:
+                            diseases_set.add(disease.strip())
+            except Exception as e:
+                logger.warning(f"Failed to parse conditions: {e}")
+                continue
+
+        # Build response with translations
+        result = []
+        translations = MEDICAL_DATA_TRANSLATIONS['chronic_diseases']
+
+        for disease_en in sorted(diseases_set):
+            result.append({
+                'nameEn': disease_en,
+                'nameVi': translations.get(disease_en, disease_en),  # Fallback to English if no translation
+                'category': 'chronic_diseases'
+            })
+
+        logger.info(f"✅ Returned {len(result)} chronic diseases")
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching chronic diseases: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to fetch chronic diseases: {str(e)}'
+        }), 500
+
+
+@app.route('/api/medical-data/medications', methods=['GET'])
+def get_medications():
+    """
+    Get list of medications from threshold_generation_rules
+    Returns both English (for backend) and Vietnamese (for UI display)
+
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                "nameEn": "Metoprolol",
+                "nameVi": "Metoprolol (thuốc chẹn beta)",
+                "category": "medications"
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Query unique medications from threshold_generation_rules
+        cursor.execute("""
+            SELECT DISTINCT conditions
+            FROM threshold_generation_rules
+            WHERE is_active = TRUE
+            AND JSON_CONTAINS_PATH(conditions, 'one', '$.medications')
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+
+        # Extract unique medications
+        medications_set = set()
+        for row in rows:
+            try:
+                conditions = json.loads(row['conditions']) if isinstance(row['conditions'], str) else row['conditions']
+                if 'medications' in conditions:
+                    meds_list = conditions['medications']
+                    if isinstance(meds_list, list):
+                        for med in meds_list:
+                            medications_set.add(med.strip())
+            except Exception as e:
+                logger.warning(f"Failed to parse conditions: {e}")
+                continue
+
+        # Build response with translations
+        result = []
+        translations = MEDICAL_DATA_TRANSLATIONS['medications']
+
+        for med_en in sorted(medications_set):
+            result.append({
+                'nameEn': med_en,
+                'nameVi': translations.get(med_en, med_en),
+                'category': 'medications'
+            })
+
+        logger.info(f"✅ Returned {len(result)} medications")
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching medications: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to fetch medications: {str(e)}'
+        }), 500
+
+
+@app.route('/api/medical-data/allergies', methods=['GET'])
+def get_allergies():
+    """
+    Get list of common allergies
+    Returns both English (for backend) and Vietnamese (for UI display)
+
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                "nameEn": "Penicillin",
+                "nameVi": "Penicillin",
+                "category": "allergies"
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        # Use predefined list from MEDICAL_DATA_TRANSLATIONS
+        result = []
+        translations = MEDICAL_DATA_TRANSLATIONS['allergies']
+
+        for allergy_en, allergy_vi in sorted(translations.items()):
+            result.append({
+                'nameEn': allergy_en,
+                'nameVi': allergy_vi,
+                'category': 'allergies'
+            })
+
+        logger.info(f"✅ Returned {len(result)} allergies")
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching allergies: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to fetch allergies: {str(e)}'
+        }), 500
+
+
+@app.route('/api/medical-data/family-history', methods=['GET'])
+def get_family_history():
+    """
+    Get list of common family history conditions
+    Returns both English (for backend) and Vietnamese (for UI display)
+
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                "nameEn": "Heart Disease",
+                "nameVi": "Bệnh tim mạch",
+                "category": "family_history"
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        # Use predefined list from MEDICAL_DATA_TRANSLATIONS
+        result = []
+        translations = MEDICAL_DATA_TRANSLATIONS['family_history']
+
+        for condition_en, condition_vi in sorted(translations.items()):
+            result.append({
+                'nameEn': condition_en,
+                'nameVi': condition_vi,
+                'category': 'family_history'
+            })
+
+        logger.info(f"✅ Returned {len(result)} family history conditions")
+        return jsonify({
+            'status': 'success',
+            'data': result
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching family history: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to fetch family history: {str(e)}'
+        }), 500
+
 
 if __name__ == '__main__':
     # Production: Use gunicorn instead
