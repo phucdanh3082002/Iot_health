@@ -242,12 +242,17 @@ class HX710BDriver:
                 value = 0
                 
                 for _ in range(24):
-                    # Generate clock pulse (datasheet timing: T3 ≥ 0.2μs, T4 ≥ 0.2μs)
-                    # CRITICAL: Read DOUT immediately after clock pulse (like test.py)
+                    # Generate clock pulse (datasheet Table T1-T4)
+                    # T3: SCK HIGH time (typ 1μs, min 0.2μs)
+                    # T4: SCK LOW time (typ 1μs, min 0.2μs)
+                    # NOTE: GPIO.output() on RPi has ~0.1-0.5μs natural delay, 
+                    #       sufficient to meet timing requirements. 
+                    #       time.sleep() has 10ms overhead in Python - TOO SLOW!
                     GPIO.output(self.gpio_sck, GPIO.HIGH)
                     GPIO.output(self.gpio_sck, GPIO.LOW)
                     
-                    # Read DOUT immediately (datasheet: T2 ≤ 0.1μs)
+                    # T2: DOUT valid after SCK rising (≤ 0.1μs)
+                    # Read DOUT AFTER LOW transition (data stable)
                     bit = GPIO.input(self.gpio_dout)
                     value = (value << 1) | bit
                 

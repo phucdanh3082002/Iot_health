@@ -3138,6 +3138,315 @@ def get_family_history():
         }), 500
 
 
+# ==================== Health Analysis Service ====================
+# Import health analysis service
+try:
+    from health_analysis_service import HealthAnalysisService
+    health_analysis_service = HealthAnalysisService(
+        db_config=DB_CONFIG,
+        gemini_api_key=os.getenv('GOOGLE_GEMINI_API_KEY')
+    )
+    logger.info("✅ HealthAnalysisService initialized")
+except Exception as e:
+    logger.warning(f"⚠️ HealthAnalysisService initialization failed: {e}")
+    health_analysis_service = None
+
+
+@app.route('/api/health/analysis/latest/<patient_id>', methods=['GET'])
+def get_latest_health_analysis(patient_id):
+    """
+    Get latest AI health analysis for a patient (cached for 24h)
+
+    GET /api/health/analysis/latest/<patient_id>
+
+    Response (200):
+    {
+        "status": "success",
+        "data": {
+            "id": 123,
+            "patient_id": "patient_001",
+            "analysis_date": "2025-12-31T10:30:00",
+            "date_range_start": "2025-12-01T00:00:00",
+            "date_range_end": "2025-12-31T23:59:59",
+            "health_score": 85.5,
+            "overall_status": "good",
+            "trends": {
+                "heart_rate": {
+                    "direction": "stable",
+                    "change_percent": 2.3,
+                    "assessment": "...",
+                    "prediction": "...",
+                    "confidence": 0.92
+                },
+                "spo2": {...},
+                "blood_pressure": {...},
+                "temperature": {...}
+            },
+            "insights": [
+                {
+                    "type": "positive/warning/critical",
+                    "vital": "heart_rate",
+                    "message": "...",
+                    "details": "...",
+                    "confidence": 0.95
+                }
+            ],
+            "recommendations": [
+                {
+                    "category": "lifestyle",
+                    "priority": "high",
+                    "title": "...",
+                    "description": "...",
+                    "reasoning": "...",
+                    "evidence": "AHA 2017"
+                }
+            ],
+            "anomalies": [...],
+            "ai_confidence": 0.92,
+            "data_summary": {...},
+            "score_breakdown": {
+                "vital_compliance": 85.2,
+                "trend_stability": 78.5,
+                "risk_factors": 70.0,
+                "alert_frequency": 90.0
+            }
+        },
+        "cached": true,
+        "expires_at": "2025-12-31T22:30:00"
+    }
+
+    Response (404) - No analysis found:
+    {
+        "status": "not_found",
+        "message": "No analysis found for this patient",
+        "patient_id": "patient_001"
+    }
+    """
+    try:
+        if not health_analysis_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Health analysis service not available'
+            }), 503
+
+        # Get cached analysis
+        result = health_analysis_service.get_latest_analysis(patient_id)
+
+        if result:
+            # Format datetime fields for JSON
+            for field in ['analysis_date', 'date_range_start', 'date_range_end', 'expires_at', 'created_at', 'updated_at']:
+                if result.get(field) and isinstance(result[field], datetime):
+                    result[field] = result[field].isoformat()
+
+            return jsonify({
+                'status': 'success',
+                'data': result,
+                'cached': True,
+                'expires_at': result.get('expires_at')
+            })
+        else:
+            return jsonify({
+                'status': 'not_found',
+                'message': 'No analysis found for this patient. Request a new analysis.',
+                'patient_id': patient_id
+            }), 404
+
+    except Exception as e:
+        logger.error(f"❌ Error getting latest analysis: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to get analysis: {str(e)}'
+        }), 500
+
+
+@app.route('/api/health/analysis', methods=['POST'])
+def request_health_analysis():
+    """
+    Request new AI health analysis for a patient
+    Analyzes 30 days of health data and generates insights
+
+    POST /api/health/analysis
+
+    Request Body:
+    {
+        "patient_id": "patient_001",
+        "days": 30  // optional, default 30
+    }
+
+    Response (200):
+    {
+        "status": "success",
+        "data": {
+            "health_score": 85.5,
+            "overall_status": "good",
+            "trends": {...},
+            "insights": [...],
+            "recommendations": [...],
+            "anomalies": [...],
+            "ai_confidence": 0.92,
+            "data_summary": {...},
+            "score_breakdown": {...},
+            "overall_assessment": "Đánh giá tổng quan..."
+        },
+        "cached": false,
+        "analysis_time_ms": 2500
+    }
+
+    Response (400) - Insufficient data:
+    {
+        "status": "insufficient_data",
+        "message": "Not enough data for analysis",
+        "data": {
+            "health_score": 0,
+            "overall_status": "unknown",
+            "insights": [{"type": "info", ...}],
+            ...
+        }
+    }
+    """
+    try:
+        if not health_analysis_service:
+            return jsonify({
+                'status': 'error',
+                'message': 'Health analysis service not available'
+            }), 503
+
+        data = request.get_json()
+
+        if not data or 'patient_id' not in data:
+            return jsonify({
+                'status': 'error',
+                'message': 'patient_id is required'
+            }), 400
+
+        patient_id = data['patient_id']
+        days = data.get('days', 30)
+
+        # Validate days parameter
+        if days < 7 or days > 90:
+            return jsonify({
+                'status': 'error',
+                'message': 'days must be between 7 and 90'
+            }), 400
+
+        # Track analysis time
+        import time
+        start_time = time.time()
+
+        # Perform analysis
+        result = health_analysis_service.analyze_patient_health(patient_id, days=days)
+
+        analysis_time_ms = int((time.time() - start_time) * 1000)
+
+        # Check if insufficient data
+        if result.get('overall_status') == 'unknown' or result.get('health_score', 0) == 0:
+            return jsonify({
+                'status': 'insufficient_data',
+                'message': 'Not enough data for comprehensive analysis',
+                'data': result,
+                'cached': False,
+                'analysis_time_ms': analysis_time_ms
+            }), 200  # Return 200 but with insufficient_data status
+
+        logger.info(f"✅ Health analysis completed for {patient_id}: score={result.get('health_score')}, time={analysis_time_ms}ms")
+
+        return jsonify({
+            'status': 'success',
+            'data': result,
+            'cached': False,
+            'analysis_time_ms': analysis_time_ms
+        })
+
+    except ValueError as e:
+        logger.warning(f"⚠️ Analysis validation error: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 400
+
+    except Exception as e:
+        logger.error(f"❌ Health analysis failed: {e}", exc_info=True)
+        return jsonify({
+            'status': 'error',
+            'message': f'Analysis failed: {str(e)}'
+        }), 500
+
+
+@app.route('/api/health/analysis/history/<patient_id>', methods=['GET'])
+def get_health_analysis_history(patient_id):
+    """
+    Get health analysis history for a patient (last 30 days)
+
+    GET /api/health/analysis/history/<patient_id>?limit=10
+
+    Query Parameters:
+    - limit: Number of analyses to return (default 10, max 50)
+
+    Response:
+    {
+        "status": "success",
+        "data": [
+            {
+                "id": 123,
+                "analysis_date": "2025-12-31T10:30:00",
+                "health_score": 85.5,
+                "overall_status": "good",
+                "ai_confidence": 0.92
+            },
+            ...
+        ],
+        "total": 15
+    }
+    """
+    try:
+        limit = min(int(request.args.get('limit', 10)), 50)
+
+        conn = mysql.connector.connect(**DB_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT id, analysis_date, health_score, overall_status, ai_confidence,
+                   data_summary, score_breakdown
+            FROM health_analysis
+            WHERE patient_id = %s
+            ORDER BY analysis_date DESC
+            LIMIT %s
+        """, (patient_id, limit))
+
+        results = cursor.fetchall()
+
+        # Get total count
+        cursor.execute("""
+            SELECT COUNT(*) as total FROM health_analysis
+            WHERE patient_id = %s
+        """, (patient_id,))
+        total = cursor.fetchone()['total']
+
+        cursor.close()
+        conn.close()
+
+        # Format results
+        for r in results:
+            if r.get('analysis_date'):
+                r['analysis_date'] = r['analysis_date'].isoformat()
+            for field in ['data_summary', 'score_breakdown']:
+                if r.get(field):
+                    r[field] = json.loads(r[field]) if isinstance(r[field], str) else r[field]
+
+        return jsonify({
+            'status': 'success',
+            'data': results,
+            'total': total
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Error getting analysis history: {e}")
+        return jsonify({
+            'status': 'error',
+            'message': f'Failed to get history: {str(e)}'
+        }), 500
+
+
 if __name__ == '__main__':
     # Production: Use gunicorn instead
     # gunicorn -w 4 -b 0.0.0.0:8000 flask_api_pairing:app

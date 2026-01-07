@@ -162,7 +162,7 @@ class ADCCalibrator:
         GPIO.setwarnings(False)
         
         pump_gpio = 26
-        valve_gpio = 16
+        valve_gpio = 20
         
         GPIO.setup(pump_gpio, GPIO.OUT, initial=GPIO.LOW)
         GPIO.setup(valve_gpio, GPIO.OUT, initial=GPIO.LOW)

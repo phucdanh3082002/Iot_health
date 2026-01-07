@@ -398,11 +398,11 @@ class DatabaseManager(DatabaseManagerExtensions):
         """
         Get health records for patient or device
         
-        Device-centric approach: Query by device_id if patient_id is None
+        Device-centric approach: Query by device_id FIRST (prioritized for local records)
         
         Args:
             patient_id: Patient identifier (optional)
-            device_id: Device identifier (optional, used if patient_id is None)
+            device_id: Device identifier (PRIORITIZED - used for local records)
             start_time: Start time filter
             end_time: End time filter
             limit: Maximum number of records
@@ -414,21 +414,46 @@ class DatabaseManager(DatabaseManagerExtensions):
             with self.get_session() as session:
                 query = session.query(HealthRecord)
                 
-                # Device-centric: Query by device_id if patient_id is None
-                if patient_id:
+                # Device-centric FIXED: Always use device_id if available (local records priority)
+                # Query: (device_id = X) OR (patient_id = Y AND device_id IS NULL) for cloud-synced records
+                if device_id:
+                    if patient_id:
+                        # Query both: device_id matches OR (patient_id matches for cloud-synced records)
+                        from sqlalchemy import or_, and_
+                        query = query.filter(
+                            or_(
+                                HealthRecord.device_id == device_id,
+                                and_(
+                                    HealthRecord.patient_id == patient_id,
+                                    HealthRecord.device_id == device_id  # Same device
+                                )
+                            )
+                        )
+                        self.logger.debug(f"Query: device_id={device_id} OR (patient_id={patient_id} AND device={device_id})")
+                    else:
+                        # Only device_id (local records)
+                        query = query.filter(HealthRecord.device_id == device_id)
+                        self.logger.debug(f"Query: device_id={device_id} only")
+                elif patient_id:
+                    # Only patient_id (cloud query without device context)
                     query = query.filter(HealthRecord.patient_id == patient_id)
-                elif device_id:
-                    query = query.filter(HealthRecord.device_id == device_id)
+                    self.logger.debug(f"Query: patient_id={patient_id} only")
                 # If neither, return all records (for admin use)
+                else:
+                    self.logger.debug("Query: ALL records (no filters)")
                 
                 # Apply time filters
                 if start_time:
                     query = query.filter(HealthRecord.timestamp >= start_time)
+                    self.logger.debug(f"Filter: timestamp >= {start_time}")
                 if end_time:
                     query = query.filter(HealthRecord.timestamp <= end_time)
+                    self.logger.debug(f"Filter: timestamp <= {end_time}")
                 
                 # Order by timestamp descending and limit
                 records = query.order_by(desc(HealthRecord.timestamp)).limit(limit).all()
+                
+                self.logger.debug(f"Query returned {len(records)} raw records from database")
                 
                 # Convert to dict list
                 result = []
@@ -436,22 +461,26 @@ class DatabaseManager(DatabaseManagerExtensions):
                     result.append({
                         'id': record.id,
                         'patient_id': record.patient_id,
-                        'timestamp': record.timestamp.isoformat(),
+                        'timestamp': record.timestamp,  # Return datetime object, not ISO string
                         'heart_rate': record.heart_rate,
                         'spo2': record.spo2,
                         'temperature': record.temperature,
                         'systolic_bp': record.systolic_bp,
                         'diastolic_bp': record.diastolic_bp,
+                        # Alias fields for history_screen.py compatibility
+                        'blood_pressure_systolic': record.systolic_bp,
+                        'blood_pressure_diastolic': record.diastolic_bp,
                         'mean_arterial_pressure': record.mean_arterial_pressure,
                         'sensor_data': record.sensor_data,
                         'data_quality': record.data_quality,
                         'measurement_context': record.measurement_context
                     })
                 
+                self.logger.info(f"Returning {len(result)} health records (device_id={device_id}, patient_id={patient_id})")
                 return result
                 
         except Exception as e:
-            self.logger.error(f"Error getting health records: {e}")
+            self.logger.error(f"Error getting health records: {e}", exc_info=True)
             return []
     
     def get_latest_vitals(self, patient_id: str) -> Optional[Dict[str, Any]]:

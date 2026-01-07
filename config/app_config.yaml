@@ -223,7 +223,7 @@ logging:
 sensors:
   blood_pressure:
     enabled: true
-    inflate_target_mmhg: 190
+    inflate_target_mmhg: 180  # Reduced from 200 to avoid ADC saturation (offset too high)
     deflate_rate_mmhg_s: 3.0
     max_pressure_mmhg: 200
     pump_gpio: 26
@@ -235,9 +235,9 @@ sensors:
       mode: 10sps
       read_timeout_ms: 500
       calibration:
-        offset_counts: 1300885
-        slope_mmhg_per_count: 3.529226775615232e-05 #3.5765743256e-05 
-        adc_inverted: false
+        offset_counts: 992445  # Updated from connection-quality test (100 samples, std~460)
+        slope_mmhg_per_count: 3.4e-05  # TEMPORARY: adjust after bp_calib_tool.py
+        adc_inverted: false  # HX710B output not inverted
     algorithm:
       sample_rate: 10.0
       bandpass_low: 0.5

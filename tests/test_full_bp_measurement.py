@@ -45,7 +45,7 @@ from src.sensors.blood_pressure_sensor import (
 # CẤU HÌNH CHUNG
 # ============================================================================
 GPIO_PUMP = 26          # Bơm (active HIGH)
-GPIO_VALVE = 16         # Van NO (LOW = mở, HIGH = đóng)
+GPIO_VALVE = 20         # Van NO (LOW = mở, HIGH = đóng)
 
 # Blood Pressure Sensor Configuration
 BP_CONFIG = {
@@ -62,9 +62,8 @@ BP_CONFIG = {
         'mode': '10sps',
         'read_timeout_ms': 1000,
         'calibration': {
-            'offset_counts': 1357387,
-            'slope_mmhg_per_count': 3.529226775615232e-05
-,
+            'offset_counts': 1078893,
+            'slope_mmhg_per_count': 3.5765743256e-05,
             'adc_inverted': False
         }
     },

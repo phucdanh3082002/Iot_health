@@ -695,7 +695,7 @@ class BPMeasurementScreen(Screen):
             bp_sensor = self.app_instance.sensors.get('BloodPressure')
             if not bp_sensor:
                 self.logger.error("BloodPressure sensor not available")
-                self._speak_scenario(ScenarioID.SENSOR_FAILURE)
+                self._speak_scenario(ScenarioID.SENSOR_FAILURE, sensor="huyết áp")
                 return
             
             if not self.app_instance.ensure_sensor_started('BloodPressure'):
@@ -862,11 +862,24 @@ class BPMeasurementScreen(Screen):
             # Display results với màu động
             self._display_results(result)
             
-            # TTS announcement
+            # TTS announcement với health warnings
             sys_int = int(round(result.systolic))
             dia_int = int(round(result.diastolic))
             map_int = int(round(result.map_value))
-            self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int, map=map_int)
+            
+            # Determine appropriate TTS based on BP category
+            if sys_int >= 180 or dia_int >= 120:
+                # Hypertensive crisis - CRITICAL
+                self._speak_scenario(ScenarioID.BP_HYPERTENSIVE_CRISIS, sys=sys_int, dia=dia_int)
+            elif sys_int >= 140 or dia_int >= 90:
+                # Stage 2 Hypertension - WARNING
+                self._speak_scenario(ScenarioID.BP_HYPERTENSION, sys=sys_int, dia=dia_int)
+            elif sys_int < 90 or dia_int < 60:
+                # Hypotension - WARNING
+                self._speak_scenario(ScenarioID.BP_HYPOTENSION, sys=sys_int, dia=dia_int)
+            else:
+                # Normal result with MAP
+                self._speak_scenario(ScenarioID.BP_RESULT, sys=sys_int, dia=dia_int, map=map_int)
             
             # Update UI state với styling mới
             self.start_btn.text = "ĐO LẠI"
@@ -884,6 +897,8 @@ class BPMeasurementScreen(Screen):
             
         except Exception as e:
             self.logger.error(f"Error handling result on main thread: {e}", exc_info=True)
+            # TTS: Thông báo lỗi
+            self._speak_scenario(ScenarioID.SENSOR_FAILURE, sensor="huyết áp")
             # Schedule reset on main thread too
             Clock.schedule_once(lambda dt: self._reset_ui(), 0)
     
@@ -998,6 +1013,8 @@ class BPMeasurementScreen(Screen):
     def on_enter(self):
         """Called when screen entered"""
         self._reset_ui()
+        # TTS: Hướng dẫn chuẩn bị đo huyết áp (như TEMP_PREP)
+        Clock.schedule_once(lambda dt: self._speak_scenario(ScenarioID.MEASUREMENT_TIPS), 0.5)
         self.logger.info("Entered BP measurement screen")
     
     def on_leave(self):

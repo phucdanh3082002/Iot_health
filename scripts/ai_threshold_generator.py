@@ -205,13 +205,13 @@ class ThresholdGenerator:
                 if self._rule_matches_patient(rule['conditions'], patient_data):
                     vital_sign = rule['vital_sign']
                     conditions_parsed = json.loads(rule['conditions']) if isinstance(rule['conditions'], str) else rule['conditions']
-                    
+
                     # Identify condition type (chronic_diseases, age_range, smoking_status, etc.)
                     condition_type = list(conditions_parsed.keys())[0] if conditions_parsed else 'unknown'
-                    
+
                     # Create tracking key: vital_sign + condition_type
                     track_key = f"{vital_sign}_{condition_type}"
-                    
+
                     # Only apply if this is the FIRST rule for this vital_sign + condition_type
                     # (rules are sorted by priority ASC, so first match = highest priority)
                     if track_key not in vital_sign_condition_tracker:
@@ -322,6 +322,12 @@ class ThresholdGenerator:
     def _rule_matches_patient(self, conditions_json: str, patient_data: Dict[str, Any]) -> bool:
         """
         Check if a rule's conditions match patient data
+
+        NOTE: No translation needed anymore!
+        - Android app now uses SearchBox + Multi-select
+        - Stores English names directly (e.g., "Hypertension" not "tăng huyết áp")
+        - Medications, allergies, family history also stored in English
+        - Direct matching with database rules without translation
         """
         try:
             conditions = json.loads(conditions_json) if isinstance(conditions_json, str) else conditions_json
@@ -340,6 +346,8 @@ class ThresholdGenerator:
                     return False
 
             # Check chronic diseases
+            # NOTE: Android app stores English names directly (e.g., "Hypertension", "Diabetes")
+            # No translation needed - direct matching with database rules
             if 'chronic_diseases' in conditions:
                 patient_diseases = patient_data.get('chronic_diseases', [])
                 if isinstance(patient_diseases, str):
@@ -352,7 +360,7 @@ class ThresholdGenerator:
                 if patient_diseases is None:
                     patient_diseases = []
 
-                # Extract disease names (normalize to lowercase)
+                # Extract disease names (normalize to lowercase for case-insensitive matching)
                 disease_names = []
                 if isinstance(patient_diseases, list):
                     for disease in patient_diseases:
@@ -361,15 +369,21 @@ class ThresholdGenerator:
                             if disease_name:
                                 disease_names.append(disease_name)
                         elif disease:  # Non-empty string
-                            disease_names.append(str(disease).strip().lower())
+                            disease_name = str(disease).strip().lower()
+                            disease_names.append(disease_name)
 
-                # Check if any required disease matches (case-insensitive, exact match)
+                # Check if ALL required diseases match (rule requires complete match)
+                # For example: Rule needs "Diabetes + Hypertension" = patient must have BOTH
                 required_diseases = conditions.get('chronic_diseases', [])
                 required_diseases_lower = [req.strip().lower() for req in required_diseases]
-                if required_diseases and not any(req in disease_names for req in required_diseases_lower):
-                    return False
+                if required_diseases:
+                    # Ensure patient has ALL required diseases
+                    if not all(req in disease_names for req in required_diseases_lower):
+                        return False  # Patient missing at least one required disease
 
             # Check medications (CRITICAL: rules requiring specific drugs must validate presence)
+            # NOTE: Android app stores English names directly (e.g., "Metoprolol", "Aspirin")
+            # No translation needed - direct matching with database rules
             if 'medications' in conditions:
                 patient_meds = patient_data.get('medications', [])
                 if isinstance(patient_meds, str):
@@ -381,7 +395,7 @@ class ThresholdGenerator:
                 if patient_meds is None:
                     patient_meds = []
 
-                # Extract medication names (normalize to lowercase)
+                # Extract medication names (normalize to lowercase for case-insensitive matching)
                 med_names = []
                 if isinstance(patient_meds, list):
                     for med in patient_meds:
@@ -390,13 +404,23 @@ class ThresholdGenerator:
                             if med_name:
                                 med_names.append(med_name)
                         elif med:
-                            med_names.append(str(med).strip().lower())
+                            med_name = str(med).strip().lower()
+                            med_names.append(med_name)
 
                 # Check if any required medication matches
                 required_meds = conditions.get('medications', [])
                 required_meds_lower = [req.strip().lower() for req in required_meds]
                 if required_meds and not any(req in med_names for req in required_meds_lower):
                     return False  # Rule requires medication but patient doesn't have it
+
+            # Check BMI range
+            if 'bmi_range' in conditions:
+                bmi = self._calculate_bmi(patient_data)
+                if bmi is None:
+                    return False  # Rule requires BMI but patient data doesn't have height/weight
+                min_bmi, max_bmi = conditions['bmi_range']
+                if not (min_bmi <= bmi <= max_bmi):
+                    return False
 
             # Check lifestyle factors
             if 'smoking_status' in conditions:
@@ -424,10 +448,10 @@ class ThresholdGenerator:
                         patient_conditions = json.loads(patient_conditions)
                     except (json.JSONDecodeError, TypeError):
                         patient_conditions = []
-                
+
                 if patient_conditions is None:
                     patient_conditions = []
-                
+
                 # Normalize to lowercase list
                 condition_names = []
                 if isinstance(patient_conditions, list):
@@ -438,7 +462,7 @@ class ThresholdGenerator:
                                 condition_names.append(cond_name)
                         elif cond:
                             condition_names.append(str(cond).strip().lower())
-                
+
                 # Check if any required condition matches
                 required_conditions = conditions.get('medical_conditions', [])
                 required_conditions_lower = [req.strip().lower() for req in required_conditions]
@@ -453,10 +477,10 @@ class ThresholdGenerator:
                         patient_risk_factors = json.loads(patient_risk_factors)
                     except (json.JSONDecodeError, TypeError):
                         patient_risk_factors = []
-                
+
                 if patient_risk_factors is None:
                     patient_risk_factors = []
-                
+
                 # Normalize to lowercase list
                 risk_factor_names = []
                 if isinstance(patient_risk_factors, list):
@@ -467,12 +491,44 @@ class ThresholdGenerator:
                                 risk_factor_names.append(risk_name)
                         elif risk:
                             risk_factor_names.append(str(risk).strip().lower())
-                
+
                 # Check if any required risk factor matches
                 required_risks = conditions.get('risk_factors', [])
                 required_risks_lower = [req.strip().lower() for req in required_risks]
                 if required_risks and not any(req in risk_factor_names for req in required_risks_lower):
                     return False
+
+            # Check allergies (CRITICAL for anaphylaxis risk monitoring)
+            # NOTE: Android app stores English names directly (e.g., "Penicillin", "Shellfish")
+            # No translation needed - direct matching with database rules
+            if 'allergies' in conditions:
+                patient_allergies = patient_data.get('allergies', [])
+                if isinstance(patient_allergies, str):
+                    try:
+                        patient_allergies = json.loads(patient_allergies)
+                    except (json.JSONDecodeError, TypeError):
+                        patient_allergies = []
+
+                if patient_allergies is None:
+                    patient_allergies = []
+
+                # Extract allergy names (normalize to lowercase for case-insensitive matching)
+                allergy_names = []
+                if isinstance(patient_allergies, list):
+                    for allergy in patient_allergies:
+                        if isinstance(allergy, dict):
+                            allergy_name = allergy.get('name', '').strip().lower()
+                            if allergy_name:
+                                allergy_names.append(allergy_name)
+                        elif allergy:
+                            allergy_name = str(allergy).strip().lower()
+                            allergy_names.append(allergy_name)
+
+                # Check if any required allergy matches
+                required_allergies = conditions.get('allergies', [])
+                required_allergies_lower = [req.strip().lower() for req in required_allergies]
+                if required_allergies and not any(req in allergy_names for req in required_allergies_lower):
+                    return False  # Rule requires allergy but patient doesn't have it
 
             return True
 
@@ -510,7 +566,7 @@ Generate personalized vital sign thresholds for the following patient following 
    - Normal: 60-100 BPM (adults at rest, measured after 5 min rest)
    - Bradycardia: <60 BPM; Tachycardia: >100 BPM
    - Critical: <40 BPM (severe bradycardia) or >120 BPM (severe tachycardia)
-   
+
    **CRITICAL ADJUSTMENTS:**
      * Beta-blockers (metoprolol, atenolol, carvedilol) + Digoxin: LOWER max_normal by 15-20 BPM (additive effect)
      * Beta-blockers + CCB (verapamil/diltiazem): HIGH RISK - LOWER by 15-20 BPM, RAISE min_critical to 45 BPM (severe bradycardia risk per ESC 2021)
@@ -525,7 +581,7 @@ Generate personalized vital sign thresholds for the following patient following 
    - Normal: 95-100% (healthy adults, sea level)
    - Mild hypoxemia: 90-94%; Moderate: 85-89%; Severe: <85%
    - Critical: <85% (requires immediate intervention)
-   
+
    **CRITICAL ADJUSTMENTS:**
      * COPD (all stages): ACCEPT 88-92% as TARGET range (BTS 2017 - avoid hyperoxia-induced hypercapnia)
      * Carbon Monoxide Poisoning: SpO2 may appear NORMAL (pulse oximeter cannot distinguish COHb - use arterial blood gas)
@@ -553,9 +609,9 @@ Generate personalized vital sign thresholds for the following patient following 
    - STAGE 1 HYPERTENSION: 130-139 mmHg OR Diastolic 80-89 mmHg
    - STAGE 2 HYPERTENSION: ≥140 mmHg OR Diastolic ≥90 mmHg
    - SEVERE HYPERTENSION: >180 mmHg (without symptoms - call healthcare professional immediately)
-   - HYPERTENSIVE EMERGENCY: >180 mmHg WITH SYMPTOMS (chest pain, shortness of breath, back pain, 
+   - HYPERTENSIVE EMERGENCY: >180 mmHg WITH SYMPTOMS (chest pain, shortness of breath, back pain,
      numbness, weakness, vision changes, difficulty speaking - CALL 911 IMMEDIATELY)
-   
+
    **CRITICAL ADJUSTMENTS:**
      * Diabetes + Hypertension: TARGET <130/80 mmHg (ADA 2024 - 20-30% CVD risk reduction, microvascular protection)
      * CKD Stages 3-5: TARGET <130/80 mmHg (KDIGO 2021 - slow GFR decline, reduce proteinuria)
@@ -572,7 +628,7 @@ Generate personalized vital sign thresholds for the following patient following 
    - STAGE 2 HYPERTENSION: ≥90 mmHg
    - SEVERE HYPERTENSION: >120 mmHg (without symptoms - call healthcare professional)
    - HYPERTENSIVE EMERGENCY: >120 mmHg WITH SYMPTOMS → CALL 911
-   
+
    **CRITICAL ADJUSTMENTS:**
      * Diabetes: TARGET <80 mmHg (ADA 2024 - microvascular protection)
      * CKD Stages 3-5: TARGET <80 mmHg (KDIGO 2021 - slow progression)
@@ -1005,7 +1061,7 @@ Verify rule-based thresholds are within acceptable medical ranges:
                     disease_names = [d if isinstance(d, str) else d.get('name', '') for d in parsed]
             except:
                 disease_names = []
-        
+
         # Normalize medications to list of strings
         med_names = []
         if isinstance(medications, list):

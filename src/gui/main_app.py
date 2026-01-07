@@ -1098,10 +1098,12 @@ class HealthMonitorApp(MDApp):
         """Fetch historical measurement records from database or fallback storage."""
         # Device-centric: resolve patient_id from cloud database
         patient_id = self._resolve_patient_id_from_device()
+        
+        self.logger.debug(f"get_history_records called: patient_id={patient_id}, device_id={self.device_id}, start_time={start_time}")
 
         if self.database and hasattr(self.database, 'get_health_records'):
             try:
-                # Device-centric: pass device_id as fallback if patient_id is None
+                # Device-centric: pass device_id as PRIMARY, patient_id as secondary
                 records = self.database.get_health_records(
                     patient_id=patient_id,
                     device_id=self.device_id,
@@ -1109,27 +1111,40 @@ class HealthMonitorApp(MDApp):
                     end_time=end_time,
                     limit=limit,
                 )
+                self.logger.debug(f"DatabaseManager returned {len(records) if records else 0} records")
                 if records:
                     return records
+                else:
+                    self.logger.warning("DatabaseManager returned 0 records, trying fallback...")
             except Exception as exc:
-                self.logger.error("Database history retrieval failed: %s", exc)
+                self.logger.error("Database history retrieval failed: %s", exc, exc_info=True)
 
-        db_path = project_root / "data" / "vitals.db"
+        db_path = project_root / "data" / "health_monitor.db"
         if not db_path.exists():
             return []
 
-        query = "SELECT ts, hr, spo2, temp, alert FROM vitals"
+        # Query schema health_records (không phải vitals cũ)
+        query = "SELECT id, timestamp, heart_rate, spo2, temperature, systolic_bp, diastolic_bp FROM health_records"
         filters: List[str] = []
         params: List[Any] = []
+        
+        # Device-centric: filter by device_id if patient_id is None
+        if patient_id:
+            filters.append("patient_id = ?")
+            params.append(patient_id)
+        elif self.device_id:
+            filters.append("device_id = ?")
+            params.append(self.device_id)
+            
         if start_time:
-            filters.append("ts >= ?")
+            filters.append("timestamp >= ?")
             params.append(start_time.isoformat())
         if end_time:
-            filters.append("ts <= ?")
+            filters.append("timestamp <= ?")
             params.append(end_time.isoformat())
         if filters:
             query += " WHERE " + " AND ".join(filters)
-        query += " ORDER BY ts DESC LIMIT ?"
+        query += " ORDER BY timestamp DESC LIMIT ?"
         params.append(int(limit))
 
         results: List[Dict[str, Any]] = []
@@ -1140,16 +1155,18 @@ class HealthMonitorApp(MDApp):
                     cursor.execute(query, params)
                     for row in cursor.fetchall():
                         try:
-                            ts = datetime.fromisoformat(row["ts"].strip()) if row["ts"] else None
-                        except ValueError:
+                            ts = datetime.fromisoformat(row["timestamp"].strip()) if row["timestamp"] else None
+                        except (ValueError, AttributeError):
                             ts = None
                         results.append(
                             {
+                                'id': row['id'],
                                 'timestamp': ts,
-                                'heart_rate': row['hr'],
+                                'heart_rate': row['heart_rate'],
                                 'spo2': row['spo2'],
-                                'temperature': row['temp'],
-                                'alert': row['alert'],
+                                'temperature': row['temperature'],
+                                'blood_pressure_systolic': row['systolic_bp'],
+                                'blood_pressure_diastolic': row['diastolic_bp'],
                             }
                         )
         except Exception as exc:
@@ -1182,6 +1199,7 @@ class HealthMonitorApp(MDApp):
                 return None  # Don't save invalid data
             
             # ============================================================
+            # ============================================================
             # Ưu tiên dùng DatabaseManager nếu có
             # ============================================================
             if self.database and hasattr(self.database, 'save_health_record'):
@@ -1193,12 +1211,16 @@ class HealthMonitorApp(MDApp):
                     # Chuẩn bị data theo format của DatabaseManager.save_health_record()
                     timestamp_value = measurement_data.get('timestamp', time.time())
                     # Convert timestamp to datetime object if needed
+                    # IMPORTANT: Use naive datetime (no timezone) for consistency with queries
                     if isinstance(timestamp_value, (int, float)):
                         timestamp_dt = datetime.fromtimestamp(timestamp_value)
                     elif isinstance(timestamp_value, datetime):
-                        timestamp_dt = timestamp_value
+                        # Remove timezone info if present to keep naive datetime
+                        timestamp_dt = timestamp_value.replace(tzinfo=None) if timestamp_value.tzinfo else timestamp_value
                     else:
                         timestamp_dt = datetime.now()
+                    
+                    self.logger.debug(f"Saving with timestamp: {timestamp_dt} (type: {type(timestamp_dt)})")
                     
                     health_data = {
                         'patient_id': patient_id,  # REQUIRED by save_health_record()
@@ -1300,11 +1322,11 @@ class HealthMonitorApp(MDApp):
                         
                 except Exception as exc:
                     self.logger.error(f"DatabaseManager save failed: {exc}", exc_info=True)
-                    self.logger.warning("Falling back to local vitals.db")
+                    self.logger.warning("Falling back to local health_monitor.db")
 
             # Fallback về SQLite cục bộ nếu DatabaseManager fail hoặc không có
             if self._save_to_local_vitals(measurement_data):
-                self.logger.info("Measurement saved to local vitals.db (fallback)")
+                self.logger.info("Measurement saved to local health_monitor.db (fallback)")
                 self._show_success_notification("Đã lưu kết quả (local)", duration=2)
             else:
                 self.logger.error("Unable to persist measurement data to any database")
@@ -1820,7 +1842,7 @@ class HealthMonitorApp(MDApp):
             self.logger.error(f"Error checking thresholds and creating alerts: {e}", exc_info=True)
 
     def _save_to_local_vitals(self, measurement_data: Dict[str, Any]) -> bool:
-        db_path = project_root / "data" / "vitals.db"
+        db_path = project_root / "data" / "health_monitor.db"
         try:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             timestamp = measurement_data.get('timestamp')

@@ -49,6 +49,36 @@ def _iter_static_scenarios() -> Tuple[ScenarioID, ...]:
     return tuple(static_ids)
 
 
+def _iter_common_bp_scenarios() -> Iterable[Tuple[ScenarioID, dict]]:
+    """Yield common BP test cases for preloading (instead of all combinations)."""
+    # Common BP readings for Vietnamese patients (age 60+)
+    common_readings = [
+        # Normal
+        (110, 70), (120, 80),
+        # Elevated
+        (130, 85),
+        # Stage 1 Hypertension (thường gặp ở người già VN)
+        (140, 90), (150, 95),
+        # Stage 2 Hypertension
+        (160, 100), (170, 105),
+        # Hypertensive Crisis
+        (180, 120), (200, 130),
+        # Hypotension
+        (90, 60), (100, 65),
+    ]
+    
+    for sys, dia in common_readings:
+        # BP_HYPERTENSION
+        if sys >= 140:
+            yield (ScenarioID.BP_HYPERTENSION, {"sys": sys, "dia": dia})
+        # BP_HYPOTENSION
+        elif sys < 90:
+            yield (ScenarioID.BP_HYPOTENSION, {"sys": sys, "dia": dia})
+        # BP_HYPERTENSIVE_CRISIS (>180/>120)
+        if sys >= 180 or dia >= 120:
+            yield (ScenarioID.BP_HYPERTENSIVE_CRISIS, {"sys": sys, "dia": dia})
+
+
 def export_assets(output_dir: Path, locale: str | None = None, volume: int | None = None) -> None:
     audio_cfg = _load_audio_config()
     piper_cfg = audio_cfg.get("piper", {}) or {}
@@ -85,6 +115,14 @@ def export_assets(output_dir: Path, locale: str | None = None, volume: int | Non
         static_scenarios = _iter_static_scenarios()
         LOGGER.info("Preloading %d static scenarios", len(static_scenarios))
         tts_manager.preload_scenarios(static_scenarios, locale=default_locale, volume=default_volume)
+
+        # Preload common BP scenarios with parameters
+        LOGGER.info("Preloading common BP scenarios with parameters")
+        for scenario_id, params in _iter_common_bp_scenarios():
+            try:
+                tts_manager.speak_scenario(scenario_id, **params)
+            except Exception as e:
+                LOGGER.warning(f"Failed to preload {scenario_id} with {params}: {e}")
 
         # Wait for worker queue to finish processing
         tts_manager._queue.join()  # type: ignore[attr-defined]
