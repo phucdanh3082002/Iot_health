@@ -3,16 +3,19 @@ Settings Screen
 Screen cho cài đặt hệ thống và preferences - Material Design style
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
+import subprocess
+import threading
 from kivy.uix.screenmanager import Screen
 from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
 from kivy.core.window import Window
+from kivy.clock import Clock
 
 from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.button import MDRectangleFlatIconButton, MDFlatButton
+from kivymd.uix.button import MDRectangleFlatIconButton, MDFlatButton, MDRaisedButton, MDFillRoundFlatIconButton
 from kivymd.uix.card import MDCard
 from kivymd.uix.label import MDLabel, MDIcon
 from kivymd.uix.slider import MDSlider
@@ -21,6 +24,7 @@ from kivymd.uix.selectioncontrol import MDSwitch
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.toolbar import MDTopAppBar
 from kivymd.uix.progressbar import MDProgressBar
+from kivymd.uix.list import MDList, OneLineAvatarIconListItem, IconLeftWidget, IconRightWidget
 
 
 # Medical-themed color scheme (đồng nhất với các màn hình khác)
@@ -29,6 +33,7 @@ MED_CARD_BG = (0.07, 0.26, 0.36, 0.98)
 MED_CARD_ACCENT = (0.0, 0.68, 0.57, 1)
 MED_PRIMARY = (0.12, 0.55, 0.76, 1)
 MED_WARNING = (0.96, 0.4, 0.3, 1)
+MED_SUCCESS = (0.2, 0.78, 0.35, 1)
 TEXT_PRIMARY = (1, 1, 1, 1)
 TEXT_MUTED = (0.78, 0.88, 0.95, 1)
 
@@ -210,6 +215,7 @@ class SettingsScreen(Screen):
         content.bind(minimum_height=content.setter('height'))
         
         # Settings sections
+        self._create_wifi_settings(content)
         self._create_sensor_settings(content)
         self._create_display_settings(content)
         self._create_alert_settings(content)
@@ -240,6 +246,51 @@ class SettingsScreen(Screen):
             height=dp(50),
         )
         parent.add_widget(toolbar)
+    
+    def _create_wifi_settings(self, parent):
+        """Create WiFi configuration section - ĐẦU TIÊN."""
+        wifi_section = SettingSection(
+            'CẤU HÌNH WIFI',
+            icon='wifi',
+            size_hint_y=None,
+        )
+        
+        # WiFi status
+        self._wifi_status_label = MDLabel(
+            text="Đang kiểm tra...",
+            font_style='Body2',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+            halign='left',
+        )
+        wifi_section.content.add_widget(self._wifi_status_label)
+        
+        # Scan button
+        scan_btn = MDFillRoundFlatIconButton(
+            text='QUÉT WIFI',
+            icon='wifi-sync',
+            md_bg_color=MED_CARD_ACCENT,
+            text_color=TEXT_PRIMARY,
+            size_hint_y=None,
+            height=dp(48),
+            pos_hint={'center_x': 0.5},
+        )
+        scan_btn.bind(on_release=self._on_scan_wifi_pressed)
+        wifi_section.content.add_widget(scan_btn)
+        
+        # WiFi list container (initially empty)
+        self._wifi_list_container = MDBoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=0,
+        )
+        wifi_section.content.add_widget(self._wifi_list_container)
+        
+        wifi_section.height = dp(28 + 10 + 120 + 10)  # header + padding + content + padding
+        parent.add_widget(wifi_section)
+        
+        # Update status on enter
+        Clock.schedule_once(lambda dt: self._update_wifi_status(), 0.5)
     
     def _create_sensor_settings(self, parent):
         """Create sensor configuration section."""
@@ -320,7 +371,7 @@ class SettingsScreen(Screen):
         """Create display configuration section."""
         display_section = SettingSection(
             'HIỂN THỊ',
-            icon='monitor-dashboard',
+            icon='monitor',
             size_hint_y=None,
         )
         
@@ -380,7 +431,7 @@ class SettingsScreen(Screen):
         """Create alert configuration section."""
         alert_section = SettingSection(
             'CẢNH BÁO',
-            icon='alert-circle',
+            icon='alert',
             size_hint_y=None,
         )
         
@@ -453,7 +504,7 @@ class SettingsScreen(Screen):
         """Create system configuration section."""
         system_section = SettingSection(
             'HỆ THỐNG',
-            icon='cog-outline',
+            icon='cog',
             size_hint_y=None,
         )
         
@@ -868,6 +919,297 @@ class SettingsScreen(Screen):
             self.reset_btn.disabled = False
         except Exception as e:
             self.logger.error(f"Error resetting action UI: {e}")
+    
+    # ------------------------------------------------------------------
+    # WiFi Management
+    # ------------------------------------------------------------------
+    
+    def _update_wifi_status(self):
+        """Update WiFi connection status"""
+        try:
+            # Get current WiFi status using nmcli
+            result = subprocess.run(
+                ['sudo', 'nmcli', '-t', '-f', 'ACTIVE,SSID,SIGNAL', 'device', 'wifi', 'list'],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                for line in lines:
+                    if line.startswith('yes:'):
+                        parts = line.split(':')
+                        ssid = parts[1] if len(parts) > 1 else "Unknown"
+                        signal = parts[2] if len(parts) > 2 else "0"
+                        self._wifi_status_label.text = f"Đã kết nối: {ssid} ({signal}%)"
+                        self._wifi_status_label.text_color = MED_SUCCESS
+                        return
+                
+                self._wifi_status_label.text = "Chưa kết nối WiFi"
+                self._wifi_status_label.text_color = MED_WARNING
+            else:
+                self._wifi_status_label.text = "Không thể kiểm tra WiFi"
+                self._wifi_status_label.text_color = TEXT_MUTED
+                
+        except Exception as e:
+            self.logger.error(f"Error updating WiFi status: {e}")
+            self._wifi_status_label.text = f"Lỗi: {e}"
+            self._wifi_status_label.text_color = MED_WARNING
+    
+    def _on_scan_wifi_pressed(self, instance):
+        """Handle scan WiFi button press"""
+        self.logger.info("Scan WiFi button pressed")
+        instance.disabled = True
+        instance.text = "ĐANG QUÉT..."
+        
+        def scan_thread():
+            networks = self._scan_wifi_networks()
+            Clock.schedule_once(lambda dt: self._on_wifi_scan_complete(networks, instance))
+        
+        threading.Thread(target=scan_thread, daemon=True).start()
+    
+    def _scan_wifi_networks(self) -> List[Dict[str, Any]]:
+        """Scan WiFi networks using nmcli"""
+        try:
+            # Rescan (cần sudo)
+            subprocess.run(['sudo', 'nmcli', 'device', 'wifi', 'rescan'], timeout=10, check=False)
+            
+            # Get list
+            result = subprocess.run(
+                ['sudo', 'nmcli', '-t', '-f', 'SSID,SIGNAL,SECURITY', 'device', 'wifi', 'list'],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            if result.returncode != 0:
+                return []
+            
+            networks = []
+            for line in result.stdout.strip().split('\n'):
+                parts = line.split(':')
+                if len(parts) >= 3:
+                    ssid = parts[0].strip()
+                    signal = int(parts[1]) if parts[1].isdigit() else 0
+                    security = parts[2].strip()
+                    
+                    if ssid and ssid != '--':
+                        networks.append({
+                            'ssid': ssid,
+                            'signal': signal,
+                            'security': 'WPA' if security else 'Open'
+                        })
+            
+            # Sort by signal strength
+            networks.sort(key=lambda x: x['signal'], reverse=True)
+            return networks
+            
+        except Exception as e:
+            self.logger.error(f"Error scanning WiFi: {e}")
+            return []
+    
+    def _on_wifi_scan_complete(self, networks: List[Dict[str, Any]], button):
+        """Handle WiFi scan complete"""
+        button.disabled = False
+        button.text = "QUÉT WIFI"
+        
+        # Clear old list
+        self._wifi_list_container.clear_widgets()
+        
+        if not networks:
+            no_wifi_label = MDLabel(
+                text="Không tìm thấy mạng WiFi",
+                font_style='Caption',
+                theme_text_color='Custom',
+                text_color=TEXT_MUTED,
+                halign='center',
+                size_hint_y=None,
+                height=dp(40),
+            )
+            self._wifi_list_container.add_widget(no_wifi_label)
+            self._wifi_list_container.height = dp(40)
+            return
+        
+        # Add networks to list
+        for network in networks[:10]:  # Show top 10
+            item = self._create_wifi_item(network)
+            self._wifi_list_container.add_widget(item)
+        
+        self._wifi_list_container.height = len(networks[:10]) * dp(56)
+    
+    def _create_wifi_item(self, network: Dict[str, Any]) -> MDCard:
+        """Create WiFi network item"""
+        card = MDCard(
+            orientation='horizontal',
+            size_hint_y=None,
+            height=dp(52),
+            padding=dp(8),
+            radius=[dp(12)],
+            md_bg_color=(0.1, 0.3, 0.4, 0.5),
+            ripple_behavior=True,
+        )
+        
+        # Icon
+        icon = MDIcon(
+            icon='wifi' if network['signal'] > 50 else 'wifi-strength-2',
+            theme_text_color='Custom',
+            text_color=MED_SUCCESS if network['signal'] > 50 else TEXT_MUTED,
+            size_hint=(None, None),
+            size=(dp(24), dp(24)),
+        )
+        card.add_widget(icon)
+        
+        # Network info
+        info_box = MDBoxLayout(orientation='vertical', padding=(dp(8), 0))
+        
+        ssid_label = MDLabel(
+            text=network['ssid'],
+            font_style='Body1',
+            theme_text_color='Custom',
+            text_color=TEXT_PRIMARY,
+            bold=True,
+        )
+        info_box.add_widget(ssid_label)
+        
+        detail_label = MDLabel(
+            text=f"{network['signal']}% | {'Bảo mật' if network['security'] != 'Open' else 'Mở'}",
+            font_style='Caption',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        info_box.add_widget(detail_label)
+        
+        card.add_widget(info_box)
+        
+        # Bind click
+        card.bind(on_release=lambda x: self._on_wifi_item_clicked(network))
+        
+        return card
+    
+    def _on_wifi_item_clicked(self, network: Dict[str, Any]):
+        """Handle WiFi item click - show password dialog"""
+        self.logger.info(f"WiFi clicked: {network['ssid']}")
+        
+        if network['security'] == 'Open':
+            # Connect directly
+            self._connect_to_wifi(network['ssid'], '')
+        else:
+            # Show password dialog
+            self._show_wifi_password_dialog(network)
+    
+    def _show_wifi_password_dialog(self, network: Dict[str, Any]):
+        """Show password input dialog with virtual keyboard"""
+        password_field = MDTextField(
+            hint_text="Mật khẩu WiFi (tối thiểu 8 ký tự)",
+            password=True,
+            size_hint_x=0.9,
+            pos_hint={'center_x': 0.5},
+            input_type='text',
+            keyboard_mode='managed',  # Enable virtual keyboard
+        )
+        
+        # Force show keyboard when dialog opens
+        def show_keyboard(dt):
+            password_field.focus = True
+        
+        dialog = MDDialog(
+            title=f"Kết nối: {network['ssid']}",
+            type="custom",
+            content_cls=password_field,
+            buttons=[
+                MDFlatButton(
+                    text="HỦY",
+                    on_release=lambda x: dialog.dismiss()
+                ),
+                MDRaisedButton(
+                    text="KẾT NỐI",
+                    md_bg_color=MED_CARD_ACCENT,
+                    on_release=lambda x: self._on_wifi_password_submit(network['ssid'], password_field.text, dialog)
+                ),
+            ],
+        )
+        dialog.open()
+        
+        # Show keyboard after dialog is fully rendered
+        Clock.schedule_once(show_keyboard, 0.5)
+    
+    def _on_wifi_password_submit(self, ssid: str, password: str, dialog):
+        """Handle password submit"""
+        dialog.dismiss()
+        
+        if len(password) < 8:
+            self._show_error_dialog("Mật khẩu phải có ít nhất 8 ký tự")
+            return
+        
+        self._connect_to_wifi(ssid, password)
+    
+    def _connect_to_wifi(self, ssid: str, password: str):
+        """Connect to WiFi network"""
+        self.logger.info(f"Connecting to WiFi: {ssid}")
+        
+        # Show loading
+        self._wifi_status_label.text = f"Đang kết nối {ssid}..."
+        self._wifi_status_label.text_color = TEXT_MUTED
+        
+        def connect_thread():
+            try:
+                # Connect using nmcli
+                cmd = ['sudo', 'nmcli', 'device', 'wifi', 'connect', ssid]
+                if password:
+                    cmd.extend(['password', password])
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    Clock.schedule_once(lambda dt: self._on_wifi_connect_success(ssid))
+                else:
+                    error_msg = result.stderr.strip() if result.stderr else "Không thể kết nối"
+                    Clock.schedule_once(lambda dt: self._on_wifi_connect_failed(error_msg))
+                    
+            except Exception as e:
+                Clock.schedule_once(lambda dt: self._on_wifi_connect_failed(str(e)))
+        
+        threading.Thread(target=connect_thread, daemon=True).start()
+    
+    def _on_wifi_connect_success(self, ssid: str):
+        """Handle WiFi connect success"""
+        self.logger.info(f"WiFi connected: {ssid}")
+        self._update_wifi_status()
+        self._show_success_dialog(f"Đã kết nối WiFi: {ssid}")
+    
+    def _on_wifi_connect_failed(self, error: str):
+        """Handle WiFi connect failed"""
+        self.logger.error(f"WiFi connect failed: {error}")
+        self._wifi_status_label.text = " Kết nối thất bại"
+        self._wifi_status_label.text_color = MED_WARNING
+        self._show_error_dialog(f"Kết nối thất bại: {error}")
+    
+    def _show_success_dialog(self, message: str):
+        """Show success dialog"""
+        dialog = MDDialog(
+            title="Thành công",
+            text=message,
+            buttons=[
+                MDRaisedButton(
+                    text="OK",
+                    md_bg_color=MED_SUCCESS,
+                    on_release=lambda x: dialog.dismiss()
+                ),
+            ],
+        )
+        dialog.open()
+    
+    def _show_error_dialog(self, message: str):
+        """Show error dialog"""
+        dialog = MDDialog(
+            title="Lỗi",
+            text=message,
+            buttons=[
+                MDRaisedButton(
+                    text="ĐÓNG",
+                    md_bg_color=MED_WARNING,
+                    on_release=lambda x: dialog.dismiss()
+                ),
+            ],
+        )
+        dialog.open()
     
     # ------------------------------------------------------------------
     # Screen Lifecycle
