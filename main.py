@@ -176,13 +176,16 @@ class HealthMonitorSystem:
             self.logger.info("🔬 Initializing sensors...")
             self._initialize_sensors()
             
-            # 7. Initialize alert system
+            # 7. Initialize alert system (KHÔNG tự động check vital signs)
             self.logger.info("🚨 Initializing alert system...")
             self.alert_system = AlertSystem(
                 config=self.config,
-                mqtt_client=self.mqtt_client
+                tts_manager=self.tts_manager,  # Truyền TTS manager để có thể control
+                mqtt_client=self.mqtt_client,
+                database=self.database  # Truyền database để check thresholds
             )
-            self.logger.info("✅ Alert system initialized")
+            # KHÔNG tự động start monitoring - chỉ alert khi user đo
+            self.logger.info("✅ Alert system initialized (manual trigger only)")
             
             # 8. Initialize GUI
             self.logger.info("🖥️  Initializing GUI application...")

@@ -103,7 +103,7 @@ Protocol: MQTT v3.1.1
 - Không tạo file documents tóm tắt , tóm tắt trong câu trả lời
 - Không tạo file .md mới nếu chưa được yêu cầu
 - Không tạo test file mới nếu chưa được yêu cầu
-
+- không tạo test script 
 ### Project Structure
 - Không đổi cấu trúc thư mục khi chỉ sửa code
 - Không đổi API/schema (MQTT topics, REST endpoints, DB) nếu chưa được hỏi

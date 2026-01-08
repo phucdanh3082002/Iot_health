@@ -267,6 +267,9 @@ class ScenarioID(str, Enum):
     HR_RESULT = "hr_result"
     HR_SIGNAL_WEAK = "hr_signal_weak"
     
+    # Continuous Monitoring
+    CONTINUOUS_MONITOR_START = "continuous_monitor_start"
+    
     # Temperature
     TEMP_PREP = "temp_prep"
     TEMP_MEASURING = "temp_measuring"
@@ -434,6 +437,11 @@ SCENARIO_LIBRARY: Dict[ScenarioID, ScenarioTemplate] = {
         template_vi="Tín hiệu yếu, vui lòng giữ ngón tay áp sát cảm biến.",
         template_en="Weak signal detected, please press your finger firmly on the sensor.",
         cooldown_seconds=8.0,
+    ),
+    ScenarioID.CONTINUOUS_MONITOR_START: ScenarioTemplate(
+        template_vi="Ngồi hoặc nằm yên để tiến hành theo dõi.",
+        template_en="Sit or lie still to start continuous monitoring.",
+        cooldown_seconds=10.0,
     ),
     ScenarioID.TEMP_PREP: ScenarioTemplate(
         template_vi="Đưa cảm biến hồng ngoại lại gần trán, cách khoảng ba đến năm centimet.",

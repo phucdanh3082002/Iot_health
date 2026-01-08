@@ -108,12 +108,13 @@ class AlertSystem:
         
         # Settings
         self.audio_enabled = config.get('audio_enabled', True)
+        self.auto_alert_tts_enabled = False  # DISABLED: Tắt TTS tự động lúc startup, chỉ khi user trigger
         self.auto_reload_thresholds = config.get('threshold_management', {}).get('auto_reload', True)
         self.fallback_to_baseline = config.get('threshold_management', {}).get('fallback_to_baseline', True)
         self.running = False
         self.monitor_thread: Optional[threading.Thread] = None
         
-        self.logger.info("AlertSystem initialized with TTS support and dynamic thresholds")
+        self.logger.info("AlertSystem initialized (auto TTS alerts DISABLED by default)")
     
     # ============================================================
     # PATIENT THRESHOLD MANAGEMENT (AI-generated)
@@ -493,12 +494,15 @@ class AlertSystem:
                 except Exception as e:
                     self.logger.error(f"Failed to save alert to database: {e}")
             
-            # Play TTS alert
-            if self.tts_manager and self.audio_enabled:
+            # Play TTS alert - CHỈ phát khi auto_alert_tts_enabled = True
+            if self.tts_manager and self.audio_enabled and self.auto_alert_tts_enabled:
                 try:
                     self.tts_manager.speak_scenario(tts_scenario, **tts_params)
+                    self.logger.debug(f"TTS alert played: {tts_scenario}")
                 except Exception as e:
                     self.logger.error(f"Failed to play TTS alert: {e}")
+            elif not self.auto_alert_tts_enabled:
+                self.logger.debug(f"TTS alert suppressed (auto_alert_tts_enabled=False): {tts_scenario}")
             
             # Send MQTT alert
             if self.mqtt_client:

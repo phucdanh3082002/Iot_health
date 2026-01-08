@@ -1,6 +1,6 @@
 """
-Continuous Monitoring Screen - Màn hình Giám sát liên tục
-Giám sát HR/SpO2 realtime + BP tự động theo chu kỳ
+Continuous Monitoring Screen
+Màn hình giám sát liên tục cho HR/SpO2 realtime + BP tự động theo chu kỳ
 
 Thiết kế cho người già:
 - Chữ to, màu sắc rõ ràng
@@ -219,6 +219,9 @@ class ContinuousMonitorScreen(Screen):
         self.current_bp_dia: int = 0
         self.finger_detected: bool = False
         
+        # TTS lifecycle tracking
+        self._tts_announced = False
+        
         # Build UI
         self._build_layout()
     
@@ -252,65 +255,71 @@ class ContinuousMonitorScreen(Screen):
         self._bg_rect.pos = instance.pos
     
     def _create_header(self, parent):
-        """Header với title và back button - Font lớn hơn."""
-        header = MDCard(
+        """Create header card - sync style với temperature_screen."""
+        header_card = MDCard(
             orientation="horizontal",
-            md_bg_color=MED_PRIMARY,
-            radius=[dp(12)],
-            padding=(dp(6), dp(4)),
-            spacing=dp(8),
             size_hint_y=None,
-            height=dp(42),
+            height=dp(52),
+            padding=(dp(6), 0, dp(12), 0),
+            radius=[dp(18)],
+            md_bg_color=MED_PRIMARY,
         )
-        
+
         # Back button
         back_btn = MDIconButton(
             icon="arrow-left",
             theme_icon_color="Custom",
             icon_color=TEXT_PRIMARY,
             size_hint=(None, None),
-            size=(dp(32), dp(32)),
+            pos_hint={"center_y": 0.5},
         )
         back_btn.bind(on_release=self._on_back_pressed)
-        header.add_widget(back_btn)
-        
-        # Title với icon
-        title_box = MDBoxLayout(orientation="horizontal", spacing=dp(6))
-        
-        title_icon = MDIcon(
-            icon="monitor-dashboard",
-            theme_text_color="Custom",
-            text_color=MED_CARD_ACCENT,
+        header_card.add_widget(back_btn)
+
+        # Title box
+        title_box = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(1),
+            size_hint_x=1,
         )
-        title_icon.font_size = dp(20)
-        title_box.add_widget(title_icon)
-        
+
         title_label = MDLabel(
             text="GIÁM SÁT LIÊN TỤC",
-            font_style="Body1",
+            font_style="Subtitle1",
             theme_text_color="Custom",
             text_color=TEXT_PRIMARY,
-            bold=True,
-            valign="center",
+            halign="left",
         )
         title_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
         title_box.add_widget(title_label)
+
+        subtitle_label = MDLabel(
+            text="HR/SpO2 realtime • BP tự động mỗi 20 phút",
+            font_style="Caption",
+            theme_text_color="Custom",
+            text_color=TEXT_MUTED,
+            halign="left",
+        )
+        subtitle_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
+        title_box.add_widget(subtitle_label)
+
+        header_card.add_widget(title_box)
         
-        header.add_widget(title_box)
-        
-        # Status indicator
+        # Status indicator (bên phải)
         self.status_label = MDLabel(
             text="Sẵn sàng",
             font_style="Caption",
             theme_text_color="Custom",
             text_color=TEXT_MUTED,
             halign="right",
-            size_hint_x=0.35,
+            valign="center",
+            size_hint_x=None,
+            width=dp(80),
         )
         self.status_label.bind(size=lambda lbl, _: setattr(lbl, "text_size", lbl.size))
-        header.add_widget(self.status_label)
+        header_card.add_widget(self.status_label)
         
-        parent.add_widget(header)
+        parent.add_widget(header_card)
     
     def _create_vitals_display(self, parent):
         """Tạo khu vực hiển thị vital signs - Layout 2 cột với kích thước lớn hơn."""
@@ -496,14 +505,14 @@ class ContinuousMonitorScreen(Screen):
         return card
     
     def _create_bp_card(self) -> MDCard:
-        """Tạo card hiển thị BP với countdown - Kích thước lớn hơn."""
+        """Tạo card hiển thị BP với countdown."""
         card = MDCard(
             orientation="vertical",
             md_bg_color=(0.38, 0.22, 0.15, 0.95),
             radius=[dp(10)],
             padding=(dp(8), dp(5)),
             spacing=dp(3),
-            size_hint_y=0.45,
+            size_hint_y=0.55,
         )
         
         # Title row với countdown
@@ -700,8 +709,12 @@ class ContinuousMonitorScreen(Screen):
         
         self.logger.info(f"✓ Polling started: HR/SpO2@{1/HR_SPO2_POLL_INTERVAL:.0f}Hz, Waveform@{1/WAVEFORM_UPDATE_INTERVAL:.0f}Hz")
         
-        # TTS
-        self.app_instance._speak_scenario(ScenarioID.HR_PROMPT_FINGER)
+        # TTS - Chỉ announce 1 lần khi vào screen (flag được set trong on_enter)
+        # Không check flag ở đây để tránh lặp nếu _start_monitoring được gọi nhiều lần
+        if not self._tts_announced:
+            self.app_instance._speak_scenario(ScenarioID.CONTINUOUS_MONITOR_START)
+            self._tts_announced = True
+            self.logger.debug("✓ TTS announced: CONTINUOUS_MONITOR_START")
     
     def _stop_monitoring(self):
         """Dừng giám sát."""
@@ -1015,6 +1028,11 @@ class ContinuousMonitorScreen(Screen):
     def on_enter(self):
         """Khi vào màn hình - Tự động bắt đầu giám sát."""
         self.logger.info("Entering ContinuousMonitorScreen")
+        
+        # CRITICAL: Reset TTS flag ở đây để announce khi vào screen
+        # Flag sẽ được set True trong _start_monitoring sau khi TTS phát
+        self._tts_announced = False
+        
         # Reset displays
         self.waveform.clear()
         self.hr_card.value_label.text = "--"
@@ -1033,6 +1051,9 @@ class ContinuousMonitorScreen(Screen):
     def on_leave(self):
         """Khi rời màn hình - Dừng giám sát, tắt sensor và LED."""
         self.logger.info("Leaving ContinuousMonitorScreen")
+        
+        # KHÔNG reset TTS flag ở đây - sẽ reset trong on_enter khi vào lại
+        # Giữ flag = True để tránh TTS lặp nếu có sự kiện sau on_leave
         
         # Stop monitoring và cancel tất cả polling events
         self._stop_monitoring()

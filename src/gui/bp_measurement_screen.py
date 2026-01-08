@@ -88,6 +88,7 @@ class BPMeasurementScreen(Screen):
         # TTS state tracking (announce only once per state transition)
         self._inflate_announced = False
         self._deflate_announced = False
+        self._tts_on_enter_announced = False  # Tránh TTS lặp khi on_enter
         
         self._build_layout()
     
@@ -1001,6 +1002,7 @@ class BPMeasurementScreen(Screen):
         # Reset TTS announce flags
         self._inflate_announced = False
         self._deflate_announced = False
+        # Note: Không reset _tts_on_enter_announced ở đây vì nó được quản lý bởi on_enter/on_leave
     
     def _speak_scenario(self, scenario: ScenarioID, **kwargs):
         """Speak TTS scenario"""
@@ -1013,8 +1015,13 @@ class BPMeasurementScreen(Screen):
     def on_enter(self):
         """Called when screen entered"""
         self._reset_ui()
-        # TTS: Hướng dẫn chuẩn bị đo huyết áp (như TEMP_PREP)
-        Clock.schedule_once(lambda dt: self._speak_scenario(ScenarioID.MEASUREMENT_TIPS), 0.5)
+        
+        # TTS: Hướng dẫn chuẩn bị đo huyết áp (chỉ announce 1 lần)
+        if not self._tts_on_enter_announced:
+            Clock.schedule_once(lambda dt: self._speak_scenario(ScenarioID.MEASUREMENT_TIPS), 0.5)
+            self._tts_on_enter_announced = True
+            self.logger.debug("TTS announced: MEASUREMENT_TIPS")
+        
         self.logger.info("Entered BP measurement screen")
     
     def on_leave(self):
@@ -1025,5 +1032,8 @@ class BPMeasurementScreen(Screen):
         if self.update_event:
             self.update_event.cancel()
             self.update_event = None
+        
+        # Reset TTS flag để cho phép announce lại khi vào lần sau
+        self._tts_on_enter_announced = False
         
         self.logger.info("Left BP measurement screen")
