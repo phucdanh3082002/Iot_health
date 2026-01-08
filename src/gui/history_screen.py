@@ -10,6 +10,7 @@ from kivy.uix.scrollview import ScrollView
 from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
 from kivy.core.window import Window
+from kivy.clock import Clock
 
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDRectangleFlatIconButton, MDIconButton, MDFlatButton # Added MDFlatButton
@@ -292,6 +293,8 @@ class HistoryScreen(Screen):
         self.records_list = None
         self.filter_buttons = {}
         self.confirm_dialog = None # Dialog chung cho xác nhận
+        self._loading_card = None
+        self._render_events = []  # Track scheduled render events
 
         self._build_layout()
 
@@ -341,6 +344,40 @@ class HistoryScreen(Screen):
         """Update background rectangle."""
         self.bg_rect.pos = instance.pos
         self.bg_rect.size = instance.size
+
+    def _create_loading_card(self) -> MDCard:
+        """Tạo card hiển thị trạng thái đang tải."""
+        loading_card = MDCard(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(100),
+            padding=dp(20),
+            radius=[dp(12)],
+            md_bg_color=MED_CARD_BG,
+        )
+
+        loading_icon = MDIcon(
+            icon='loading',
+            theme_text_color='Custom',
+            text_color=MED_CARD_ACCENT,
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            pos_hint={'center_x': 0.5},
+        )
+        loading_icon.icon_size = dp(42)
+        loading_card.add_widget(loading_icon)
+
+        loading_label = MDLabel(
+            text='Đang tải dữ liệu...',
+            font_style='Body2',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        loading_card.add_widget(loading_label)
+
+        return loading_card
 
     def _create_header(self, parent):
         """Tạo header với back button và title."""
@@ -479,68 +516,152 @@ class HistoryScreen(Screen):
     # ------------------------------------------------------------------
 
     def _load_records(self):
-        """Load records dựa trên current filter."""
+        """Load records dựa trên current filter - Optimized với deferred rendering."""
         try:
+            # Cancel any pending render events
+            for event in self._render_events:
+                event.cancel()
+            self._render_events.clear()
+
             # Clear existing records
             self.records_list.clear_widgets()
+
+            # Show loading indicator
+            self._loading_card = self._create_loading_card()
+            self.records_list.add_widget(self._loading_card)
 
             # Get date range based on filter
             now = datetime.now()
 
             if self.current_filter == 'today':
                 start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                limit = 100
             elif self.current_filter == 'week':
                 start_date = now - timedelta(days=7)
+                limit = 100
             elif self.current_filter == 'month':
                 start_date = now - timedelta(days=30)
-            else:
+                limit = 150
+            else:  # 'all'
                 start_date = None
+                limit = 100  # Giảm từ 200 xuống 100 cho filter 'all'
 
-            records = self.app_instance.get_history_records(start_date, now, limit=200)
+            # Defer database query để không block UI
+            Clock.schedule_once(lambda dt: self._fetch_and_render_records(start_date, now, limit), 0.1)
+
+        except Exception as e:
+            self.logger.error(f"Error loading records: {e}")
+            self._show_error_state()
+
+    def _fetch_and_render_records(self, start_date, end_date, limit):
+        """Fetch records từ database và render theo batch."""
+        try:
+            records = self.app_instance.get_history_records(start_date, end_date, limit=limit)
+
+            # Remove loading indicator
+            if self._loading_card and self._loading_card.parent:
+                self.records_list.remove_widget(self._loading_card)
+            self._loading_card = None
 
             if not records:
-                # No records message - Material Design style
-                no_records_card = MDCard(
-                    orientation='vertical',
-                    size_hint_y=None,
-                    height=dp(100),
-                    padding=dp(20),
-                    radius=[dp(12)],
-                    md_bg_color=MED_CARD_BG,
-                )
-
-                no_icon = MDIcon(
-                    icon='folder-open-outline',
-                    theme_text_color='Custom',
-                    text_color=TEXT_MUTED,
-                    size_hint=(None, None),
-                    size=(dp(48), dp(48)),
-                    pos_hint={'center_x': 0.5},
-                )
-                no_icon.icon_size = dp(42)
-                no_records_card.add_widget(no_icon)
-
-                no_records_label = MDLabel(
-                    text='Không có dữ liệu trong khoảng thời gian này',
-                    font_style='Body2',
-                    halign='center',
-                    valign='middle',
-                    theme_text_color='Custom',
-                    text_color=TEXT_MUTED,
-                )
-                no_records_card.add_widget(no_records_label)
-
-                self.records_list.add_widget(no_records_card)
+                self._show_no_records_message()
             else:
-                # Add records to list
-                for record in records:
-                    record_widget = MeasurementRecord(record)
-                    self.records_list.add_widget(record_widget)
+                # Batch rendering: render 20 records at a time
+                self._render_records_batch(records, batch_size=20)
 
             self.logger.info(f"Loaded {len(records)} records for filter: {self.current_filter}")
 
         except Exception as e:
-            self.logger.error(f"Error loading records: {e}")
+            self.logger.error(f"Error fetching records: {e}", exc_info=True)
+            self._show_error_state()
+
+    def _render_records_batch(self, records: List[Dict], batch_size: int = 20):
+        """Render records theo batch để tránh lag UI."""
+        total = len(records)
+        batches = [records[i:i + batch_size] for i in range(0, total, batch_size)]
+
+        for i, batch in enumerate(batches):
+            # Schedule mỗi batch với delay nhỏ
+            delay = i * 0.05  # 50ms giữa mỗi batch
+            event = Clock.schedule_once(lambda dt, b=batch: self._add_records_to_list(b), delay)
+            self._render_events.append(event)
+
+    def _add_records_to_list(self, records: List[Dict]):
+        """Add một batch records vào list."""
+        for record in records:
+            record_widget = MeasurementRecord(record)
+            self.records_list.add_widget(record_widget)
+
+    def _show_no_records_message(self):
+        """Hiển thị message khi không có records."""
+        no_records_card = MDCard(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(100),
+            padding=dp(20),
+            radius=[dp(12)],
+            md_bg_color=MED_CARD_BG,
+        )
+
+        no_icon = MDIcon(
+            icon='folder-open-outline',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            pos_hint={'center_x': 0.5},
+        )
+        no_icon.icon_size = dp(42)
+        no_records_card.add_widget(no_icon)
+
+        no_records_label = MDLabel(
+            text='Không có dữ liệu trong khoảng thời gian này',
+            font_style='Body2',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        no_records_card.add_widget(no_records_label)
+
+        self.records_list.add_widget(no_records_card)
+
+    def _show_error_state(self):
+        """Hiển thị error state."""
+        if self._loading_card and self._loading_card.parent:
+            self.records_list.remove_widget(self._loading_card)
+
+        error_card = MDCard(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(100),
+            padding=dp(20),
+            radius=[dp(12)],
+            md_bg_color=MED_CARD_BG,
+        )
+
+        error_icon = MDIcon(
+            icon='alert-circle',
+            theme_text_color='Custom',
+            text_color=MED_WARNING,
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            pos_hint={'center_x': 0.5},
+        )
+        error_icon.icon_size = dp(42)
+        error_card.add_widget(error_icon)
+
+        error_label = MDLabel(
+            text='Lỗi khi tải dữ liệu',
+            font_style='Body2',
+            halign='center',
+            valign='middle',
+            theme_text_color='Custom',
+            text_color=TEXT_MUTED,
+        )
+        error_card.add_widget(error_label)
+
+        self.records_list.add_widget(error_card)
 
     def _export_data(self, instance):
         """Export measurement data."""
@@ -623,4 +744,8 @@ class HistoryScreen(Screen):
 
     def on_leave(self):
         """Called when screen is left."""
+        # Cancel pending render events
+        for event in self._render_events:
+            event.cancel()
+        self._render_events.clear()
         self.logger.info("History screen left")

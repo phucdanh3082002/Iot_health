@@ -305,12 +305,12 @@ class DashboardScreen(Screen):
         grid.add_widget(self.temp_button)
 
         self.auto_button = FeatureCard(
-            title="Đo tự động",
-            subtitle="HR → SpO2 → Temp",
-            icon="autorenew",
+            title="Giám sát",
+            subtitle="HR + SpO2 liên tục",
+            icon="monitor-dashboard",
             card_color=(0.18, 0.25, 0.42, 1),  # Xanh dương đậm
         )
-        self.auto_button.bind(on_release=self._on_auto_sequence_pressed)
+        self.auto_button.bind(on_release=self._on_monitor_pressed)
         grid.add_widget(self.auto_button)
 
         self.bp_button = FeatureCard(
@@ -335,9 +335,10 @@ class DashboardScreen(Screen):
     def _on_temperature_pressed(self, *_):
         self.app_instance.navigate_to_screen("temperature")
 
-    def _on_auto_sequence_pressed(self, *_):
-        self.logger.info("Auto-measure sequence requested")
-        self.auto_button.update_state("--", "Đang chuẩn bị", subtitle="Giữ bệnh nhân ổn định")
+    def _on_monitor_pressed(self, *_):
+        """Mở màn hình giám sát liên tục."""
+        self.logger.info("Monitor button pressed, navigating to continuous monitor")
+        self.app_instance.navigate_to_screen("continuous_monitor")
 
     def _on_qr_pressed(self, *_):
         """
@@ -547,7 +548,7 @@ class DashboardScreen(Screen):
                 self.bp_button.update_state(value, "Đã đo", subtitle="Nhấn để xem chi tiết")
             else:
                 bp_status_text = "Nhấn để đo"
-                bp_subtitle_text = "HX710B chưa sẵn sàng"
+                bp_subtitle_text = "Nhấn để đo trực tiếp"
 
                 if not bp_sensor_status_data: # Sensor unavailable
                     bp_status_text = "Không khả dụng"

@@ -71,6 +71,7 @@ try:
     from .heart_rate_screen import HeartRateScreen
     from .temperature_screen import TemperatureScreen
     from .bp_measurement_screen import BPMeasurementScreen
+    from .continuous_monitor_screen import ContinuousMonitorScreen
     from .settings_screen import SettingsScreen
     from .history_screen import HistoryScreen
 except ImportError:
@@ -79,6 +80,7 @@ except ImportError:
     from src.gui.heart_rate_screen import HeartRateScreen
     from src.gui.temperature_screen import TemperatureScreen
     from src.gui.bp_measurement_screen import BPMeasurementScreen
+    from src.gui.continuous_monitor_screen import ContinuousMonitorScreen
     from src.gui.settings_screen import SettingsScreen
     from src.gui.history_screen import HistoryScreen
 
@@ -630,6 +632,7 @@ class HealthMonitorApp(MDApp):
         heart_rate = HeartRateScreen(app_instance=self, name='heart_rate')
         temperature = TemperatureScreen(app_instance=self, name='temperature')
         bp_measurement = BPMeasurementScreen(app_instance=self, name='bp_measurement')
+        continuous_monitor = ContinuousMonitorScreen(app_instance=self, name='continuous_monitor')
         settings = SettingsScreen(app_instance=self, name='settings')
         history = HistoryScreen(app_instance=self, name='history')
         
@@ -638,6 +641,7 @@ class HealthMonitorApp(MDApp):
         self.screen_manager.add_widget(heart_rate)
         self.screen_manager.add_widget(temperature)
         self.screen_manager.add_widget(bp_measurement)
+        self.screen_manager.add_widget(continuous_monitor)
         self.screen_manager.add_widget(settings)
         self.screen_manager.add_widget(history)
         
