@@ -13,6 +13,7 @@ from kivy.graphics import Color, Rectangle
 from kivy.metrics import dp
 from kivy.core.window import Window
 from kivy.clock import Clock
+from kivy.config import Config
 
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.button import MDRectangleFlatIconButton, MDFlatButton, MDRaisedButton, MDFillRoundFlatIconButton
@@ -1096,23 +1097,38 @@ class SettingsScreen(Screen):
     
     def _show_wifi_password_dialog(self, network: Dict[str, Any]):
         """Show password input dialog with virtual keyboard"""
+        # Enable keyboard mode for touchscreen
+        Window.keyboard_mode = 'managed'
+        
+        # Create password field
         password_field = MDTextField(
             hint_text="Mật khẩu WiFi (tối thiểu 8 ký tự)",
             password=True,
-            size_hint_x=0.9,
-            pos_hint={'center_x': 0.5},
+            size_hint_y=None,
+            height=dp(48),
             input_type='text',
-            keyboard_mode='managed',  # Enable virtual keyboard
+            write_tab=False,
         )
+        
+        # Wrap trong container để keyboard hiển thị đúng
+        content = MDBoxLayout(
+            orientation='vertical',
+            size_hint_y=None,
+            height=dp(60),
+            padding=dp(10),
+        )
+        content.add_widget(password_field)
         
         # Force show keyboard when dialog opens
         def show_keyboard(dt):
             password_field.focus = True
+            # Force request keyboard
+            password_field._on_focus(password_field, True)
         
         dialog = MDDialog(
             title=f"Kết nối: {network['ssid']}",
             type="custom",
-            content_cls=password_field,
+            content_cls=content,
             buttons=[
                 MDFlatButton(
                     text="HỦY",
@@ -1127,8 +1143,8 @@ class SettingsScreen(Screen):
         )
         dialog.open()
         
-        # Show keyboard after dialog is fully rendered
-        Clock.schedule_once(show_keyboard, 0.5)
+        # Show keyboard after dialog is fully rendered (delay lâu hơn)
+        Clock.schedule_once(show_keyboard, 1.0)
     
     def _on_wifi_password_submit(self, ssid: str, password: str, dialog):
         """Handle password submit"""

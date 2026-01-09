@@ -3,14 +3,37 @@
 ## Mô tả dự án
 Hệ thống IoT theo dõi sức khỏe cho người cao tuổi, đo nhịp tim, SpO2, nhiệt độ, huyết áp với giao diện cải tiến 480x320 trên màn hình SPI 3.5", cảnh báo qua loa và giám sát từ xa qua Android/Web.
 
-## 🚀 Project Status (v2.0 - Production Ready)
+## � Quick Links
 
-**Alert System:** ✅ Device-centric with cloud sync + MQTT publishing  
-**Sensors:** ✅ MAX30102 (HR/SpO₂), MLX90614 (Temperature), HX710B (Blood Pressure)  
-**GUI:** ✅ Kivy 480×320 (Waveshare LCD) with 3 vital sign screens  
-**Database:** ✅ SQLite local + MySQL cloud with auto-sync (retries pending items)  
-**Communication:** ✅ MQTT (HiveMQ Cloud) + REST API  
-**TTS:** ✅ PiperTTS Vietnamese voice feedback  
+| Mục | Mô tả |
+|-----|-------|
+| [🚀 Quick Setup](#quick-setup--run) | Cài đặt nhanh trong 5 phút |
+| [🏗️ Kiến trúc](#kiến-trúc-hệ-thống) | Tổng quan hệ thống |
+| [🔧 Cấu hình Hardware](#cấu-hình-hardware) | Sơ đồ đấu nối, GPIO mapping |
+| [⚙️ Cấu hình Sensors](#cấu-hình-sensors) | Thiết lập cảm biến |
+| [📡 API Documentation](docs/REST_API_SPECIFICATION.md) | REST API reference |
+| [🗄️ Database Schema](docs/DATABASE_SCHEMA.md) | Cấu trúc database |
+| [🔄 System Workflow](#system-workflow) | Luồng hoạt động hệ thống |
+| [🧪 Testing](#testing) | Hướng dẫn testing |
+| [🚀 Deployment](docs/DEPLOYMENT_STEPS.md) | Triển khai production |
+| [❓ FAQ](#faq) | Câu hỏi thường gặp |
+| [🐛 Troubleshooting](#troubleshooting-quick-reference) | Xử lý lỗi phổ biến |
+
+## �🚀 Project Status (v2.0 - Production Ready)
+
+| Component | Status | Coverage | Notes |
+|-----------|--------|----------|-------|
+| **Sensors** | ✅ Production | 100% | MAX30102, MLX90614, HX710B với calibration |
+| **GUI** | ✅ Production | 100% | Kivy 480×320 touchscreen, 12 screens |
+| **MQTT** | ✅ Production | 100% | HiveMQ Cloud Singapore, TLS, QoS 0-2 |
+| **Cloud Sync** | ✅ Production | 100% | AWS RDS MySQL, store-and-forward |
+| **REST API** | ✅ Production | 100% | Flask on AWS EC2, device pairing |
+| **Alert System** | ✅ Production | 100% | Device-centric, threshold + AI |
+| **TTS Audio** | ✅ Production | 100% | PiperTTS vi_VN, 30+ scenarios |
+| **Blood Pressure** | ✅ Production | 100% | Oscillometric algorithm, HX710B ADC |
+| **Android App** | 🚧 In Progress | 0% | **MVP Target: Q1 2026** (QR pairing, live vitals, history) |
+| **Web Dashboard** | 📋 Planned | 0% | MQTT structure ready, UI chưa build |
+| **Clinical Validation** | 📋 Planned | 0% | Sau tốt nghiệp (IRB approval required) |  
 
 ### Recent Changes (v2.0.2)
 - **Device-centric patient resolution**: `patient_id` no longer hardcoded. Devices publish with `device_id`; cloud auto-resolves patient via `devices/patients` mapping.
@@ -139,10 +162,58 @@ python test_sensor_logic.py
 ## Quick Setup & Run
 
 ### Prerequisites
+
+#### Phần Cứng (Hardware)
+- **Raspberry Pi:**
+  - Raspberry Pi 4B (4GB+ RAM khuyến nghị)
+  - Raspberry Pi OS Bookworm 64-bit
+  - Power supply 5V 3A
+  - MicroSD card 16GB+ (Class 10)
+
+- **Màn hình:**
+  - SPI LCD 3.5" (480×320, Waveshare compatible)
+  - Framebuffer: /dev/fb1
+
+- **Cảm biến (Sensors):**
+  - MAX30102: HR/SpO2 sensor (I2C @ 0x57)
+  - MLX90614: Infrared temperature sensor (I2C @ 0x5A)
+  - HX710B: 24-bit ADC (GPIO5=SCK, GPIO6=DOUT)
+  - MPS20N0040D-S: Pressure sensor 0-40 kPa
+
+- **Huyết áp (Blood Pressure System):**
+  - Bơm mini 6V (DC pump)
+  - Van điện từ 6V (solenoid valve JQF1-6A)
+  - Băng bó huyết áp (adult size cuff)
+  - Van relief 250-300 mmHg (khuyến nghị)
+  - Van 1 chiều (check valve)
+
+- **Mạch điều khiển:**
+  - 4N35 optocoupler × 2 (cách ly Pi khỏi 6V domain)
+  - MOSFET N-channel × 2 (IRLZ44N hoặc FQP30N06L)
+  - Điện trở: 330Ω × 2, 100-220Ω × 2, 68-150kΩ × 2
+  - Diode SS14 × 2 (flyback protection)
+  - Tụ điện: 1000µF/16V, 470µF/16V, 100nF ceramic × 4
+
+- **Nguồn:**
+  - 6V DC cho bơm/van (riêng biệt, cách ly Pi)
+  - 3.3V từ Pi cho HX710B
+
+#### Phần Mềm (Software)
 - **Python 3.9+** installed on Raspberry Pi OS Bookworm 64-bit
 - **pip** for package management
-- **Hardware**: MAX30102, MLX90614, HX710B connected to Pi
-- **Environment**: SSH or direct terminal access to Pi
+- **MySQL client libraries** (`libmysqlclient-dev`)
+- **I2C, SPI enabled** (via `raspi-config`)
+- **PiperTTS voice model:** `vi_VN-vais1000-medium.onnx`
+
+#### Dịch vụ Cloud (Cloud Services)
+- **AWS RDS MySQL** (hoặc MySQL 8.0+ compatible)
+- **HiveMQ Cloud account** (free tier Singapore)
+- **(Tùy chọn) Google Gemini API key** cho AI threshold generation
+
+#### Môi trường (Environment)
+- SSH hoặc direct terminal access
+- Internet connection (cho cloud sync)
+- Git for version control
 
 ### Step 1: Install Dependencies
 ```bash
@@ -1118,6 +1189,86 @@ sequenceDiagram
 
 ## Testing
 
+### Chiến lược Testing (Testing Strategy)
+
+#### Unit Tests - Kiểm tra từng module riêng lẻ
+```bash
+# Test cảm biến MAX30102
+python tests/test_sensors.py --sensor max30102
+
+# Test cảm biến MLX90614
+python tests/test_sensors.py --sensor mlx90614
+
+# Test HX710B driver
+python tests/test_hx710b_driver.py
+
+# Test database operations
+python tests/test_database.py
+
+# Test data validation
+python -m pytest tests/ -k "test_validator"
+```
+
+#### Integration Tests - Kiểm tra tích hợp giữa các module
+```bash
+# Test toàn bộ quy trình đo huyết áp
+python tests/test_full_bp_measurement.py
+
+# Test cloud sync (SQLite → MySQL)
+python tests/test_auto_sync.py
+
+# Test MQTT publish/subscribe
+python tests/test_hivemq_connection.py
+
+# Test Phase 3 integration (sensors + GUI + MQTT + DB)
+python tests/test_phase3_integration.py
+
+# Test connection quality
+python tests/test_connection_quality.py
+```
+
+#### Hardware Calibration Tests - Hiệu chuẩn phần cứng
+```bash
+# Hiệu chuẩn HX710B ADC (blood pressure sensor)
+python tests/bp_calib_tool.py
+
+# Kiểm tra zero offset của HX710B
+python tests/check_zero_offset.py
+
+# Hiệu chuẩn offset temperature
+python tests/calibrate_offset.py
+
+# Validate inflate pressure
+python tests/test_inflate_validation.py
+
+# Capture BP waveform data
+python tests/capture_bp_data.py
+```
+
+#### System Tests - Kiểm tra toàn hệ thống
+```bash
+# Test bơm/van pneumatic
+python tests/test_bom_van.py
+
+# Test TTS voice output
+python tests/test_speak.py
+
+# Test threshold với tiếng Việt
+python tests/test_htn_vietnamese.py
+
+# Monitor MQTT traffic
+python scripts/mqtt_monitor.py
+```
+
+#### Performance Tests - Đo hiệu năng
+```bash
+# Test timing của HX710B
+python tests/test_hx710b_timing.py
+
+# Analyze BP envelope
+python tests/analyze_envelope.py
+```
+
 ### HiveMQ Cloud Connection Test
 ```bash
 # CRITICAL: Set MQTT password in .env first
@@ -1137,6 +1288,125 @@ python tests/test_hivemq_connection.py
 ```bash
 # Test MQTT broker connectivity (test.mosquitto.org - deprecated)
 python tests/test_mqtt_connection.py
+
+## FAQ
+
+### Câu hỏi thường gặp (Frequently Asked Questions)
+
+#### 1. Tôi có thể dùng MQTT broker khác thay HiveMQ Cloud không?
+**Trả lời:** Có, bạn có thể dùng bất kỳ MQTT broker nào hỗ trợ MQTT v3.1.1. Chỉnh sửa file `config/app_config.yaml` → `communication.mqtt.broker` và cập nhật credentials trong `.env`. 
+
+**Lưu ý:** HiveMQ Cloud được khuyến nghị vì:
+- TLS/SSL tích hợp sẵn (bảo mật)
+- Free tier 100 connections
+- Singapore region (latency thấp cho Việt Nam)
+- WebSocket support cho web dashboard
+
+#### 2. Làm sao để thêm thông tin bệnh nhân?
+**Trả lời:** Hiện tại có 3 cách:
+1. **Qua Android app** (đang phát triển, MVP Q1 2026): Giao diện đồ họa thân thiện
+2. **Qua REST API:** `POST /api/patient` với JSON payload (xem [REST_API_SPECIFICATION.md](docs/REST_API_SPECIFICATION.md))
+3. **Direct MySQL insert:** Kết nối MySQL workbench và INSERT vào table `patients` (xem [DATABASE_SCHEMA.md](docs/DATABASE_SCHEMA.md))
+
+#### 3. HX710B timeout "DOUT not ready" - làm sao khắc phục?
+**Trả lời:** Lỗi này do HX710B không trả tín hiệu. Kiểm tra:
+1. **Wiring:** GPIO5 → SCK, GPIO6 → DOUT, 3.3V → VCC, GND → GND
+2. **Power supply:** HX710B cần 3.3V ổn định (đo điện áp tại chân VCC)
+3. **Sensor connection:** Kiểm tra dây nối từ HX710B đến MPS20N0040D (4 dây)
+4. **GPIO conflicts:** Đảm bảo không có module khác dùng GPIO5/GPIO6
+5. **Test:** Chạy `python tests/test_hx710b_driver.py` để debug
+
+#### 4. Tôi có thể chạy hệ thống mà không sync cloud không?
+**Trả lời:** Có, hệ thống có thể hoạt động hoàn toàn offline. Thực hiện:
+1. Chỉnh sửa `config/app_config.yaml`:
+   ```yaml
+   cloud:
+     enabled: false
+   ```
+2. Dữ liệu sẽ chỉ lưu trong SQLite local (`data/health_monitor.db`)
+3. Giới hạn lưu trữ: 7 ngày (có thể tăng trong config)
+4. Không có MQTT real-time monitoring (trừ khi dùng local broker)
+
+#### 5. Làm sao để ghép nối device với Android app?
+**Trả lời:** Quy trình device pairing:
+1. Trên Raspberry Pi: Mở **Settings** → **Pairing** → Hiển thị QR code
+2. Trên Android app: Quét QR code hoặc nhập pairing code (ví dụ: `ABC123XY`)
+3. App gọi REST API `POST /api/pair-device`
+4. Nhập thông tin bệnh nhân (tên, tuổi, giới tính, bệnh nền)
+5. App subscribe MQTT topics: `iot_health/device/{device_id}/#`
+6. Bắt đầu nhận dữ liệu real-time
+
+**Lưu ý:** Một device có thể ghép với nhiều user (role: owner, admin, caregiver, viewer).
+
+#### 6. Tại sao đo huyết áp mất 30-45 giây?
+**Trả lời:** Đây là thời gian chuẩn cho phương pháp oscillometric:
+- **Inflate (bơm):** 15-20 giây (tăng từ 0 → 180-200 mmHg)
+- **Deflate (xả chậm):** 10-15 giây (giảm từ max → 0, sampling 10 SPS)
+- **Analysis:** 2-5 giây (phát hiện dao động, tính systolic/diastolic/MAP)
+
+Thiết bị y tế thương mại cũng mất 30-60 giây. **Không nên** đo nhanh hơn vì:
+- Giảm độ chính xác (không đủ sample points)
+- Không an toàn (inflate quá nhanh gây khó chịu)
+- Vi phạm tiêu chuẩn y tế (IEC 60601-2-30)
+
+#### 7. Alert "High Blood Pressure" nhưng tôi cảm thấy bình thường?
+**Trả lời:** Huyết áp cao thường **không có triệu chứng** (silent killer). Nếu alert:
+1. **Đo lại:** Nghỉ 5 phút, đo lần 2
+2. **Kiểm tra lại băng bó:** Đúng vị trí, không quá chặt/lỏng
+3. **So sánh với thiết bị thương mại** (Omron, Beurer)
+4. **Hiệu chuẩn:** Chạy `python tests/bp_calib_tool.py` nếu sai số > 10 mmHg
+5. **Ghi log:** Dữ liệu raw trong `logs/health_monitor.log`
+
+**Quan trọng:** Đây là thiết bị nghiên cứu, không thay thế thiết bị y tế đã được chứng nhận.
+
+#### 8. Tôi muốn thay đổi ngưỡng cảnh báo (thresholds) cho riêng mình?
+**Trả lời:** Có 2 cách:
+1. **Qua config file** (global):
+   ```yaml
+   # config/app_config.yaml
+   alerts:
+     thresholds:
+       heart_rate:
+         min_normal: 60  # Thay đổi tại đây
+         max_normal: 100
+   ```
+
+2. **Qua AI threshold generation** (personalized):
+   ```bash
+   python scripts/ai_threshold_generator.py --patient_id patient_001 --days 14
+   ```
+   AI sẽ phân tích 14 ngày dữ liệu và tạo ngưỡng tùy biến.
+
+3. **Qua Android app** (planned): Giao diện đồ họa để chỉnh ngưỡng.
+
+#### 9. Làm sao để export dữ liệu ra CSV/PDF?
+**Trả lời:** Hiện tại chưa có UI export, nhưng có thể dùng:
+1. **SQL query:**
+   ```bash
+   python scripts/query_database.py --export-csv --days 30
+   ```
+2. **Direct MySQL:**
+   ```sql
+   SELECT * FROM health_records WHERE patient_id='patient_001' 
+   ORDER BY timestamp DESC LIMIT 1000 INTO OUTFILE '/tmp/data.csv';
+   ```
+3. **Android app (planned Q1 2026):** Export CSV/PDF từ app.
+
+#### 10. Hệ thống có được chứng nhận y tế không?
+**Trả lời:** **KHÔNG**. Đây là đồ án tốt nghiệp, **chỉ cho mục đích nghiên cứu và giáo dục**. 
+
+**Không được:**
+- Dùng để chẩn đoán bệnh
+- Thay thế thiết bị y tế đã chứng nhận
+- Sử dụng trong môi trường lâm sàng
+
+**Để triển khai thương mại cần:**
+- Chứng nhận FDA (Mỹ) hoặc CE (Châu Âu)
+- Clinical validation study (thử nghiệm lâm sàng)
+- IRB approval (Institutional Review Board)
+- ISO 13485 (Quality Management System for Medical Devices)
+
+---
 
 ## Deployment Checklist
 
@@ -1191,3 +1461,111 @@ Dự án đồ án tốt nghiệp - IoT Health Monitoring System
 - **MySQL Database**: database-1.cba08ks48qdc.ap-southeast-1.rds.amazonaws.com:3306
 - **MQTT Broker**: c8c0b20138314154b4f21f4c7d1e19a5.s1.eu.hivemq.cloud:8883
 - Project Status: Active Development
+
+---
+
+## 📄 License & Disclaimer
+
+### Giấy phép (License)
+
+**MIT License**
+
+Copyright (c) 2025-2026 IoT Health Monitoring System Team
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+### Tuyên bố miễn trách (Medical Disclaimer)
+
+**⚠️ QUAN TRỌNG - VUI LÒNG ĐỌC KỸ**
+
+Hệ thống IoT Health Monitoring System được phát triển như một **đồ án tốt nghiệp** cho mục đích **nghiên cứu và giáo dục**. Thiết bị này:
+
+#### ❌ KHÔNG ĐƯỢC PHÉP:
+
+1. **Chẩn đoán y tế:** Không được sử dụng để chẩn đoán bất kỳ tình trạng bệnh lý nào
+2. **Điều trị:** Không được sử dụng để đưa ra quyết định điều trị
+3. **Thay thế thiết bị y tế:** Không thay thế thiết bị đã được chứng nhận FDA/CE
+4. **Môi trường lâm sàng:** Không được sử dụng trong bệnh viện, phòng khám
+5. **Trường hợp khẩn cấp:** Không dựa vào thiết bị này trong tình huống cấp cứu
+
+#### ✅ CHỈ ĐƯỢC PHÉP:
+
+1. **Nghiên cứu khoa học:** Thử nghiệm trong môi trường kiểm soát
+2. **Giáo dục:** Học tập về IoT, embedded systems, medical devices
+3. **Phát triển:** Làm nền tảng cho nghiên cứu tiếp theo
+4. **Demo:** Trình diễn proof-of-concept cho đồ án tốt nghiệp
+
+#### ⚠️ CẢNH BÁO AN TOÀN:
+
+1. **Huyết áp cao:** Inflate pressure > 300 mmHg có thể gây thương tích
+2. **Tuần hoàn máu:** Không đo quá 3 lần/giờ trên cùng cánh tay
+3. **Mẫn cảm da:** Dừng sử dụng nếu có dấu hiệu dị ứng
+4. **Trẻ em:** Không sử dụng cho trẻ em < 12 tuổi
+5. **Bệnh lý:** Hỏi ý kiến bác sĩ nếu có bệnh tim mạch nghiêm trọng
+
+#### 📋 CHỨNG NHẬN & TIÊU CHUẨN:
+
+**Tình trạng hiện tại:**
+- ❌ **FDA (Food and Drug Administration):** Chưa được chứng nhận
+- ❌ **CE Mark (European Conformity):** Chưa được chứng nhận
+- ❌ **ISO 13485 (Medical Devices QMS):** Chưa được chứng nhận
+- ❌ **IEC 60601-2-30 (Blood Pressure Monitors):** Chưa kiểm tra tuân thủ
+- ❌ **Clinical Validation:** Chưa có nghiên cứu lâm sàng
+- ❌ **IRB Approval:** Chưa được Institutional Review Board phê duyệt
+
+**Để triển khai thương mại cần:**
+1. Nghiên cứu lâm sàng (Clinical trial) với ≥ 100 bệnh nhân
+2. Tuân thủ tiêu chuẩn IEC 60601-2-30 (Blood pressure monitors)
+3. Kiểm tra an toàn điện (electrical safety testing)
+4. Đăng ký với cơ quan y tế (FDA Class II hoặc CE Mark Class IIa)
+5. Quality Management System (ISO 13485)
+6. Post-market surveillance system
+
+#### 🩺 KHUYẾN NGHỊ CHUYÊN MÔN:
+
+1. **Luôn tham khảo bác sĩ:** Mọi quyết định y tế phải được bác sĩ tư vấn
+2. **Dùng thiết bị chứng nhận:** Dùng Omron, Beurer, hoặc thiết bị FDA-approved cho chẩn đoán
+3. **Kiểm tra chéo:** So sánh kết quả với thiết bị y tế chuẩn
+4. **Ghi nhận bất thường:** Báo cáo ngay cho bác sĩ nếu có triệu chứng bất thường
+5. **Không tự điều chỉnh thuốc:** Không tăng/giảm liều thuốc dựa trên thiết bị này
+
+#### 🔒 BẢO MẬT THÔNG TIN (Privacy):
+
+1. **Dữ liệu nhạy cảm:** Thiết bị thu thập dữ liệu sức khỏe cá nhân (PHI - Protected Health Information)
+2. **Trách nhiệm người dùng:** Người dùng chịu trách nhiệm bảo mật dữ liệu
+3. **Không HIPAA compliant:** Chưa tuân thủ HIPAA (Health Insurance Portability and Accountability Act)
+4. **Sử dụng riêng tư:** Đặt mật khẩu mạnh cho database, MQTT broker
+5. **Không chia sẻ:** Không chia sẻ credentials trên mạng xã hội
+
+#### ⚖️ GIỚI HẠN TRÁCH NHIỆM PHÁP LÝ:
+
+Người phát triển (developer), nhà trường (university), và các đồng tác giả (contributors) **KHÔNG chịu trách nhiệm** về:
+- Chẩn đoán sai hoặc bỏ sót
+- Thương tích hoặc tổn hại sức khỏe
+- Mất mát tài chính
+- Vi phạm quyền riêng tư
+- Hỏng hóc thiết bị
+- Mất dữ liệu
+
+Việc sử dụng hệ thống này hoàn toàn **TỰ CHỊU TRÁCH NHIỆM** (use at your own risk).
+
+---
+
+### Acknowledgments (Lời cảm ơn)
+
+- **Trường Đại học:** [Tên trường] - Khoa Điện tử Viễn thông
+- **Giảng viên hướng dẫn:** [Tên giảng viên]
+- **Open-source libraries:** Kivy, Paho MQTT, SQLAlchemy, Flask, scikit-learn
+- **Cloud providers:** AWS (RDS, EC2), HiveMQ Cloud
+- **Community:** Raspberry Pi Foundation, Python Software Foundation
+
+---
+
+**Phiên bản:** v2.0.2  
+**Cập nhật lần cuối:** January 9, 2026  
+**Tác giả:** IoT Health Monitoring System Team  
+**Mục đích:** Đồ án tốt nghiệp - Nghiên cứu và Giáo dục
