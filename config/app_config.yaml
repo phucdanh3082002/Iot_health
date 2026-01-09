@@ -235,8 +235,8 @@ sensors:
       mode: 10sps
       read_timeout_ms: 500
       calibration:
-        offset_counts: 1056334  # Updated from connection-quality test (100 samples, std~460)
-        slope_mmhg_per_count: 1.9238166197e-06  # TEMPORARY: adjust after bp_calib_tool.py
+        offset_counts: 1056334  # Updated from calibrate_offset.py (599 samples, std~727)
+        slope_mmhg_per_count: 3.09e-05  # Empirical calibration: average of 5 implied slopes (2026-01-10)
         adc_inverted: false  # HX710B output not inverted
     algorithm:
       sample_rate: 10.0
