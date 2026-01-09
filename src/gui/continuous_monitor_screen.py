@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
@@ -221,6 +222,53 @@ class ContinuousMonitorScreen(Screen):
         
         # TTS lifecycle tracking
         self._tts_announced = False
+        
+        # ============================================================
+        # MEDICAL-STANDARD AVERAGING (Weighted Moving Average)
+        # ============================================================
+        # Time-based windows theo ISO 80601-2-61 standards
+        self.hr_window_seconds = 5.0      # 5 giây average cho HR
+        self.spo2_window_seconds = 8.0    # 8 giây average cho SpO2
+        
+        # History buffers với timestamps
+        self.hr_history = deque(maxlen=30)       # Max 30 samples @ 5Hz = 6s
+        self.hr_timestamps = deque(maxlen=30)
+        self.spo2_history = deque(maxlen=40)     # Max 40 samples @ 5Hz = 8s
+        self.spo2_timestamps = deque(maxlen=40)
+        
+        # Display smoothing (EMA layer for smooth transitions)
+        self.displayed_hr = 0.0
+        self.displayed_spo2 = 0.0
+        self.ema_alpha = 0.15  # Giảm từ 0.3 → 0.15 để display smooth hơn
+        
+        # Display thresholds - chỉ update UI khi thay đổi đáng kể
+        self.hr_display_threshold = 2    # Chỉ update khi thay đổi >= 2 BPM
+        self.spo2_display_threshold = 1  # Chỉ update khi thay đổi >= 1%
+        self.last_displayed_hr = 0       # Giá trị HR đang hiển thị
+        self.last_displayed_spo2 = 0     # Giá trị SpO2 đang hiển thị
+        
+        # ============================================================
+        # ALARM SYSTEM (Hysteresis + Debouncing)
+        # ============================================================
+        # Warm-up period - không check alarm trong N giây đầu
+        self.monitoring_start_time = 0   # Thời điểm bắt đầu monitoring
+        self.WARMUP_PERIOD = 15.0        # 15 giây warm-up trước khi check alarms
+        
+        # Alarm state tracking
+        self.hr_alarm_active = False
+        self.spo2_alarm_active = False
+        self.alarm_pending_time = {'hr_low': 0, 'spo2_low': 0, 'hr_high': 0}
+        
+        # Hysteresis thresholds (medical standard)
+        self.THRESHOLDS = {
+            'spo2_trigger': 90,   # Bật alarm khi SpO2 < 90%
+            'spo2_clear': 92,     # Tắt alarm khi SpO2 >= 92%
+            'hr_low_trigger': 50, # Bật alarm khi HR < 50 BPM
+            'hr_low_clear': 55,   # Tắt alarm khi HR >= 55 BPM
+            'hr_high_trigger': 120, # Bật alarm khi HR > 120 BPM
+            'hr_high_clear': 115,   # Tắt alarm khi HR <= 115 BPM
+        }
+        self.DEBOUNCE_DELAY = 10.0  # 10 seconds delay before alarm (medical standard)
         
         # Build UI
         self._build_layout()
@@ -743,6 +791,20 @@ class ContinuousMonitorScreen(Screen):
         self.state = self.STATE_IDLE
         self.next_bp_time = None
         
+        # Reset averaging buffers và alarm states
+        self.hr_history.clear()
+        self.hr_timestamps.clear()
+        self.spo2_history.clear()
+        self.spo2_timestamps.clear()
+        self.displayed_hr = 0.0
+        self.displayed_spo2 = 0.0
+        self.last_displayed_hr = 0
+        self.last_displayed_spo2 = 0
+        self.monitoring_start_time = 0
+        self.hr_alarm_active = False
+        self.spo2_alarm_active = False
+        self.alarm_pending_time = {'hr_low': 0, 'spo2_low': 0, 'hr_high': 0}
+        
         # Update UI
         self._update_status("Đã dừng", TEXT_MUTED)
         self.bp_countdown_label.text = ""
@@ -751,13 +813,77 @@ class ContinuousMonitorScreen(Screen):
     # Polling & Data Update
     # ------------------------------------------------------------------
     
+    def _calculate_weighted_average(self, values, timestamps, window_seconds):
+        """
+        Tính weighted average với recent values có trọng số cao hơn.
+        
+        Medical-standard weighting:
+        - Exponential decay: recent values = high weight, old = low weight
+        - Weight formula: w = e^(-age/tau) với tau = window/3
+        - Values ngoài window_seconds bị loại bỏ
+        
+        Args:
+            values: List giá trị (HR hoặc SpO2)
+            timestamps: List timestamps tương ứng
+            window_seconds: Time window (5s cho HR, 8s cho SpO2)
+        
+        Returns:
+            Weighted average value hoặc None nếu không đủ data
+        """
+        if not values or not timestamps:
+            return None
+        
+        now = time.time()
+        cutoff = now - window_seconds
+        
+        # Filter only values within window
+        valid_pairs = [(v, ts) for v, ts in zip(values, timestamps) 
+                       if ts >= cutoff]
+        
+        if not valid_pairs:
+            return None
+        
+        # Sort by time (oldest first)
+        valid_pairs.sort(key=lambda x: x[1])
+        
+        # Calculate exponential decay weights
+        weights = []
+        tau = window_seconds / 3.0  # Time constant
+        
+        for _, ts in valid_pairs:
+            age = now - ts  # Age of reading (seconds)
+            # Exponential decay: w = e^(-age/tau)
+            w = 2.71828 ** (-age / tau)
+            weights.append(w)
+        
+        # Normalize weights
+        total_weight = sum(weights)
+        if total_weight == 0:
+            # Fallback to simple average
+            return sum(v for v, _ in valid_pairs) / len(valid_pairs)
+        
+        weights = [w / total_weight for w in weights]
+        
+        # Weighted average
+        weighted_sum = sum(v * w for (v, _), w in zip(valid_pairs, weights))
+        
+        return weighted_sum
+    
     def _poll_hr_spo2(self, dt):
-        """Poll HR/SpO2 từ MAX30102 (5Hz)."""
+        """
+        Poll HR/SpO2 từ MAX30102 với medical-standard averaging.
+        
+        Implementation:
+        - 5-second weighted average cho HR (ISO 80601-2-61)
+        - 8-second weighted average cho SpO2
+        - EMA smoothing cho display transitions
+        - Hysteresis + debouncing cho alarms
+        """
         if self.state not in (self.STATE_MONITORING, self.STATE_BP_MEASURING):
             return
         
         try:
-            # Get sensor data từ app_instance (giống heart_rate_screen)
+            # Get sensor data từ app_instance
             sensor_data = self.app_instance.get_sensor_data()
             if not sensor_data:
                 return
@@ -766,20 +892,265 @@ class ContinuousMonitorScreen(Screen):
             sensor_status = sensor_data.get('sensor_status', {})
             max_status = sensor_status.get('MAX30102', {})
             
-            # Lấy dữ liệu từ sensor_data hoặc max_status
-            self.current_hr = int(sensor_data.get('heart_rate', 0) or 0)
-            self.current_spo2 = int(sensor_data.get('spo2', 0) or 0)
+            # RAW values từ sensor (chưa smooth)
+            raw_hr = int(sensor_data.get('heart_rate', 0) or 0)
+            raw_spo2 = int(sensor_data.get('spo2', 0) or 0)
             self.finger_detected = bool(
                 max_status.get('finger_detected', False) or 
                 sensor_data.get('finger_detected', False)
             )
             
+            now = time.time()
+            
+            # ============================================================
+            # HR: 5-SECOND WEIGHTED MOVING AVERAGE
+            # ============================================================
+            if raw_hr > 0 and self.finger_detected:
+                # Add to time-stamped history
+                self.hr_history.append(float(raw_hr))
+                self.hr_timestamps.append(now)
+                
+                # Calculate 5-second weighted average
+                avg_hr = self._calculate_weighted_average(
+                    self.hr_history, 
+                    self.hr_timestamps,
+                    self.hr_window_seconds
+                )
+                
+                if avg_hr is not None:
+                    # Apply EMA for smooth display transition
+                    if self.displayed_hr == 0:
+                        self.displayed_hr = avg_hr
+                    else:
+                        self.displayed_hr = (
+                            self.ema_alpha * avg_hr +
+                            (1 - self.ema_alpha) * self.displayed_hr
+                        )
+                    
+                    # Display threshold: chỉ update khi thay đổi đáng kể
+                    new_hr = int(round(self.displayed_hr))
+                    if abs(new_hr - self.last_displayed_hr) >= self.hr_display_threshold:
+                        self.current_hr = new_hr
+                        self.last_displayed_hr = new_hr
+                    elif self.last_displayed_hr == 0:
+                        # Lần đầu - luôn update
+                        self.current_hr = new_hr
+                        self.last_displayed_hr = new_hr
+                    # Nếu thay đổi < threshold, giữ nguyên current_hr
+                    
+                    # Debug logging
+                    n_samples = len([t for t in self.hr_timestamps if now - t <= self.hr_window_seconds])
+                    self.logger.debug(
+                        f"[HR] Raw={raw_hr}, 5s_WMA={avg_hr:.1f}, "
+                        f"Display={self.current_hr}, Samples={n_samples}"
+                    )
+            else:
+                # No finger or invalid reading
+                self.current_hr = 0
+                self.displayed_hr = 0.0
+            
+            # ============================================================
+            # SPO2: 8-SECOND WEIGHTED MOVING AVERAGE
+            # ============================================================
+            if raw_spo2 > 0 and self.finger_detected:
+                # Add to time-stamped history
+                self.spo2_history.append(float(raw_spo2))
+                self.spo2_timestamps.append(now)
+                
+                # Calculate 8-second weighted average
+                avg_spo2 = self._calculate_weighted_average(
+                    self.spo2_history,
+                    self.spo2_timestamps,
+                    self.spo2_window_seconds
+                )
+                
+                if avg_spo2 is not None:
+                    # Apply EMA for smooth display transition
+                    if self.displayed_spo2 == 0:
+                        self.displayed_spo2 = avg_spo2
+                    else:
+                        self.displayed_spo2 = (
+                            self.ema_alpha * avg_spo2 +
+                            (1 - self.ema_alpha) * self.displayed_spo2
+                        )
+                    
+                    # Display threshold: chỉ update khi thay đổi đáng kể
+                    new_spo2 = int(round(self.displayed_spo2))
+                    if abs(new_spo2 - self.last_displayed_spo2) >= self.spo2_display_threshold:
+                        self.current_spo2 = new_spo2
+                        self.last_displayed_spo2 = new_spo2
+                    elif self.last_displayed_spo2 == 0:
+                        # Lần đầu - luôn update
+                        self.current_spo2 = new_spo2
+                        self.last_displayed_spo2 = new_spo2
+                    # Nếu thay đổi < threshold, giữ nguyên current_spo2
+                    
+                    # Debug logging
+                    n_samples = len([t for t in self.spo2_timestamps if now - t <= self.spo2_window_seconds])
+                    self.logger.debug(
+                        f"[SpO2] Raw={raw_spo2}, 8s_WMA={avg_spo2:.1f}, "
+                        f"Display={self.current_spo2}, Samples={n_samples}"
+                    )
+            else:
+                # No finger or invalid reading
+                self.current_spo2 = 0
+                self.displayed_spo2 = 0.0
+            
             # Update displays
             self._update_hr_display()
             self._update_spo2_display()
             
+            # Check alarms với hysteresis + debouncing
+            self._check_alarms_with_hysteresis()
+            
         except Exception as e:
             self.logger.error(f"Error polling HR/SpO2: {e}", exc_info=True)
+    
+    def _check_alarms_with_hysteresis(self):
+        """
+        Check và trigger alarms với hysteresis + time-based debouncing.
+        
+        Medical Standard (ISO 80601-2-61):
+        - SpO2 < 90%: 10 seconds delay before alarm (hysteresis: clear at 92%)
+        - HR < 50 or > 120: 10 seconds delay (hysteresis: clear at 55/115)
+        - Hysteresis prevents alarm oscillation
+        - Debouncing prevents false alarms from transient spikes
+        - Warm-up period: không check alarm trong 15 giây đầu
+        """
+        if self.current_hr == 0 and self.current_spo2 == 0:
+            # No valid data - skip alarm checking
+            return
+        
+        now = time.time()
+        
+        # ============================================================
+        # WARM-UP PERIOD CHECK
+        # ============================================================
+        # Không check alarms trong N giây đầu để giá trị ổn định
+        if self.monitoring_start_time > 0:
+            warmup_elapsed = now - self.monitoring_start_time
+            if warmup_elapsed < self.WARMUP_PERIOD:
+                # Vẫn trong warm-up period - skip alarm checking
+                self.logger.debug(
+                    f"[WARMUP] Còn {self.WARMUP_PERIOD - warmup_elapsed:.1f}s "
+                    f"trước khi check alarms"
+                )
+                return
+        
+        # ============================================================
+        # SPO2 LOW ALARM (với hysteresis + debouncing)
+        # ============================================================
+        if self.current_spo2 > 0:
+            if self.current_spo2 < self.THRESHOLDS['spo2_trigger']:
+                # SpO2 thấp - bắt đầu đếm thời gian
+                if self.alarm_pending_time['spo2_low'] == 0:
+                    self.alarm_pending_time['spo2_low'] = now
+                    self.logger.info(
+                        f"[ALARM PENDING] SpO2 low: {self.current_spo2}% < {self.THRESHOLDS['spo2_trigger']}%"
+                    )
+                
+                # Kiểm tra xem đã đủ delay chưa
+                elapsed = now - self.alarm_pending_time['spo2_low']
+                if elapsed >= self.DEBOUNCE_DELAY and not self.spo2_alarm_active:
+                    # Trigger alarm
+                    self.spo2_alarm_active = True
+                    self.logger.warning(
+                        f"🚨 [ALARM TRIGGERED] SpO2 LOW: {self.current_spo2}% "
+                        f"(sustained {elapsed:.1f}s)"
+                    )
+                    # TTS alert (TODO: Add ALERT_SPO2_LOW to ScenarioID)
+                    # For now, use generic anomaly detection
+                    try:
+                        self.app_instance._speak_scenario(ScenarioID.ANOMALY_DETECTED)
+                    except:
+                        pass
+            
+            elif self.current_spo2 >= self.THRESHOLDS['spo2_clear']:
+                # SpO2 đã hồi phục - clear alarm (hysteresis zone)
+                self.alarm_pending_time['spo2_low'] = 0
+                
+                if self.spo2_alarm_active:
+                    self.spo2_alarm_active = False
+                    self.logger.info(
+                        f"✅ [ALARM CLEARED] SpO2 recovered: {self.current_spo2}% >= {self.THRESHOLDS['spo2_clear']}%"
+                    )
+            
+            # Nếu SpO2 dao động trong hysteresis zone (90-92%), giữ nguyên trạng thái
+        
+        # ============================================================
+        # HR LOW ALARM (với hysteresis + debouncing)
+        # ============================================================
+        if self.current_hr > 0:
+            if self.current_hr < self.THRESHOLDS['hr_low_trigger']:
+                # HR thấp - bắt đầu đếm thời gian
+                if self.alarm_pending_time['hr_low'] == 0:
+                    self.alarm_pending_time['hr_low'] = now
+                    self.logger.info(
+                        f"[ALARM PENDING] HR low: {self.current_hr} BPM < {self.THRESHOLDS['hr_low_trigger']} BPM"
+                    )
+                
+                # Kiểm tra delay
+                elapsed = now - self.alarm_pending_time['hr_low']
+                if elapsed >= self.DEBOUNCE_DELAY and not self.hr_alarm_active:
+                    # Note: hr_alarm_active dùng chung cho cả low/high, cần refactor nếu muốn riêng
+                    self.hr_alarm_active = True
+                    self.logger.warning(
+                        f"🚨 [ALARM TRIGGERED] HR LOW: {self.current_hr} BPM "
+                        f"(sustained {elapsed:.1f}s)"
+                    )
+                    # TTS alert (TODO: Add ALERT_HR_ABNORMAL to ScenarioID)
+                    try:
+                        self.app_instance._speak_scenario(ScenarioID.ANOMALY_DETECTED)
+                    except:
+                        pass
+            
+            elif self.current_hr >= self.THRESHOLDS['hr_low_clear']:
+                # HR hồi phục
+                self.alarm_pending_time['hr_low'] = 0
+                
+                if self.hr_alarm_active and self.alarm_pending_time['hr_high'] == 0:
+                    # Chỉ clear nếu không có HR high alarm pending
+                    self.hr_alarm_active = False
+                    self.logger.info(
+                        f"✅ [ALARM CLEARED] HR recovered: {self.current_hr} BPM >= {self.THRESHOLDS['hr_low_clear']} BPM"
+                    )
+        
+        # ============================================================
+        # HR HIGH ALARM (với hysteresis + debouncing)
+        # ============================================================
+        if self.current_hr > 0:
+            if self.current_hr > self.THRESHOLDS['hr_high_trigger']:
+                # HR cao - bắt đầu đếm thời gian
+                if self.alarm_pending_time['hr_high'] == 0:
+                    self.alarm_pending_time['hr_high'] = now
+                    self.logger.info(
+                        f"[ALARM PENDING] HR high: {self.current_hr} BPM > {self.THRESHOLDS['hr_high_trigger']} BPM"
+                    )
+                
+                # Kiểm tra delay
+                elapsed = now - self.alarm_pending_time['hr_high']
+                if elapsed >= self.DEBOUNCE_DELAY and not self.hr_alarm_active:
+                    self.hr_alarm_active = True
+                    self.logger.warning(
+                        f"🚨 [ALARM TRIGGERED] HR HIGH: {self.current_hr} BPM "
+                        f"(sustained {elapsed:.1f}s)"
+                    )
+                    # TTS alert (TODO: Add ALERT_HR_ABNORMAL to ScenarioID)
+                    try:
+                        self.app_instance._speak_scenario(ScenarioID.ANOMALY_DETECTED)
+                    except:
+                        pass
+            
+            elif self.current_hr <= self.THRESHOLDS['hr_high_clear']:
+                # HR giảm về bình thường
+                self.alarm_pending_time['hr_high'] = 0
+                
+                if self.hr_alarm_active and self.alarm_pending_time['hr_low'] == 0:
+                    # Chỉ clear nếu không có HR low alarm pending
+                    self.hr_alarm_active = False
+                    self.logger.info(
+                        f"✅ [ALARM CLEARED] HR recovered: {self.current_hr} BPM <= {self.THRESHOLDS['hr_high_clear']} BPM"
+                    )
     
     def _update_waveform(self, dt):
         """Cập nhật waveform từ MAX30102 (20Hz)."""

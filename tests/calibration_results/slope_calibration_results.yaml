@@ -1,0 +1,19 @@
+calibration_date: '2026-01-10 00:52:56'
+intercept: 162.2352183101192
+measurements:
+- counts: 5611914
+  pressure: 160.0
+- counts: 5510493
+  pressure: 170.0
+- counts: 5688612
+  pressure: 175.0
+- counts: 5501507
+  pressure: 180.0
+- counts: 5665145
+  pressure: 180.0
+new_slope: 1.923816619668021e-06
+num_measurements: 5
+offset_counts: 992445
+old_slope: 3.4e-05
+r_squared: 0.00039456791792026944
+std_error: 5.590574813066946e-05
