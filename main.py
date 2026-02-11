@@ -279,21 +279,24 @@ class HealthMonitorSystem:
             try:
                 self.logger.info("📡 Connecting to MQTT broker...")
                 self.mqtt_client.connect()
-                self.logger.info("✅ MQTT connected")
                 
-                # Publish initial status (online)
-                from src.communication.mqtt_payloads import DeviceStatusPayload
-                status_payload = DeviceStatusPayload(
-                    timestamp=time.time(),
-                    device_id=self.mqtt_client.device_id,
-                    online=True,
-                    battery={'level': 100, 'charging': False},
-                    sensors={'max30102': 'ready', 'mlx90614': 'ready', 'hx710b': 'ready'},
-                    actuators={'pump': 'idle', 'valve': 'closed'},
-                    system={'uptime': 0, 'memory_usage': 50.0},
-                    network={'wifi_signal': -50, 'mqtt_connected': True}
-                )
-                self.mqtt_client.publish_status(status_payload)
+                # Đợi connection hoàn tất (tối đa 10 giây)
+                if self.mqtt_client.wait_for_connection(timeout=10.0):
+                    # Publish initial status (online)
+                    from src.communication.mqtt_payloads import DeviceStatusPayload
+                    status_payload = DeviceStatusPayload(
+                        timestamp=time.time(),
+                        device_id=self.mqtt_client.device_id,
+                        online=True,
+                        battery={'level': 100, 'charging': False},
+                        sensors={'max30102': 'ready', 'mlx90614': 'ready', 'hx710b': 'ready'},
+                        actuators={'pump': 'idle', 'valve': 'closed'},
+                        system={'uptime': 0, 'memory_usage': 50.0},
+                        network={'wifi_signal': -50, 'mqtt_connected': True}
+                    )
+                    self.mqtt_client.publish_status(status_payload)
+                else:
+                    self.logger.warning("⚠️ MQTT connection timeout - status not published")
                 
             except Exception as e:
                 self.logger.warning(f"⚠️  MQTT connection failed: {e}")

@@ -1,19 +1,19 @@
-calibration_date: '2026-01-10 00:52:56'
-intercept: 162.2352183101192
+calibration_date: '2026-01-10 01:35:24'
+intercept: -41.6480687670599
 measurements:
-- counts: 5611914
+- counts: 5618038
+  pressure: 140.0
+- counts: 5673766
+  pressure: 150.0
+- counts: 5543015
   pressure: 160.0
-- counts: 5510493
+- counts: 5612063
+  pressure: 160.0
+- counts: 5703582
   pressure: 170.0
-- counts: 5688612
-  pressure: 175.0
-- counts: 5501507
-  pressure: 180.0
-- counts: 5665145
-  pressure: 180.0
-new_slope: 1.923816619668021e-06
+new_slope: 3.510565025980742e-05
 num_measurements: 5
-offset_counts: 992445
-old_slope: 3.4e-05
-r_squared: 0.00039456791792026944
-std_error: 5.590574813066946e-05
+offset_counts: 1056334
+old_slope: 3.449e-05
+r_squared: 0.03640563949327446
+std_error: 0.0001042747571827627

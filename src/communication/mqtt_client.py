@@ -19,7 +19,7 @@ import ssl
 import time
 import os
 import paho.mqtt.client as mqtt
-from threading import Lock, Thread
+from threading import Lock, Thread, Event
 from pathlib import Path
 
 from .mqtt_payloads import (
@@ -102,6 +102,7 @@ class IoTHealthMQTTClient:
         # State tracking
         self.is_connected = False
         self.connection_lock = Lock()
+        self.connection_event = Event()  # Event để signal khi connected
         self.retry_count = 0
         self.base_retry_delay = 2.0
         self.message_handlers = {}
@@ -162,9 +163,13 @@ class IoTHealthMQTTClient:
             f"device_id={self.device_id}, patient_id={self.patient_id}"
         )
     
-    def connect(self) -> bool:
+    def connect(self, wait_timeout: float = 0) -> bool:
         """
         Kết nối đến MQTT broker
+        
+        Args:
+            wait_timeout: Thời gian chờ connection hoàn tất (giây).
+                         0 = không chờ (async), >0 = chờ tối đa wait_timeout giây
         
         Returns:
             bool: True nếu kết nối thành công hoặc đang trong quá trình kết nối
@@ -176,8 +181,9 @@ class IoTHealthMQTTClient:
                     return True
                 
                 self.stats['connection_attempts'] += 1
+                self.connection_event.clear()  # Reset event trước khi connect
             
-            self.logger.info(f"Connecting to MQTT broker: {self.broker}:{self.port}...")
+            self.logger.info(f"[Connecting to MQTT broker] {self.broker}:{self.port}...")
             
             # Connect async (non-blocking)
             self.client.connect_async(
@@ -189,12 +195,39 @@ class IoTHealthMQTTClient:
             # Start network loop in background thread
             self.client.loop_start()
             
+            # Nếu wait_timeout > 0, đợi cho đến khi connected hoặc timeout
+            if wait_timeout > 0:
+                connected = self.connection_event.wait(timeout=wait_timeout)
+                if connected:
+                    self.logger.info("✅ MQTT connected")
+                    return True
+                else:
+                    self.logger.warning(
+                        f"⚠️ Connection timeout after {wait_timeout}s - "
+                        "connection may complete in background"
+                    )
+                    return False
+            
             return True
         
         except Exception as e:
             self.logger.error(f"Connection error: {e}")
             self._handle_connection_error(e)
             return False
+    
+    def wait_for_connection(self, timeout: float = 10.0) -> bool:
+        """
+        Đợi cho đến khi MQTT connection hoàn tất
+        
+        Args:
+            timeout: Thời gian chờ tối đa (giây)
+        
+        Returns:
+            bool: True nếu đã connected, False nếu timeout
+        """
+        if self.is_connected:
+            return True
+        return self.connection_event.wait(timeout=timeout)
     
     def disconnect(self) -> bool:
         """
@@ -579,6 +612,9 @@ class IoTHealthMQTTClient:
                 self.is_connected = True
                 self.retry_count = 0
                 self.stats['last_connect_time'] = time.time()
+            
+            # Signal cho các thread đang đợi connection
+            self.connection_event.set()
             
             self.logger.info(f"✅ Connected to MQTT broker: {self.broker}:{self.port}")
             
